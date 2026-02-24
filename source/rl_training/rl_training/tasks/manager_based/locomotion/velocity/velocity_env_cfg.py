@@ -108,6 +108,7 @@ class MySceneCfg(InteractiveSceneCfg):
 class CommandsCfg:
     """Command specifications for the MDP."""
 
+    # 基座角速度和线速度
     base_velocity = mdp.UniformThresholdVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
@@ -121,14 +122,51 @@ class CommandsCfg:
         ),
     )
 
+    # EE位姿
+    ## 这里采样的是世界坐标系下的绝对位姿
+    # ee_pose = mdp.UniformPoseCommandCfg(
+    #     asset_name="robot",
+    #     body_name="arm_link6",  # 末端link名
+    #     resampling_time_range=(5.0, 5.0),
+    #     debug_vis=True,
+    #     ranges=mdp.UniformPoseCommandCfg.Ranges(
+    #         pos_x=(0.3, 0.7),
+    #         pos_y=(-0.3, 0.3),
+    #         pos_z=(0.2, 0.6),
+    #         roll=(0.0, 0.0),
+    #         pitch=(-3.14/5*2, 3.14/2),  # 根据你的任务调整范围
+    #         yaw=(-3.14/5*2, 3.14/5*2),
+    #     ),
+    # )
+
+from isaaclab.controllers import DifferentialIKControllerCfg
 
 @configclass
 class ActionsCfg:
     """Action specifications for the MDP."""
-
+    
     joint_pos = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[".*"], scale=0.5, use_default_offset=True, clip=None, preserve_order=True
+        asset_name="robot", 
+        joint_names=[".*"],  # 排除机械臂关节，只保留底盘关节 (?!arm_joint[1-8])
+        scale=0.5, 
+        use_default_offset=True, 
+        clip=None, 
+        preserve_order=True
     )
+    
+    # EE使用IK进行移动
+    # ee_ik = mdp.DifferentialInverseKinematicsActionCfg(
+    #     asset_name="robot",
+    #     joint_names=["arm_joint[1-6]"],  # 只包含机械臂关节
+    #     body_name="arm_link6",     # 末端link名
+    #     controller=DifferentialIKControllerCfg(
+    #         command_type="pose",       # "pose"=位姿, "position"=仅位置
+    #         use_relative_mode=True,   # False=绝对位姿, True=相对增量
+    #         ik_method="dls",           # "dls"(阻尼最小二乘) 或 "pinv"(伪逆)
+    #         ik_params={"lambda_val": 0.05},
+    #     ),
+    #     scale=0.1,
+    # )
 
 
 @configclass
@@ -140,30 +178,35 @@ class ObservationsCfg:
         """Observations for policy group."""
 
         # observation terms (order preserved)
+        # 基座线速度
         base_lin_vel = ObsTerm(
             func=mdp.base_lin_vel,
             noise=Unoise(n_min=-0.1, n_max=0.1),
             clip=(-100.0, 100.0),
             scale=1.0,
         )
+        # 基座角速度
         base_ang_vel = ObsTerm(
             func=mdp.base_ang_vel,
             noise=Unoise(n_min=-0.2, n_max=0.2),
             clip=(-100.0, 100.0),
             scale=1.0,
         )
+        # 投影重力，用于姿态感知
         projected_gravity = ObsTerm(
             func=mdp.projected_gravity,
             noise=Unoise(n_min=-0.05, n_max=0.05),
             clip=(-100.0, 100.0),
             scale=1.0,
         )
+        # 基座速度指令
         velocity_commands = ObsTerm(
             func=mdp.generated_commands,
             params={"command_name": "base_velocity"},
             clip=(-100.0, 100.0),
             scale=1.0,
         )
+        # 所有关节位置
         joint_pos = ObsTerm(
             func=mdp.joint_pos_rel,
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*", preserve_order=True)},
@@ -171,6 +214,7 @@ class ObservationsCfg:
             clip=(-100.0, 100.0),
             scale=1.0,
         )
+        # 所有关节速度
         joint_vel = ObsTerm(
             func=mdp.joint_vel_rel,
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*", preserve_order=True)},
@@ -178,11 +222,13 @@ class ObservationsCfg:
             clip=(-100.0, 100.0),
             scale=1.0,
         )
+        # 上一次行动
         actions = ObsTerm(
             func=mdp.last_action,
             clip=(-100.0, 100.0),
             scale=1.0,
         )
+        # 高度图
         height_scan = ObsTerm(
             func=mdp.height_scan,
             params={"sensor_cfg": SceneEntityCfg("height_scanner")},
@@ -190,6 +236,32 @@ class ObservationsCfg:
             clip=(-1.0, 1.0),
             scale=1.0,
         )
+
+        # EE在世界系下的位姿
+        # ee_pose_w = ObsTerm(
+        #     func=mdp.body_pose_w,
+        #     params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
+        #     clip=(-100.0, 100.0),
+        #     scale=1.0,
+        # )
+
+        # # EE的位姿命令
+        # ee_pose_commands = ObsTerm(
+        #     func=mdp.generated_commands,
+        #     params={"command_name": "ee_pose"},
+        #     clip=(-100.0, 100.0),
+        #     scale=1.0,
+        # )
+
+        # 目标相对EE的位置误差
+        # target_rel_pos = ObsTerm(
+        #     func=mdp.body_pos_w,  # 或自定义func
+        #     params={"asset_cfg": SceneEntityCfg("target_object")},
+        #     clip=(-10.0, 10.0),
+        #     scale=1.0,
+        # )
+
+        
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -248,6 +320,21 @@ class ObservationsCfg:
         #     func=mdp.joint_effort,
         #     clip=(-100, 100),
         #     scale=0.01,
+        # )
+        # EE在世界系下的位姿
+        # ee_pose_w = ObsTerm(
+        #     func=mdp.body_pose_w,
+        #     params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
+        #     clip=(-100.0, 100.0),
+        #     scale=1.0,
+        # )
+
+        # # EE的位姿命令
+        # ee_pose_commands = ObsTerm(
+        #     func=mdp.generated_commands,
+        #     params={"command_name": "ee_pose"},
+        #     clip=(-100.0, 100.0),
+        #     scale=1.0,
         # )
 
         def __post_init__(self):
@@ -771,7 +858,7 @@ class LocomotionVelocityRoughEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the locomotion velocity-tracking environment."""
 
     # Scene settings
-    scene: MySceneCfg = MySceneCfg(num_envs=4096, env_spacing=2.5)
+    scene: MySceneCfg = MySceneCfg(num_envs=256, env_spacing=2.5)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()

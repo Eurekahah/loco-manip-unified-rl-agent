@@ -19,6 +19,7 @@ from rl_training.tasks.manager_based.locomotion.velocity.velocity_env_cfg import
 # Pre-defined configs
 ##
 from rl_training.assets.deeprobotics import DEEPROBOTICS_M20_CFG  # isort: skip
+from rl_training.assets.deeprobotics import DEEPROBOTICS_M20_PIPER_CFG
 
 
 @configclass
@@ -81,7 +82,15 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
     knee_joint_names = [
         "fl_knee_joint", "fr_knee_joint", "hl_knee_joint", "hr_knee_joint",
     ]
-    joint_names = leg_joint_names + wheel_joint_names
+
+    arm_joint_names = [
+        "arm_joint1", "arm_joint2", "arm_joint3", "arm_joint4", "arm_joint5", "arm_joint6",  
+    ]
+
+    gripper_joint_names = [
+        "arm_joint7", "arm_joint8",
+    ]
+    joint_names = leg_joint_names + wheel_joint_names + arm_joint_names
     # fmt: on
 
     def __post_init__(self):
@@ -89,7 +98,8 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         super().__post_init__()
 
         # ------------------------------Sence------------------------------
-        self.scene.robot = DEEPROBOTICS_M20_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        # self.scene.robot = DEEPROBOTICS_M20_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.scene.robot = DEEPROBOTICS_M20_PIPER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
         self.scene.height_scanner.prim_path = "{ENV_REGEX_NS}/Robot/" + self.base_link_name
         self.scene.height_scanner_base.prim_path = "{ENV_REGEX_NS}/Robot/" + self.base_link_name
 
@@ -113,11 +123,11 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         # ------------------------------Actions------------------------------
         # reduce action scale
-        self.actions.joint_pos.scale = {".*_hipx_joint": 0.125, "^(?!.*_hipx_joint).*": 0.25}
+        self.actions.joint_pos.scale = {".*_hipx_joint": 0.125, '^(?!.*_hipx_joint)(?!.*arm_joint).*': 0.25, "arm_joint[1-6]": 0.1}
         self.actions.joint_vel.scale = 5.0
         self.actions.joint_pos.clip = {".*": (-100.0, 100.0)}
         self.actions.joint_vel.clip = {".*": (-100.0, 100.0)}
-        self.actions.joint_pos.joint_names = self.leg_joint_names
+        self.actions.joint_pos.joint_names = self.leg_joint_names + self.arm_joint_names
         self.actions.joint_vel.joint_names = self.wheel_joint_names
 
         # ------------------------------Events------------------------------
