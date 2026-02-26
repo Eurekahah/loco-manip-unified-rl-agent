@@ -134,7 +134,7 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             max_depenetration_velocity=1.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            enabled_self_collisions=False, solver_position_iteration_count=4, solver_velocity_iteration_count=1
+            enabled_self_collisions=True, solver_position_iteration_count=4, solver_velocity_iteration_count=1
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
@@ -148,8 +148,8 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             ".*wheel_joint": 0.0,
             # 机械臂旋转关节
             "arm_joint1": 0.0,       # limit: [-2.618, 2.618]  ✓ 安全
-            "arm_joint2": 0.1,       # limit: [0, 3.14]        ⚠️ 边界改为0.1
-            "arm_joint3": -0.1,      # limit: [-2.697, 0]      ⚠️ 边界改为-0.1
+            "arm_joint2": 0.0,       # limit: [0, 3.14]        ⚠️ 边界改为0.1
+            "arm_joint3": 0.0,      # limit: [-2.697, 0]      ⚠️ 边界改为-0.1
             "arm_joint4": 0.0,       # limit: [-1.832, 1.832]  ✓ 安全
             "arm_joint5": 0.0,       # limit: [-1.22, 1.22]    ✓ 安全
             "arm_joint6": 0.0,       # limit: [-3.14, 3.14]    ✓ 安全
@@ -187,10 +187,10 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             joint_names_expr=["arm_joint[1-6]"],
             effort_limit=100.0,       # 根据 Piper 实际力矩限制填写
             velocity_limit=3.0,     # rad/s
-            stiffness=100.0,
-            damping=5.0,
-            friction=0.0,
-            armature=0.0,
+            stiffness=50.0,
+            damping=17.0,
+            friction=0.01,
+            armature=0.01,
             min_delay=0,
             max_delay=5,
         ),
@@ -200,8 +200,8 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             joint_names_expr=["arm_joint[7-8]"],
             effort_limit=100.0,
             velocity_limit=1.0,
-            stiffness=200.0,
-            damping=10.0,
+            stiffness=20.0,
+            damping=1.0,
             friction=0.0,
             armature=0.0,
             min_delay=0,
