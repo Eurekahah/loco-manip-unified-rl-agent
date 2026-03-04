@@ -109,35 +109,55 @@ class CommandsCfg:
     """Command specifications for the MDP."""
 
     # 基座角速度和线速度
+    # 被注释的部分是全向运动命令采样
+    # base_velocity = mdp.UniformThresholdVelocityCommandCfg(
+    #     asset_name="robot",
+    #     resampling_time_range=(10.0, 10.0),
+    #     rel_standing_envs=0.02,
+    #     rel_heading_envs=1.0,
+    #     heading_command=True,
+    #     heading_control_stiffness=0.5,
+    #     debug_vis=True,
+    #     ranges=mdp.UniformThresholdVelocityCommandCfg.Ranges(
+    #         lin_vel_x=(-1.0, 1.0), lin_vel_y=(-1.0, 1.0), ang_vel_z=(-1.0, 1.0), heading=(-math.pi, math.pi)
+    #     ),
+    # )
+    # 训练全身运控时，只有x方向的前向速度
     base_velocity = mdp.UniformThresholdVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
         rel_standing_envs=0.02,
         rel_heading_envs=1.0,
-        heading_command=True,
+        heading_command=False,
         heading_control_stiffness=0.5,
         debug_vis=True,
         ranges=mdp.UniformThresholdVelocityCommandCfg.Ranges(
-            lin_vel_x=(-1.0, 1.0), lin_vel_y=(-1.0, 1.0), ang_vel_z=(-1.0, 1.0), heading=(-math.pi, math.pi)
+            lin_vel_x=(0.0, 0.9), lin_vel_y=(0.0, 0.0), ang_vel_z=(-1.0, 1.0), heading=(-math.pi, math.pi)
         ),
     )
 
     # EE位姿
-    ## 这里采样的是世界坐标系下的绝对位姿
-    # ee_pose = mdp.UniformPoseCommandCfg(
-    #     asset_name="robot",
-    #     body_name="arm_link6",  # 末端link名
-    #     resampling_time_range=(5.0, 5.0),
-    #     debug_vis=True,
-    #     ranges=mdp.UniformPoseCommandCfg.Ranges(
-    #         pos_x=(0.3, 0.7),
-    #         pos_y=(-0.3, 0.3),
-    #         pos_z=(0.2, 0.6),
-    #         roll=(0.0, 0.0),
-    #         pitch=(-3.14/5*2, 3.14/2),  # 根据你的任务调整范围
-    #         yaw=(-3.14/5*2, 3.14/5*2),
-    #     ),
-    # )
+    ee_pose = mdp.HeightInvariantEECommandCfg(
+        asset_name="robot",
+        body_name="arm_link6",
+        resampling_time_range=(5.0, 5.0),
+        debug_vis=True,
+        sampled_height=0.6,  # 采样坐标系的固定高度
+        arm_base_link_name="arm_base",  # 采样坐标系xy位置
+        ranges=mdp.HeightInvariantEECommandCfg.Ranges(
+            # 球坐标位置采样范围
+            p_l= (0.4, 0.7),           # 半径 l
+            p_pitch= (-1, 2*math.pi/5),   # pitch p
+            p_yaw = (-3*math.pi/5, 3*math.pi/5),     # yaw y
+            # 姿态采样范围
+            o_roll = (-math.pi / 4, math.pi / 4),
+            o_pitch =(-math.pi / 4, math.pi / 4),
+            o_yaw = (-math.pi, math.pi),
+            # 插值时间间隔采样范围
+            T_traj = (1.0, 3.0)
+        ),
+    )
+
 
 from isaaclab.controllers import DifferentialIKControllerCfg
 
@@ -147,7 +167,7 @@ class ActionsCfg:
     
     joint_pos = mdp.JointPositionActionCfg(
         asset_name="robot", 
-        joint_names=[".*"],  # 排除机械臂关节，只保留底盘关节 (?!arm_joint[1-8])
+        joint_names=["(?!arm_joint[1-8]).*"],  # 排除机械臂关节，只保留底盘关节 
         scale=0.5, 
         use_default_offset=True, 
         clip=None, 
@@ -155,18 +175,17 @@ class ActionsCfg:
     )
     
     # EE使用IK进行移动
-    # ee_ik = mdp.DifferentialInverseKinematicsActionCfg(
-    #     asset_name="robot",
-    #     joint_names=["arm_joint[1-6]"],  # 只包含机械臂关节
-    #     body_name="arm_link6",     # 末端link名
-    #     controller=DifferentialIKControllerCfg(
-    #         command_type="pose",       # "pose"=位姿, "position"=仅位置
-    #         use_relative_mode=True,   # False=绝对位姿, True=相对增量
-    #         ik_method="dls",           # "dls"(阻尼最小二乘) 或 "pinv"(伪逆)
-    #         ik_params={"lambda_val": 0.05},
-    #     ),
-    #     scale=0.1,
-    # )
+    ee_ik = mdp.DifferentialInverseKinematicsActionCfg(
+        asset_name="robot",
+        joint_names=["arm_joint[1-6]"],  # 只包含机械臂关节
+        body_name="arm_link6",     # 末端link名
+        controller=DifferentialIKControllerCfg(
+            command_type="pose",       # "pose"=位姿, "position"=仅位置
+            use_relative_mode=False,   # False=绝对位姿, True=相对增量
+            ik_method="dls",           # "dls"(阻尼最小二乘) 或 "pinv"(伪逆)
+        ),
+        scale=0.1,
+    )
 
 
 @configclass
@@ -238,20 +257,20 @@ class ObservationsCfg:
         )
 
         # EE在世界系下的位姿
-        # ee_pose_w = ObsTerm(
-        #     func=mdp.body_pose_w,
-        #     params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
-        #     clip=(-100.0, 100.0),
-        #     scale=1.0,
-        # )
+        ee_pose_w = ObsTerm(
+            func=mdp.body_pose_w,
+            params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
+            clip=(-100.0, 100.0),
+            scale=1.0,
+        )
 
         # # EE的位姿命令
-        # ee_pose_commands = ObsTerm(
-        #     func=mdp.generated_commands,
-        #     params={"command_name": "ee_pose"},
-        #     clip=(-100.0, 100.0),
-        #     scale=1.0,
-        # )
+        ee_pose_commands = ObsTerm(
+            func=mdp.generated_commands,
+            params={"command_name": "ee_pose"},
+            clip=(-100.0, 100.0),
+            scale=1.0,
+        )
 
         # 目标相对EE的位置误差
         # target_rel_pos = ObsTerm(
@@ -322,20 +341,20 @@ class ObservationsCfg:
         #     scale=0.01,
         # )
         # EE在世界系下的位姿
-        # ee_pose_w = ObsTerm(
-        #     func=mdp.body_pose_w,
-        #     params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
-        #     clip=(-100.0, 100.0),
-        #     scale=1.0,
-        # )
+        ee_pose_w = ObsTerm(
+            func=mdp.body_pose_w,
+            params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
+            clip=(-100.0, 100.0),
+            scale=1.0,
+        )
 
-        # # EE的位姿命令
-        # ee_pose_commands = ObsTerm(
-        #     func=mdp.generated_commands,
-        #     params={"command_name": "ee_pose"},
-        #     clip=(-100.0, 100.0),
-        #     scale=1.0,
-        # )
+        # EE的位姿命令
+        ee_pose_commands = ObsTerm(
+            func=mdp.generated_commands,
+            params={"command_name": "ee_pose"},
+            clip=(-100.0, 100.0),
+            scale=1.0,
+        )
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -807,6 +826,103 @@ class RewardsCfg:
     #     },
     # ) # negetive
 
+    # EE
+    
+
+    # 机械臂关节偏离默认收纳姿态的惩罚（不执行任务时）
+    arm_joint_deviation_l1 = RewTerm(
+        func=mdp.joint_deviation_l1,
+        weight=0.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names="arm_joint.*"),
+        },
+    )
+
+    # 1. 位置跟踪（密集）
+    arm_ee_pos_tracking = RewTerm(
+        func=mdp.ee_position_tracking,
+        weight=2.0,
+        params={
+            "command_name": "ee_pose",
+            "ee_frame_name": "arm_link6",
+            "std": 0.15,
+        },
+    )
+
+    # 2. 姿态跟踪（密集）
+    arm_ee_ori_tracking = RewTerm(
+        func=mdp.ee_orientation_tracking,
+        weight=1.0,
+        params={
+            "command_name": "ee_pose",
+            "ee_frame_name": "arm_link6",
+            "std": 0.5,
+        },
+    )
+
+    # 3. 到达目标稀疏奖励
+    arm_ee_goal_reached = RewTerm(
+        func=mdp.ee_goal_reached,
+        weight=5.0,
+        params={
+            "command_name": "ee_pose",
+            "ee_frame_name": "arm_link6",
+            "pos_threshold": 0.05,
+            "angle_threshold": 0.2,
+        },
+    )
+
+    # 4a. 接近物体（密集引导）
+    # arm_approach_object = RewTerm(
+    #     func=mdp.ee_approach_object,
+    #     weight=1.5,
+    #     params={
+    #         "object_cfg": SceneEntityCfg("object"),
+    #         "ee_frame_name": "arm_link6",
+    #         "std": 0.1,
+    #     },
+    # )
+
+    # # 4b. 抓取成功（稀疏）
+    # arm_grasp_success = RewTerm(
+    #     func=mdp.grasp_success,
+    #     weight=10.0,
+    #     params={
+    #         "object_cfg": SceneEntityCfg("object"),
+    #         "ee_frame_name": "arm_link6",
+    #         "grasp_distance_threshold": 0.08,
+    #         "lift_height_threshold": 0.05,
+    #     },
+    # )
+
+    # 5. 关节力矩惩罚
+    arm_joint_torque = RewTerm(
+        func=mdp.arm_joint_torque_penalty,
+        weight=-1e-4,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names="arm_.*"),
+        },
+    )
+
+    # 6. 关节速度惩罚
+    arm_joint_vel = RewTerm(
+        func=mdp.arm_joint_velocity_penalty,
+        weight=-1e-3,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names="arm_.*"),
+        },
+    )
+
+    # 7. 关节加速度惩罚（可选）
+    arm_joint_acc = RewTerm(
+        func=mdp.arm_joint_acceleration_penalty,
+        weight=-1e-5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names="arm_.*"),
+        },
+    )
+
+    
 
 @configclass
 class TerminationsCfg:
@@ -828,6 +944,11 @@ class TerminationsCfg:
     )
 
     bad_orientation_2 = DoneTerm(func=mdp.bad_orientation_2)
+
+    root_height_below_minimum = DoneTerm(
+        func=mdp.root_height_below_minimum,
+        params={"asset_cfg": SceneEntityCfg("robot"),"minimum_height": 0.3},
+    )
     
 
 
@@ -858,7 +979,7 @@ class LocomotionVelocityRoughEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the locomotion velocity-tracking environment."""
 
     # Scene settings
-    scene: MySceneCfg = MySceneCfg(num_envs=256, env_spacing=2.5)
+    scene: MySceneCfg = MySceneCfg(num_envs=4096, env_spacing=2.5)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
