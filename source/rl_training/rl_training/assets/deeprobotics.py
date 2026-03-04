@@ -187,20 +187,87 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             joint_names_expr=["arm_joint[1-6]"],
             effort_limit=100.0,       # 根据 Piper 实际力矩限制填写
             velocity_limit=3.0,     # rad/s
-            stiffness=50.0,
-            damping=17.0,
+            stiffness=20.0,
+            damping=0.1,
             friction=0.01,
             armature=0.01,
             min_delay=0,
             max_delay=5,
         ),
+        # "piper_arm1": DelayedPDActuatorCfg(
+        #     joint_names_expr=["arm_joint1"],
+        #     effort_limit=100.0,       # 根据 Piper 实际力矩限制填写
+        #     velocity_limit=3.0,     # rad/s
+        #     stiffness=29.3,
+        #     damping=10.0,
+        #     friction=0.01,
+        #     armature=0.01,
+        #     min_delay=0,
+        #     max_delay=5,
+        # ),
+        # "piper_arm2": DelayedPDActuatorCfg(
+        #     joint_names_expr=["arm_joint2"],
+        #     effort_limit=1000.0,       # 根据 Piper 实际力矩限制填写
+        #     velocity_limit=3.0,     # rad/s
+        #     stiffness=400.7,
+        #     damping=5,
+        #     friction=0.0,
+        #     armature=0.0,
+        #     min_delay=0,
+        #     max_delay=5,
+        # ),
+        # "piper_arm3": DelayedPDActuatorCfg(
+        #     joint_names_expr=["arm_joint3"],
+        #     effort_limit=1000.0,       # 根据 Piper 实际力矩限制填写
+        #     velocity_limit=3.0,     # rad/s
+        #     stiffness=78.1,
+        #     damping=5,
+        #     friction=0.01,
+        #     armature=0.01,
+        #     min_delay=0,
+        #     max_delay=5,
+        # ),
+        # "piper_arm4": DelayedPDActuatorCfg(
+        #     joint_names_expr=["arm_joint4"],
+        #     effort_limit=100.0,       # 根据 Piper 实际力矩限制填写
+        #     velocity_limit=3.0,     # rad/s
+        #     stiffness=59.8,
+        #     damping=5.02,
+        #     friction=0.01,
+        #     armature=0.01,
+        #     min_delay=0,
+        #     max_delay=5,
+        # ),
+        # "piper_arm5": DelayedPDActuatorCfg(
+        #     joint_names_expr=["arm_joint5"],
+        #     effort_limit=1000.0,       # 根据 Piper 实际力矩限制填写
+        #     velocity_limit=3.0,     # rad/s
+        #     stiffness=70.5,# 1.35,
+        #     damping=3,
+        #     friction=0.01,
+        #     armature=0.01,
+        #     min_delay=0,
+        #     max_delay=5,
+        # ),
+        # "piper_arm6": DelayedPDActuatorCfg(
+        #     joint_names_expr=["arm_joint6"],
+        #     effort_limit=100.0,       # 根据 Piper 实际力矩限制填写
+        #     velocity_limit=3.0,     # rad/s
+        #     stiffness=28.88,
+        #     damping=3,
+        #     friction=0.01,
+        #     armature=0.01,
+        #     min_delay=0,
+        #     max_delay=5,
+        # ),
+
 
         # 新增：夹爪（如果是位置控制）
         "piper_gripper": DelayedPDActuatorCfg(
             joint_names_expr=["arm_joint[7-8]"],
             effort_limit=100.0,
             velocity_limit=1.0,
-            stiffness=20.0,
+            stiffness=5.0,
             damping=1.0,
             friction=0.0,
             armature=0.0,
