@@ -181,7 +181,7 @@ class ActionsCfg:
         body_name="arm_link6",     # 末端link名
         controller=DifferentialIKControllerCfg(
             command_type="pose",       # "pose"=位姿, "position"=仅位置
-            use_relative_mode=False,   # False=绝对位姿, True=相对增量
+            use_relative_mode=True,   # False=绝对位姿, True=相对增量
             ik_method="dls",           # "dls"(阻尼最小二乘) 或 "pinv"(伪逆)
         ),
         scale=0.1,
