@@ -123,11 +123,11 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         # ------------------------------Actions------------------------------
         # reduce action scale
-        self.actions.joint_pos.scale = {".*_hipx_joint": 0.125, '^(?!.*_hipx_joint)(?!.*arm_joint).*': 0.25, "arm_joint[1-6]": 0.1}
+        self.actions.joint_pos.scale = {".*_hipx_joint": 0.125, '^(?!.*_hipx_joint)(?!.*arm_joint).*': 0.25}
         self.actions.joint_vel.scale = 5.0
         self.actions.joint_pos.clip = {".*": (-100.0, 100.0)}
         self.actions.joint_vel.clip = {".*": (-100.0, 100.0)}
-        self.actions.joint_pos.joint_names = self.leg_joint_names + self.arm_joint_names
+        self.actions.joint_pos.joint_names = self.leg_joint_names 
         self.actions.joint_vel.joint_names = self.wheel_joint_names
 
         # ------------------------------Events------------------------------
