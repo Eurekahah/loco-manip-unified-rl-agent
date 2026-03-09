@@ -14,7 +14,7 @@ from rl_training.tasks.manager_based.locomotion.velocity.velocity_env_cfg import
     LocomotionVelocityRoughEnvCfg,
     RewardsCfg,
 )
-
+from isaaclab.controllers import DifferentialIKControllerCfg
 ##
 # Pre-defined configs
 ##
@@ -32,6 +32,19 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
 
     joint_vel = mdp.JointVelocityActionCfg(
         asset_name="robot", joint_names=[""], scale=20.0, use_default_offset=True, clip=None, preserve_order=True
+    )
+
+    # EE使用IK进行移动
+    ee_ik = mdp.DifferentialInverseKinematicsActionCfg(
+        asset_name="robot",
+        joint_names=["arm_joint[1-6]"],  # 只包含机械臂关节
+        body_name="arm_link6",     # 末端link名
+        controller=DifferentialIKControllerCfg(
+            command_type="pose",       # "pose"=位姿, "position"=仅位置
+            use_relative_mode=True,   # False=绝对位姿, True=相对增量
+            ik_method="dls",           # "dls"(阻尼最小二乘) 或 "pinv"(伪逆)
+        ),
+        scale=0.1,
     )
 
 
@@ -268,6 +281,6 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.curriculum.command_levels = None
 
         # ------------------------------Commands------------------------------
-        self.commands.base_velocity.ranges.lin_vel_x = (-2.0, 2.0)
-        self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.lin_vel_x = (0.0, 0.9)
+        self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)

@@ -159,7 +159,7 @@ class CommandsCfg:
     )
 
 
-from isaaclab.controllers import DifferentialIKControllerCfg
+
 
 @configclass
 class ActionsCfg:
@@ -174,18 +174,7 @@ class ActionsCfg:
         preserve_order=True
     )
     
-    # EE使用IK进行移动
-    ee_ik = mdp.DifferentialInverseKinematicsActionCfg(
-        asset_name="robot",
-        joint_names=["arm_joint[1-6]"],  # 只包含机械臂关节
-        body_name="arm_link6",     # 末端link名
-        controller=DifferentialIKControllerCfg(
-            command_type="pose",       # "pose"=位姿, "position"=仅位置
-            use_relative_mode=True,   # False=绝对位姿, True=相对增量
-            ik_method="dls",           # "dls"(阻尼最小二乘) 或 "pinv"(伪逆)
-        ),
-        scale=0.1,
-    )
+    
 
 
 @configclass

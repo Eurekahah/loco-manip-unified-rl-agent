@@ -370,17 +370,17 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         origin_pos, quat_yaw = self.get_height_invariant_base_frame(self._env, torch.arange(self._env.num_envs))
         self.sample_frame_visualizer.visualize(origin_pos,quat_yaw)
         # 在 env 或 task 的 _post_physics_step / _get_observations 中
-        robot = self.robot
+        # robot = self.robot
 
-        # 获取所有关节的应用力矩
-        applied_torques = robot.data.applied_torque  # shape: (num_envs, num_joints)
+        # # 获取所有关节的应用力矩
+        # applied_torques = robot.data.applied_torque  # shape: (num_envs, num_joints)
 
-        # 找到6个关节的索引
-        joint_indices, joint_names = robot.find_joints("arm_joint[1-6]")
+        # # 找到6个关节的索引
+        # joint_indices, joint_names = robot.find_joints("arm_joint[1-6]")
 
-        # 方式二：逐个打印，更清晰
-        for idx, name in zip(joint_indices, joint_names):
-            print(f"  {name}: {applied_torques[:, idx]}")
+        # # 方式二：逐个打印，更清晰
+        # for idx, name in zip(joint_indices, joint_names):
+        #     print(f"  {name}: {applied_torques[:, idx]}")
     
     
 
