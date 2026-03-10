@@ -154,7 +154,8 @@ class CommandsCfg:
             o_pitch =(-math.pi / 4, math.pi / 4),
             o_yaw = (-math.pi, math.pi),
             # 插值时间间隔采样范围
-            T_traj = (1.0, 3.0)
+            T_traj = (1.0, 3.0),
+            T_hold = (0.5, 2.0)
         ),
     )
 

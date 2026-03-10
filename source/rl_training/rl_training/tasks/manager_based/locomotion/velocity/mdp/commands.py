@@ -109,6 +109,7 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         self.ee_end_orn_quat = torch.zeros(self.num_envs, 4, device=self.device)
 
         self.T_traj = torch.ones(num_envs, device=device)
+        self.T_hold = torch.ones(num_envs, device=device)
 
         # 碰撞盒 limits 转为 tensor，移到对应设备
         self.collision_lower_limits = torch.tensor(
@@ -142,12 +143,13 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         # 4. 重置插值计时
         self.t[env_ids] = 0.0
         self.T_traj[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(*self.cfg.ranges.T_traj)
+        self.T_hold[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(*self.cfg.ranges.T_hold)
         self.pose_start_w[env_ids, :3] = self.robot.data.body_pos_w[env_ids, self.body_idx]
         self.pose_start_w[env_ids, 3:] = self.robot.data.body_quat_w[env_ids, self.body_idx]
 
 
     def _update_command(self):
-        # 每步更新插值目标
+        # 每步更新插值目标，t大于T_tra且小于T_tra+T_hold则保持目标不变，大于T_tra+T_hold则重采样新目标
         alpha = (self.t / self.T_traj).clamp(0, 1).unsqueeze(-1).expand_as(self.ee_start_sphere)  # (N, 3)
 
         # 获取当前 EE 位姿（世界坐标）
@@ -171,8 +173,8 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
 
         self.t += self._env.step_dt
 
-        # 检查是否需要重采样（到达终点或自碰撞）
-        done_mask = self.t >= self.T_traj
+        # 检查是否需要重采样，如果插值时间超过轨迹时间 + 保持时间，则重采样新目标
+        done_mask = self.t >= (self.T_traj + self.T_hold)
         if done_mask.any():
             self._resample(done_mask.nonzero(as_tuple=False).flatten())
 
@@ -411,6 +413,8 @@ class HeightInvariantEECommandCfg(mdp.UniformPoseCommandCfg):
 
         T_traj: tuple[float, float] = MISSING    # 插值间隔采样范围
 
+        T_hold: tuple[float, float] = MISSING  # 保持时间范围
+
     ranges: Ranges = MISSING
 
     collision_lower_limits: list = field(default_factory=lambda: [-0.3, -0.3, 0.0])
@@ -418,6 +422,7 @@ class HeightInvariantEECommandCfg(mdp.UniformPoseCommandCfg):
     underground_limit: float = 0.05          # EE z 低于此值视为穿地
     num_collision_check_samples: int = 10    # 路径插值采样点数
     max_resample_attempts: int = 10          # 最大重采样次数
+   
     
 
 class DiscreteCommandController(CommandTerm):
