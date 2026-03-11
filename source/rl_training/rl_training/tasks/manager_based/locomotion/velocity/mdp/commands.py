@@ -304,17 +304,26 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
     def _resample_ee_goal(self, env_ids):
         init_env_ids = env_ids.clone()
         self._resample_ee_goal_orn(env_ids)
-        # self.ee_start_sphere[env_ids] = self.ee_end_sphere[env_ids].clone() # 此处应该改为当前ee的球坐标位姿
-        # 获取当前 EE 世界坐标
-        ee_pos_w = self.robot.data.body_pos_w[env_ids, self.body_idx]  # (N, 3)
+        # 起点优先使用上一轮的终点球坐标，保证插值命令连续且起点远离当前 EE。
+        # 仅当上一轮终点为零向量时（首次 reset）才回退到真实 EE 位置。
+        prev_end_valid = self.ee_end_sphere[env_ids].norm(dim=-1) > 0  # (N,)
+        if prev_end_valid.all():
+            self.ee_start_sphere[env_ids] = self.ee_end_sphere[env_ids].clone()
+        else:
+            # 部分环境是首次 reset，分别处理
+            ids_valid   = env_ids[prev_end_valid]
+            ids_invalid = env_ids[~prev_end_valid]
 
-        # 转回 local 坐标系
-        origin_pos, quat_yaw = self.get_height_invariant_base_frame(self._env, env_ids)
-        quat_yaw_inv = math_utils.quat_conjugate(quat_yaw)
-        ee_pos_local = math_utils.quat_apply(quat_yaw_inv, ee_pos_w - origin_pos)  # (N, 3)
+            if len(ids_valid) > 0:
+                self.ee_start_sphere[ids_valid] = self.ee_end_sphere[ids_valid].clone()
 
-        # 转为球坐标
-        self.ee_start_sphere[env_ids] = cart2sphere(ee_pos_local)
+            if len(ids_invalid) > 0:
+                ee_pos_w = self.robot.data.body_pos_w[ids_invalid, self.body_idx]
+                origin_pos, quat_yaw = self.get_height_invariant_base_frame(self._env, ids_invalid)
+                quat_yaw_inv = math_utils.quat_conjugate(quat_yaw)
+                ee_pos_local = math_utils.quat_apply(quat_yaw_inv, ee_pos_w - origin_pos)
+                self.ee_start_sphere[ids_invalid] = cart2sphere(ee_pos_local)
+
         for i in range(self.cfg.max_resample_attempts):
             self._resample_ee_goal_sphere(env_ids)
             collision_mask = self.collision_check(env_ids)
