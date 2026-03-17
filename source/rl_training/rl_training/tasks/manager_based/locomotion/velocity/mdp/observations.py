@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
+import isaaclab.utils.math as math_utils
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
@@ -35,3 +36,24 @@ def phase(env: ManagerBasedRLEnv, cycle_time: float) -> torch.Tensor:
     phase = env.episode_length_buf[:, None] * env.step_dt / cycle_time
     phase_tensor = torch.cat([torch.sin(2 * torch.pi * phase), torch.cos(2 * torch.pi * phase)], dim=-1)
     return phase_tensor
+
+# mdp/observations.py
+
+def ee_goal_pos_local(
+        env: ManagerBasedRLEnv,
+        command_name: str,
+    ) -> torch.Tensor:
+    """返回 local frame 下的 EE 目标位置 (N, 3)"""
+    command_term = env.command_manager.get_term(command_name)
+    return command_term.command_local[:, :3]
+
+# 用 6D rotation representation（前两列）更稳定
+def ee_goal_orn_local_6d(env, command_name):
+    command_term = env.command_manager.get_term(command_name)
+    quat = command_term.command_local[:, 3:]  # (N, 4) wxyz
+    rot_mat = math_utils.matrix_from_quat(quat)  # (N, 3, 3)
+    return rot_mat[:, :, :2].reshape(-1, 6)       # (N, 6)，取前两列展平
+
+def ee_goal_local(env, command_name):
+    command_term = env.command_manager.get_term(command_name)
+    return command_term.command_local  # (N, 7) pos + quat

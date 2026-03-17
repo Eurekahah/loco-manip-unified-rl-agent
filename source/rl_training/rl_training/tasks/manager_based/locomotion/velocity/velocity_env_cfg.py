@@ -246,30 +246,24 @@ class ObservationsCfg:
             scale=1.0,
         )
 
-        # EE在世界系下的位姿
-        ee_pose_w = ObsTerm(
-            func=mdp.body_pose_w,
-            params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
-            clip=(-100.0, 100.0),
-            scale=1.0,
-        )
-
-        # # EE的位姿命令
-        ee_pose_commands = ObsTerm(
-            func=mdp.generated_commands,
-            params={"command_name": "ee_pose"},
-            clip=(-100.0, 100.0),
-            scale=1.0,
-        )
-
-        # 目标相对EE的位置误差
-        # target_rel_pos = ObsTerm(
-        #     func=mdp.body_pos_w,  # 或自定义func
-        #     params={"asset_cfg": SceneEntityCfg("target_object")},
-        #     clip=(-10.0, 10.0),
+        # 位置单独注册，可以 clip
+        # ee_goal_pos = ObsTerm(
+        #     func=mdp.ee_goal_pos_local,        # 返回 (N, 3)
+        #     params={"command_name": "ee_pose"},
+        #     clip=(-3.0, 3.0),                  # 按实际工作空间范围设置
         #     scale=1.0,
         # )
-
+        
+        # # 姿态单独注册，不 clip
+        # ee_goal_orn = ObsTerm(
+        #     func=mdp.ee_goal_orn_local_6d,        # 返回 (N, 6)
+        #     params={"command_name": "ee_pose"},
+        #     # 不设置 clip，四元数本身有界
+        # )
+        ee_goal = ObsTerm(
+            func=mdp.ee_goal_local,        params={"command_name": "ee_pose"},
+            noise=Unoise(n_min=-0.05, n_max=0.05),  clip=(-3.0, 3.0), scale=1.0,
+        )
         
 
         def __post_init__(self):
@@ -330,25 +324,40 @@ class ObservationsCfg:
         #     clip=(-100, 100),
         #     scale=0.01,
         # )
-        # EE在世界系下的位姿
-        ee_pose_w = ObsTerm(
-            func=mdp.body_pose_w,
-            params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
-            clip=(-100.0, 100.0),
-            scale=1.0,
-        )
 
-        # EE的位姿命令
-        ee_pose_commands = ObsTerm(
-            func=mdp.generated_commands,
-            params={"command_name": "ee_pose"},
-            clip=(-100.0, 100.0),
-            scale=1.0,
+        # 位置单独注册，可以 clip
+        # ee_goal_pos = ObsTerm(
+        #     func=mdp.ee_goal_pos_local,        # 返回 (N, 3)
+        #     params={"command_name": "ee_pose"},
+        #     clip=(-3.0, 3.0),                  # 按实际工作空间范围设置
+        #     scale=1.0,
+        # )
+        
+        # # 姿态单独注册，不 clip
+        # ee_goal_orn = ObsTerm(
+        #     func=mdp.ee_goal_orn_local_6d,        # 返回 (N, 6)
+        #     params={"command_name": "ee_pose"},
+        #     # 不设置 clip，四元数本身有界
+        # )
+        ee_goal = ObsTerm(
+            func=mdp.ee_goal_local,        params={"command_name": "ee_pose"},
+            noise=Unoise(n_min=-0.05, n_max=0.05),  clip=(-3.0, 3.0), scale=1.0,
         )
 
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = True
+
+    # class EnvExtrinsicsCfg(ObsGroup):
+    #     """Environment extrinsics observations, not fed into policy, only for critic"""
+
+    #     # observation terms (order preserved)
+    #     terrain_height = ObsTerm(
+    #         func=mdp.terrain_height,
+    #         params={"sensor_cfg": SceneEntityCfg("height_scanner_base")},
+    #         clip=(-100.0, 100.0),
+    #         scale=1.0,
+    #     )
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
@@ -862,28 +871,6 @@ class RewardsCfg:
         },
     )
 
-    # 4a. 接近物体（密集引导）
-    # arm_approach_object = RewTerm(
-    #     func=mdp.ee_approach_object,
-    #     weight=1.5,
-    #     params={
-    #         "object_cfg": SceneEntityCfg("object"),
-    #         "ee_frame_name": "arm_link6",
-    #         "std": 0.1,
-    #     },
-    # )
-
-    # # 4b. 抓取成功（稀疏）
-    # arm_grasp_success = RewTerm(
-    #     func=mdp.grasp_success,
-    #     weight=10.0,
-    #     params={
-    #         "object_cfg": SceneEntityCfg("object"),
-    #         "ee_frame_name": "arm_link6",
-    #         "grasp_distance_threshold": 0.08,
-    #         "lift_height_threshold": 0.05,
-    #     },
-    # )
 
     # 5. 关节力矩惩罚
     arm_joint_torque = RewTerm(

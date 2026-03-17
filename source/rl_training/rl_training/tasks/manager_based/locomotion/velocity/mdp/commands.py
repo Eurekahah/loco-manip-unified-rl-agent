@@ -101,6 +101,7 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         self.pose_end_local = torch.zeros(num_envs, 7, device=device)
         self.pose_end_w = torch.zeros(num_envs, 7, device=device)
         self.pose_command_w = torch.zeros(num_envs, 7, device=device)
+        self.pose_command_local = torch.zeros(num_envs, 7, device=device)
         self.pose_start_w = torch.zeros(num_envs,7,device=device)
 
         self.ee_start_sphere = torch.zeros(self.num_envs, 3, device=self.device)
@@ -139,6 +140,7 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         
         # 3. 转换到世界坐标
         self.pose_end_w[env_ids] = self.local_to_world(self.pose_end_local[env_ids], origin_pos, quat_yaw)
+        # self.pose_command_w[env_ids] = self.pose_end_w[env_ids].clone()  # 初始命令即为目标位姿，后续通过插值平滑过渡
         
         # 4. 重置插值计时
         self.t[env_ids] = 0.0
@@ -149,6 +151,7 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
 
 
     def _update_command(self):
+        # pass
         # 每步更新插值目标，t大于T_tra且小于T_tra+T_hold则保持目标不变，大于T_tra+T_hold则重采样新目标
         alpha = (self.t / self.T_traj).clamp(0, 1).unsqueeze(-1).expand_as(self.ee_start_sphere)  # (N, 3)
 
@@ -167,10 +170,16 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         # 位置：线性插值
         # pos_interp = (1 - alpha) * self.pose_start_w[:,:3] + alpha * self.pose_end_w[..., :3]  # (N, 3)
         # self.pose_command_w = torch.cat([pos_interp, quat_interp], dim=-1)  # (N, 7)
-        origin_pos, quat_yaw = self.get_height_invariant_base_frame(self._env, torch.arange(self._env.num_envs))
         pos_interp_w = math_utils.quat_apply(quat_yaw, pos_interp_local) + origin_pos  # (N, 3)
         self.pose_command_w = torch.cat([pos_interp_w, self.pose_end_w[..., 3:]], dim=-1)
 
+        # local 姿态：世界系固定目标姿态 转回 当前 local frame
+        quat_orn_local = math_utils.quat_mul(
+            math_utils.quat_conjugate(quat_yaw),
+            self.pose_end_w[..., 3:]
+        )  # (N, 4)
+        self.pose_command_local = torch.cat([pos_interp_local, quat_orn_local], dim=-1)
+        # print("[HeightInvariantEECommand] pose_command_w:", self.pose_command_w)
         self.t += self._env.step_dt
 
         # 检查是否需要重采样，如果插值时间超过轨迹时间 + 保持时间，则重采样新目标
@@ -361,6 +370,11 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         """返回当前命令（实现抽象属性方法）"""
         return self.pose_command_w
     
+    @property
+    def command_local(self) -> torch.Tensor:
+        """height-invariant local 坐标，给 obs 用"""
+        return self.pose_command_local
+    
     def _set_debug_vis_impl(self, debug_vis: bool):
         super()._set_debug_vis_impl(debug_vis)
         if debug_vis:
@@ -380,18 +394,7 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         # note: this is needed in-case the robot is de-initialized. we can't access the data
         origin_pos, quat_yaw = self.get_height_invariant_base_frame(self._env, torch.arange(self._env.num_envs))
         self.sample_frame_visualizer.visualize(origin_pos,quat_yaw)
-        # 在 env 或 task 的 _post_physics_step / _get_observations 中
-        # robot = self.robot
-
-        # # 获取所有关节的应用力矩
-        # applied_torques = robot.data.applied_torque  # shape: (num_envs, num_joints)
-
-        # # 找到6个关节的索引
-        # joint_indices, joint_names = robot.find_joints("arm_joint[1-6]")
-
-        # # 方式二：逐个打印，更清晰
-        # for idx, name in zip(joint_indices, joint_names):
-        #     print(f"  {name}: {applied_torques[:, idx]}")
+        
     
     
 
