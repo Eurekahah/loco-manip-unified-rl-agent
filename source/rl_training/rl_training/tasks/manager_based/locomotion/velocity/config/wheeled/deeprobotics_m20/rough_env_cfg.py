@@ -35,17 +35,53 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
     )
 
     # EE使用IK进行移动
-    ee_ik = mdp.DifferentialInverseKinematicsActionCfg(
+    # ee_ik = mdp.DifferentialInverseKinematicsActionCfg(
+    #     asset_name="robot",
+    #     joint_names=["arm_joint[1-6]"],  # 只包含机械臂关节
+    #     body_name="arm_link6",     # 末端link名
+    #     debug_vis=True,
+    #     controller=DifferentialIKControllerCfg(
+    #         command_type="pose",       # "pose"=位姿, "position"=仅位置
+    #         use_relative_mode=False,   # False=绝对位姿, True=相对增量
+    #         ik_method="dls",           # "dls"(阻尼最小二乘) 或 "pinv"(伪逆)
+    #     ),
+    #     scale=1.0,
+    # )
+
+    # ee_ik = mdp.DifferentialInverseKinematicsActionCfg(
+    #     asset_name="robot",
+    #     joint_names=["arm_joint[1-6]"],  # 只包含机械臂关节
+    #     body_name="arm_link6",     # 末端link名
+    #     debug_vis=True,
+    #     controller=DifferentialIKControllerCfg(
+    #         command_type="pose",       # "pose"=位姿, "position"=仅位置
+    #         use_relative_mode=True,   # False=绝对位姿, True=相对增量
+    #         ik_method="dls",           # "dls"(阻尼最小二乘) 或 "pinv"(伪逆)
+    #     ),
+    #     scale=0.1,
+    # )
+
+    # IK由command直接驱动，不占policy的action_dim
+    ee_ik = mdp.CommandDrivenIKActionCfg(
         asset_name="robot",
-        joint_names=["arm_joint[1-6]"],  # 只包含机械臂关节
-        body_name="arm_link6",     # 末端link名
+        joint_names=["arm_joint[1-6]"],
+        body_name="arm_link6",
+        command_name="ee_pose",
         controller=DifferentialIKControllerCfg(
-            command_type="pose",       # "pose"=位姿, "position"=仅位置
-            use_relative_mode=True,   # False=绝对位姿, True=相对增量
-            ik_method="dls",           # "dls"(阻尼最小二乘) 或 "pinv"(伪逆)
+            command_type="pose",
+            use_relative_mode=False,  # 接收绝对位姿
+            ik_method="dls",
+            ik_params={"lambda_val": 0.01}
         ),
-        scale=0.1,
+        scale=1.0,
     )
+
+    # gripper_action = mdp.BinaryJointPositionActionCfg(
+    #     asset_name="robot",
+    #     joint_names=["arm_joint7", "arm_joint8"],
+    #     open_command_expr={"arm_joint7": 0.04, "arm_joint8": 0.04},
+    #     close_command_expr={"arm_joint7": 0.0, "arm_joint8": 0.0},
+    # )
 
 
 @configclass
