@@ -3,8 +3,9 @@
 
 # Copyright (c) 2024-2025 Ziqi Fan
 # SPDX-License-Identifier: Apache-2.0
-
+import math
 from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 
@@ -13,6 +14,8 @@ from rl_training.tasks.manager_based.locomotion.velocity.velocity_env_cfg import
     ActionsCfg,
     LocomotionVelocityRoughEnvCfg,
     RewardsCfg,
+    CurriculumCfg,
+    CommandsCfg,
 )
 from isaaclab.controllers import DifferentialIKControllerCfg
 ##
@@ -102,9 +105,172 @@ class DeeproboticsM20RewardsCfg(RewardsCfg):
 
 
 @configclass
+class DeeproboticsM20RewardsWithArmsCfg(DeeproboticsM20RewardsCfg):
+    """Reward terms for the MDP with arm-related rewards."""
+    # EE
+    # 机械臂关节偏离默认收纳姿态的惩罚（不执行任务时）
+    arm_joint_deviation_l1 = RewTerm(
+        func=mdp.joint_deviation_l1,
+        weight=0.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names="arm_joint.*"),
+        },
+    )
+
+    # 1. 位置跟踪（密集）
+    arm_ee_pos_tracking = RewTerm(
+        func=mdp.ee_position_tracking,
+        weight=2.0,
+        params={
+            "command_name": "ee_pose",
+            "ee_frame_name": "arm_link6",
+            "std": 0.15,
+            "arm_weight_command_name": "arm_weight", 
+        },
+    )
+
+    # 2. 姿态跟踪（密集）
+    arm_ee_ori_tracking = RewTerm(
+        func=mdp.ee_orientation_tracking,
+        weight=1.0,
+        params={
+            "command_name": "ee_pose",
+            "ee_frame_name": "arm_link6",
+            "std": 0.5,
+            "arm_weight_command_name": "arm_weight", 
+        },
+    )
+
+    # 3. 到达目标稀疏奖励
+    arm_ee_goal_reached = RewTerm(
+        func=mdp.ee_goal_reached,
+        weight=5.0,
+        params={
+            "command_name": "ee_pose",
+            "ee_frame_name": "arm_link6",
+            "pos_threshold": 0.05,
+            "angle_threshold": 0.2,
+            "arm_weight_command_name": "arm_weight", 
+        },
+    )
+
+
+    # 5. 关节力矩惩罚
+    arm_joint_torque = RewTerm(
+        func=mdp.arm_joint_torque_penalty,
+        weight=0.0,  # -1e-4,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names="arm_.*"),
+            "arm_weight_command_name": "arm_weight", 
+        },
+    )
+
+    # 6. 关节速度惩罚
+    arm_joint_vel = RewTerm(
+        func=mdp.arm_joint_velocity_penalty,
+        weight=0.0,  # -1e-3,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names="arm_.*"),
+            "arm_weight_command_name": "arm_weight", 
+        },
+    )
+
+    # 7. 关节加速度惩罚（可选）
+    arm_joint_acc = RewTerm(
+        func=mdp.arm_joint_acceleration_penalty,
+        weight=0.0,  # -1e-5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names="arm_.*"),
+            "arm_weight_command_name": "arm_weight", 
+        },
+    )
+
+@configclass
+class DeeproboticsM20CurriculumsCfg(CurriculumCfg):
+    """Curriculum terms for the MDP."""
+    arm_weight_curriculum = CurrTerm(
+        func=mdp.advance_arm_weight,
+        params={
+            "max_iterations": 5000,       # 和 RunnerCfg 保持一致
+            "num_steps_per_env": 24,
+            "ramp_start_frac": 0.0,
+            "ramp_end_frac": 0.5,         # iteration=2500 时 max_weight=1.0
+            "max_target": 1.0,
+            "min_target": 0.8,
+            "min_start_frac": 0.5,        # max_weight>0.5 后才推 min
+            "initial_max_weight": 0.0,
+            "initial_min_weight": 0.0,
+        }
+    )
+
+@configclass
+class DeeproboticsM20CommandsCfg(CommandsCfg):
+    """Command specifications for the MDP."""
+
+    # 基座角速度和线速度
+    # 被注释的部分是全向运动命令采样
+    # base_velocity = mdp.UniformThresholdVelocityCommandCfg(
+    #     asset_name="robot",
+    #     resampling_time_range=(10.0, 10.0),
+    #     rel_standing_envs=0.02,
+    #     rel_heading_envs=1.0,
+    #     heading_command=True,
+    #     heading_control_stiffness=0.5,
+    #     debug_vis=True,
+    #     ranges=mdp.UniformThresholdVelocityCommandCfg.Ranges(
+    #         lin_vel_x=(-1.0, 1.0), lin_vel_y=(-1.0, 1.0), ang_vel_z=(-1.0, 1.0), heading=(-math.pi, math.pi)
+    #     ),
+    # )
+    # 训练全身运控时，只有x方向的前向速度
+    base_velocity = mdp.UniformThresholdVelocityCommandCfg(
+        asset_name="robot",
+        resampling_time_range=(10.0, 10.0),
+        rel_standing_envs=0.02,
+        rel_heading_envs=1.0,
+        heading_command=False,
+        heading_control_stiffness=0.5,
+        debug_vis=True,
+        ranges=mdp.UniformThresholdVelocityCommandCfg.Ranges(
+            lin_vel_x=(0.0, 0.9), lin_vel_y=(0.0, 0.0), ang_vel_z=(-1.0, 1.0), heading=(-math.pi, math.pi)
+        ),
+    )
+
+    # EE位姿
+    ee_pose = mdp.HeightInvariantEECommandCfg(
+        asset_name="robot",
+        body_name="arm_link6",
+        resampling_time_range=(5.0, 5.0),
+        debug_vis=True,
+        sampled_height=0.6,  # 采样坐标系的固定高度
+        arm_base_link_name="arm_base",  # 采样坐标系xy位置
+        ranges=mdp.HeightInvariantEECommandCfg.Ranges(
+            # 球坐标位置采样范围
+            p_l= (0.4, 0.7),           # 半径 l
+            p_pitch= (-1, 2*math.pi/5),   # pitch p
+            p_yaw = (-3*math.pi/5, 3*math.pi/5),     # yaw y
+            # 姿态采样范围
+            o_roll = (-math.pi / 4, math.pi / 4),
+            o_pitch =(-math.pi / 4, math.pi / 4),
+            o_yaw = (-math.pi, math.pi),
+            # 插值时间间隔采样范围
+            T_traj = (1.0, 3.0),
+            T_hold = (0.5, 2.0)
+        ),
+    )
+
+    arm_weight = mdp.ArmWeightCommandCfg(
+        resampling_time_range=(10.0, 10.0),
+        init_max_weight=0.0,
+    )
+
+
+
+@configclass
 class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
     actions: DeeproboticsM20ActionsCfg = DeeproboticsM20ActionsCfg()
-    rewards: DeeproboticsM20RewardsCfg = DeeproboticsM20RewardsCfg()
+    rewards: DeeproboticsM20RewardsWithArmsCfg = DeeproboticsM20RewardsWithArmsCfg()
+    curriculum: DeeproboticsM20CurriculumsCfg = DeeproboticsM20CurriculumsCfg()
+    commands: DeeproboticsM20CommandsCfg = DeeproboticsM20CommandsCfg()
 
     base_link_name = "base_link"
     foot_link_name = ".*_wheel"

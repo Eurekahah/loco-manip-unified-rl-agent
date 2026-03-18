@@ -71,7 +71,7 @@ class HighLevelSceneCfg(MySceneCfg):
     # 前视 RGB-D 相机，挂载在机械臂的camera_link 上
     # ---------------------------------------------------------------
     arm_camera = CameraCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/base",
+        prim_path="{ENV_REGEX_NS}/Robot/base_link",
         update_period=0.1,                      # 10 Hz
         height=480,
         width=640,
@@ -86,6 +86,27 @@ class HighLevelSceneCfg(MySceneCfg):
         ),
         offset=CameraCfg.OffsetCfg(
             pos=(0.0, 0.0, 0.0),              # 相机位于机械臂前端
+            rot=(1.0, 0.0, 0.0, 0.0),         # 四元数(w,x,y,z)
+            convention="ros",
+        ),
+    )
+
+    nav_camera = CameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/base_link",
+        update_period=0.1,                      # 10 Hz
+        height=480,
+        width=640,
+        data_types=["rgb", "depth"],
+        debug_vis=False,
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0,               # 焦距
+            focus_distance=400.0,            # 对焦距离
+            f_stop=0.0,                      # 光圈值，0.0表示为理想针孔模型
+            horizontal_aperture=20.955,      # 水平视场，单位为度，根据焦距和传感器尺寸计算得出
+            clipping_range=(0.1, 20.0),      # 近裁剪面和远裁剪面，单位为米
+        ),
+        offset=CameraCfg.OffsetCfg(
+            pos=(0.0, 0.0, 0.0),              # 相机位于base_link前端
             rot=(1.0, 0.0, 0.0, 0.0),         # 四元数(w,x,y,z)
             convention="ros",
         ),
