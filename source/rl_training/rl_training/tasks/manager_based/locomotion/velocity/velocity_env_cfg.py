@@ -159,6 +159,10 @@ class CommandsCfg:
         ),
     )
 
+    arm_weight = mdp.ArmWeightCommandCfg(
+        resampling_time_range=(10.0, 10.0),
+        init_max_weight=0.0,
+    )
 
 
 
@@ -670,6 +674,18 @@ class RewardsCfg:
             "threshold": 1.0,
         },
     )
+
+    undesired_base_link_contacts = RewTerm(
+        func=mdp.undesired_contacts,  # 上面方案一
+        weight=0.0,
+        params={
+            "threshold": 1.0,
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces",
+                body_names=["base_link"],
+            ),
+        },
+    )
     contact_forces = RewTerm(
         func=mdp.contact_forces,
         weight=0.0,
@@ -845,6 +861,7 @@ class RewardsCfg:
             "command_name": "ee_pose",
             "ee_frame_name": "arm_link6",
             "std": 0.15,
+            "arm_weight_command_name": "arm_weight", 
         },
     )
 
@@ -856,6 +873,7 @@ class RewardsCfg:
             "command_name": "ee_pose",
             "ee_frame_name": "arm_link6",
             "std": 0.5,
+            "arm_weight_command_name": "arm_weight", 
         },
     )
 
@@ -868,6 +886,7 @@ class RewardsCfg:
             "ee_frame_name": "arm_link6",
             "pos_threshold": 0.05,
             "angle_threshold": 0.2,
+            "arm_weight_command_name": "arm_weight", 
         },
     )
 
@@ -875,27 +894,30 @@ class RewardsCfg:
     # 5. 关节力矩惩罚
     arm_joint_torque = RewTerm(
         func=mdp.arm_joint_torque_penalty,
-        weight=-1e-4,
+        weight=0.0,  # -1e-4,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names="arm_.*"),
+            "arm_weight_command_name": "arm_weight", 
         },
     )
 
     # 6. 关节速度惩罚
     arm_joint_vel = RewTerm(
         func=mdp.arm_joint_velocity_penalty,
-        weight=-1e-3,
+        weight=0.0,  # -1e-3,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names="arm_.*"),
+            "arm_weight_command_name": "arm_weight", 
         },
     )
 
     # 7. 关节加速度惩罚（可选）
     arm_joint_acc = RewTerm(
         func=mdp.arm_joint_acceleration_penalty,
-        weight=-1e-5,
+        weight=0.0,  # -1e-5,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names="arm_.*"),
+            "arm_weight_command_name": "arm_weight", 
         },
     )
 
@@ -943,6 +965,20 @@ class CurriculumCfg:
             "reward_term_name": "track_lin_vel_xy_exp",
             "range_multiplier": (0.1, 1.0),
         },
+    )
+    arm_weight_curriculum = CurrTerm(
+        func=mdp.advance_arm_weight,
+        params={
+            "max_iterations": 5000,       # 和 RunnerCfg 保持一致
+            "num_steps_per_env": 24,
+            "ramp_start_frac": 0.0,
+            "ramp_end_frac": 0.5,         # iteration=2500 时 max_weight=1.0
+            "max_target": 1.0,
+            "min_target": 0.8,
+            "min_start_frac": 0.5,        # max_weight>0.5 后才推 min
+            "initial_max_weight": 0.0,
+            "initial_min_weight": 0.0,
+        }
     )
 
 

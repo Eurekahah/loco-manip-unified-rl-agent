@@ -215,7 +215,7 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         # ------------------------------Rewards------------------------------
         # General
-        self.rewards.is_terminated.weight = 0
+        self.rewards.is_terminated.weight = -10.0
 
         # Root penalties
         self.rewards.lin_vel_z_l2.weight = -2.0
@@ -270,6 +270,9 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         # Contact sensor
         self.rewards.undesired_contacts.weight = -1.0
         self.rewards.undesired_contacts.params["sensor_cfg"].body_names = [f"^(?!.*{self.foot_link_name}).*"]
+        self.rewards.undesired_base_link_contacts.weight = -3.0
+        self.rewards.undesired_base_link_contacts.params["sensor_cfg"].body_names = [self.base_link_name]
+
         self.rewards.contact_forces.weight = -1.5e-4
         self.rewards.contact_forces.params["sensor_cfg"].body_names = [self.foot_link_name]
 

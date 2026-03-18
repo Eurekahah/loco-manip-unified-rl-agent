@@ -21,6 +21,16 @@ from isaaclab.utils.math import (
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
+def _get_arm_weight(env: ManagerBasedRLEnv, command_name: str | None) -> torch.Tensor:
+    """
+    通用helper：从 CommandManager 取臂部权重。
+    若 command_name 为 None，返回全1（不缩放）。
+    """
+    if command_name is None:
+        return torch.ones(env.num_envs, device=env.device)
+    return env.command_manager.get_command(command_name)[:, 0]  # (N,)
+
+
 
 # =============================================================================
 # 1. 位置跟踪奖励
@@ -32,6 +42,7 @@ def ee_position_tracking(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     ee_frame_name: str = "arm_link6",
     std: float = 0.15,
+    arm_weight_command_name: str | None = None,
 ) -> torch.Tensor:
     """
     EE位置跟踪，使用高斯核：exp(-||pos_error||² / (2*std²))
@@ -53,8 +64,12 @@ def ee_position_tracking(
     
     # 计算位置误差
     pos_error = torch.norm(target_pos_w - ee_pos_w, dim=-1)  # (N,)
+    reward = torch.exp(-pos_error**2 / (2 * std**2))  # (N,)
+    weight = _get_arm_weight(env, arm_weight_command_name)
+    # print(f"Position tracking reward: mean={reward.mean().item():.4f}, "f"pos_error: mean={pos_error.mean().item():.4f}, "f"arm_weight: mean={weight.mean().item():.4f}")
+    return reward * weight
     
-    return torch.exp(-pos_error**2 / (2 * std**2))
+    return torch.exp(-pos_error**2 / (2 * std**2)) * _get_arm_weight(env, arm_weight_command_name)
 
 
 # =============================================================================
@@ -67,6 +82,7 @@ def ee_orientation_tracking(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     ee_frame_name: str = "arm_link6",
     std: float = 0.5,
+    arm_weight_command_name: str | None = None,
 ) -> torch.Tensor:
     """
     EE姿态跟踪，使用高斯核：exp(-||quat_error||² / (2*std²))
@@ -86,7 +102,7 @@ def ee_orientation_tracking(
     # 计算最小旋转角误差（弧度）
     angle_error = quat_error_magnitude(ee_quat_w, target_quat_w)  # (N,)
 
-    return torch.exp(-angle_error**2 / (2 * std**2))
+    return torch.exp(-angle_error**2 / (2 * std**2)) * _get_arm_weight(env, arm_weight_command_name)
 
 
 # =============================================================================
@@ -100,6 +116,7 @@ def ee_goal_reached(
     ee_frame_name: str = "arm_link6",
     pos_threshold: float = 0.05,      # 5cm
     angle_threshold: float = 0.2,     # ~11.5°
+    arm_weight_command_name: str | None = None,
 ) -> torch.Tensor:
     """
     同时满足位置和姿态阈值时给稀疏奖励（0或1）。
@@ -119,7 +136,7 @@ def ee_goal_reached(
     angle_error = quat_error_magnitude(ee_quat_w, target_quat_w)
 
     reached = (pos_error < pos_threshold) & (angle_error < angle_threshold)
-    return reached.float()
+    return reached.float() * _get_arm_weight(env, arm_weight_command_name)
 
 
 # =============================================================================
@@ -133,6 +150,7 @@ def grasp_success(
     ee_frame_name: str = "arm_link6",
     grasp_distance_threshold: float = 0.08,   # EE到物体的距离阈值
     lift_height_threshold: float = 0.05,       # 物体抬升高度阈值
+    arm_weight_command_name: str | None = None,
 ) -> torch.Tensor:
     """
     抓取成功奖励：
@@ -156,7 +174,7 @@ def grasp_success(
     obj_lifted = obj_pos_w[:, 2] > (obj.data.default_root_state[:, 2] + lift_height_threshold)
 
     grasped = (dist < grasp_distance_threshold) & obj_lifted
-    return grasped.float()
+    return grasped.float() * _get_arm_weight(env, arm_weight_command_name)
 
 
 def ee_approach_object(
@@ -165,6 +183,7 @@ def ee_approach_object(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     ee_frame_name: str = "arm_link6",
     std: float = 0.1,
+    arm_weight_command_name: str | None = None,
 ) -> torch.Tensor:
     """
     密集的接近物体奖励（抓取前引导），用高斯核。
@@ -178,7 +197,7 @@ def ee_approach_object(
     obj_pos_w = obj.data.root_pos_w
 
     dist = torch.norm(obj_pos_w - ee_pos_w, dim=-1)
-    return torch.exp(-dist**2 / (2 * std**2))
+    return torch.exp(-dist**2 / (2 * std**2)) * _get_arm_weight(env, arm_weight_command_name)
 
 
 # =============================================================================
@@ -189,6 +208,7 @@ def arm_joint_torque_penalty(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     arm_joint_names: list[str] | None = None,
+    arm_weight_command_name: str | None = None,
 ) -> torch.Tensor:
     """
     机械臂关节力矩L2惩罚，防止过大出力。
@@ -207,7 +227,7 @@ def arm_joint_torque_penalty(
     else:
         torques = robot.data.applied_torque
 
-    return torch.sum(torques**2, dim=-1)
+    return torch.sum(torques**2, dim=-1) * _get_arm_weight(env, arm_weight_command_name)
 
 
 # =============================================================================
@@ -218,6 +238,7 @@ def arm_joint_velocity_penalty(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     arm_joint_names: list[str] | None = None,
+    arm_weight_command_name: str | None = None,
 ) -> torch.Tensor:
     """
     机械臂关节速度L2惩罚，鼓励平滑运动。
@@ -233,7 +254,7 @@ def arm_joint_velocity_penalty(
     else:
         vel = robot.data.joint_vel
 
-    return torch.sum(vel**2, dim=-1)
+    return torch.sum(vel**2, dim=-1) * _get_arm_weight(env, arm_weight_command_name)
 
 
 # =============================================================================
@@ -244,6 +265,7 @@ def arm_joint_acceleration_penalty(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     arm_joint_names: list[str] | None = None,
+    arm_weight_command_name: str | None = None,
 ) -> torch.Tensor:
     """
     机械臂关节加速度L2惩罚，抑制抖动。
@@ -258,4 +280,4 @@ def arm_joint_acceleration_penalty(
     else:
         acc = robot.data.joint_acc
 
-    return torch.sum(acc**2, dim=-1)
+    return torch.sum(acc**2, dim=-1) * _get_arm_weight(env, arm_weight_command_name)

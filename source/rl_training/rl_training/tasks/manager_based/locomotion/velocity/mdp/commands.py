@@ -528,3 +528,63 @@ class DiscreteCommandControllerCfg(CommandTermCfg):
     List of available discrete commands, where each element is an integer.
     Example: [10, 20, 30, 40, 50]
     """
+
+
+if TYPE_CHECKING:
+    from isaaclab.envs import ManagerBasedRLEnv
+
+class ArmWeightCommand(CommandTerm):
+    cfg: ArmWeightCommandCfg
+
+    def __init__(self, cfg: ArmWeightCommandCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._weight = torch.ones(env.num_envs, 1, device=env.device)
+        self._max_weight: float = cfg.init_max_weight
+        self._min_weight: float = 0.0
+
+    # ------------------------------------------------------------------
+    # 课程接口
+    # ------------------------------------------------------------------
+    def set_max_weight(self, value: float):
+        self._max_weight = float(torch.tensor(value).clamp(0.0, 1.0))
+        # min 不能超过 max
+        self._min_weight = min(self._min_weight, self._max_weight)
+
+    def set_min_weight(self, value: float):
+        self._min_weight = float(torch.tensor(value).clamp(0.0, self._max_weight))
+
+    def get_max_weight(self) -> float:
+        return self._max_weight
+
+    def get_min_weight(self) -> float:
+        return self._min_weight
+
+    # ------------------------------------------------------------------
+    # CommandTerm 接口
+    # ------------------------------------------------------------------
+    @property
+    def command(self) -> torch.Tensor:
+        return self._weight
+
+    def _update_command(self):
+        pass
+
+    def _update_metrics(self):
+        pass
+
+    def _resample_command(self, env_ids: torch.Tensor):
+        low  = self._min_weight
+        high = max(self._max_weight, low + 1e-6)
+        # 先生成新值，再写回
+        new_vals = torch.empty(len(env_ids), device=self._weight.device).uniform_(low, high)
+        self._weight[env_ids, 0] = new_vals
+
+
+@configclass
+class ArmWeightCommandCfg(CommandTermCfg):
+    class_type: type = ArmWeightCommand
+
+    resampling_time_range: tuple[float, float] = (10.0, 10.0)
+
+    init_max_weight: float = 0.0
+    """训练开始时 max_weight 的初始值。"""
