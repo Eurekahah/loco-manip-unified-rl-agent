@@ -17,7 +17,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR, ISAAC_NUCLEUS_DIR
-from isaaclab.sensors import CameraCfg, RayCasterCfg, patterns
+from isaaclab.sensors import CameraCfg, RayCasterCfg, patterns, TiledCameraCfg
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 import isaaclab.sim as sim_utils
 
@@ -35,12 +35,27 @@ LOW_LEVEL_ENV_CFG = DeeproboticsM20RoughEnvCfg()
 @configclass
 class HighLevelSceneCfg(MySceneCfg):
     """高层环境的场景配置，继承自低层环境，添加了相机和激光雷达传感器。"""
+
+    # 全局唯一的仓库背景，固定路径不带 {ENV_REGEX_NS}
+    warehouse: AssetBaseCfg = AssetBaseCfg(
+        prim_path="/World/Warehouse",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/warehouse.usd",
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.0),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+    )
     
+    # 仓库小纸箱（比 DexCube 更轻小、更符合仓库场景）
     object: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Object",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
-            scale=(0.8, 0.8, 0.8),
+            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",  # 换回原来的
+            # usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/Props/SM_CardBoxB_01_252.usd",
+            # usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/Props/SM_BottlePlasticA_02.usd", # A-E 5种形状，01-02两种贴纸，共10种品种
+            scale=(0.5, 0.5, 0.5),          # 缩小到半尺寸，更轻巧
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 solver_position_iteration_count=16,
                 solver_velocity_iteration_count=1,
@@ -51,7 +66,7 @@ class HighLevelSceneCfg(MySceneCfg):
             ),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.5, 0.0, 0.055),   # 初始位置（相对于 env origin）
+            pos=(0.5, 0.0, 0.055),
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
     )
@@ -63,18 +78,18 @@ class HighLevelSceneCfg(MySceneCfg):
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd",
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(0.55, 0.0, 0.0),
+            pos=(0.55, 0.0, 0.5),
             rot=(0.70711, 0.0, 0.0, 0.70711),
         ),
     )
     # ---------------------------------------------------------------
     # 前视 RGB-D 相机，挂载在机械臂的camera_link 上
     # ---------------------------------------------------------------
-    arm_camera = CameraCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/base_link",
+    arm_camera = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/abase",
         update_period=0.1,                      # 10 Hz
-        height=480,
-        width=640,
+        height=120,
+        width=160,
         data_types=["rgb", "depth"],
         debug_vis=False,
         spawn=sim_utils.PinholeCameraCfg(
@@ -84,18 +99,18 @@ class HighLevelSceneCfg(MySceneCfg):
             horizontal_aperture=20.955,      # 水平视场，单位为度，根据焦距和传感器尺寸计算得出
             clipping_range=(0.1, 20.0),      # 近裁剪面和远裁剪面，单位为米
         ),
-        offset=CameraCfg.OffsetCfg(
+        offset=TiledCameraCfg.OffsetCfg(
             pos=(0.0, 0.0, 0.0),              # 相机位于机械臂前端
             rot=(1.0, 0.0, 0.0, 0.0),         # 四元数(w,x,y,z)
             convention="ros",
         ),
     )
 
-    nav_camera = CameraCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/base_link",
+    nav_camera = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/bbase",
         update_period=0.1,                      # 10 Hz
-        height=480,
-        width=640,
+        height=120,
+        width=160,
         data_types=["rgb", "depth"],
         debug_vis=False,
         spawn=sim_utils.PinholeCameraCfg(
@@ -105,33 +120,13 @@ class HighLevelSceneCfg(MySceneCfg):
             horizontal_aperture=20.955,      # 水平视场，单位为度，根据焦距和传感器尺寸计算得出
             clipping_range=(0.1, 20.0),      # 近裁剪面和远裁剪面，单位为米
         ),
-        offset=CameraCfg.OffsetCfg(
-            pos=(0.0, 0.0, 0.0),              # 相机位于base_link前端
-            rot=(1.0, 0.0, 0.0, 0.0),         # 四元数(w,x,y,z)
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=(0.3, 0.0, 0.1),              # 相机位于base_link前端
+            rot=(0.5, -0.5, 0.5, -0.5),       # 四元数(w,x,y,z)
             convention="ros",
         ),
     )
 
-    # ---------------------------------------------------------------
-    # 激光雷达，使用 RayCaster + LidarPatternCfg 实现
-    # 模拟 16 线机械旋转式 LiDAR（水平 360°，垂直 ±15°）
-    # ---------------------------------------------------------------
-    lidar = RayCasterCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/base_link",
-        offset=RayCasterCfg.OffsetCfg(
-            pos=(0.0, 0.0, 0.3),                # base 上方 0.3 m
-        ),
-        attach_yaw_only=True,                   # 只跟随偏航角，模拟真实旋转式 LiDAR
-        pattern_cfg=patterns.LidarPatternCfg(
-            channels=16,
-            vertical_fov_range=(-15.0, 15.0),
-            horizontal_fov_range=(0.0, 360.0),
-            horizontal_res=0.4,
-        ),
-        debug_vis=True,
-        mesh_prim_paths=["/World/ground"],
-        max_distance=20.0,
-    )
 
 @configclass
 class EventCfg:
@@ -171,16 +166,16 @@ class EventCfg:
 @configclass
 class ActionsCfg:
     """Action terms for the MDP."""
-
-    pre_trained_policy_action: mdp.PreTrainedPolicyActionCfg = mdp.PreTrainedPolicyActionCfg(
-        asset_name="robot",
-        policy_path=f"D:\\nvidia-isaac-sim\\loco-manip-unified-rl-agent\\logs\\rsl_rl\\deeprobotics_m20_flat\\2026-03-04_23-02-58\\exported\\policy.pt",
-        low_level_decimation=4,
-        low_level_leg_actions=LOW_LEVEL_ENV_CFG.actions.joint_pos,
-        low_level_wheel_actions=LOW_LEVEL_ENV_CFG.actions.joint_vel,
-        low_level_ee_actions=LOW_LEVEL_ENV_CFG.actions.ee_ik,
-        low_level_observations=LOW_LEVEL_ENV_CFG.observations.policy,
-    )
+    pass
+    # pre_trained_policy_action: mdp.PreTrainedPolicyActionCfg = mdp.PreTrainedPolicyActionCfg(
+    #     asset_name="robot",
+    #     policy_path=f"D:\\nvidia-isaac-sim\\loco-manip-unified-rl-agent\\logs\\rsl_rl\\deeprobotics_m20_flat\\2026-03-04_23-02-58\\exported\\policy.pt",
+    #     low_level_decimation=4,
+    #     low_level_leg_actions=LOW_LEVEL_ENV_CFG.actions.joint_pos,
+    #     low_level_wheel_actions=LOW_LEVEL_ENV_CFG.actions.joint_vel,
+    #     low_level_ee_actions=LOW_LEVEL_ENV_CFG.actions.ee_ik,
+    #     low_level_observations=LOW_LEVEL_ENV_CFG.observations.policy,
+    # )
 
 
 @configclass
@@ -236,12 +231,12 @@ class ObservationsCfg:
         )
 
         # EE在世界系下的位姿
-        ee_pose_w = ObsTerm(
-            func=mdp.body_pose_w,
-            params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
-            clip=(-100.0, 100.0),
-            scale=1.0,
-        )
+        # ee_pose_w = ObsTerm(
+        #     func=mdp.body_pose_w,
+        #     params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
+        #     clip=(-100.0, 100.0),
+        #     scale=1.0,
+        # )
 
         # arm_camera_embedding = ObsTerm(
         #     func=mdp.camera_feature_embedding,
@@ -250,17 +245,6 @@ class ObservationsCfg:
         #         "data_type":    "rgb",
         #         "encoder_name": "dinov3_small",   # 换成 "dinov3_base" / "clip_vit" 等
         #         "image_size":   (224, 224),
-        #     },
-        # )
-
-        # lidar_embedding   = ObsTerm(
-        #     func=mdp.lidar_feature_embedding,
-        #     params={
-        #         "sensor_name":  "lidar",
-        #         "encoder_name": "mini_pointnet",  # 换成 "my_custom_lidar_encoder" 等
-        #         "max_points":   1024,
-        #         "max_range":    20.0,
-        #         "min_range":    0.1,
         #     },
         # )
 
@@ -344,10 +328,10 @@ class HighLevelEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = LOW_LEVEL_ENV_CFG.decimation * 10
         self.episode_length_s = self.commands.pose_command.resampling_time_range[1]
 
-        if self.scene.height_scanner is not None:
-            self.scene.height_scanner.update_period = (
-                self.actions.pre_trained_policy_action.low_level_decimation * self.sim.dt
-            )
+        # if self.scene.height_scanner is not None:
+        #     self.scene.height_scanner.update_period = (
+        #         self.actions.pre_trained_policy_action.low_level_decimation * self.sim.dt
+        #     )
         if self.scene.contact_forces is not None:
             self.scene.contact_forces.update_period = self.sim.dt
     
