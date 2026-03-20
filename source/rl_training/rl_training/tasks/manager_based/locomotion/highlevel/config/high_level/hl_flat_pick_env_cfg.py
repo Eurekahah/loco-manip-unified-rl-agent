@@ -14,30 +14,32 @@ from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg imp
 from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import ActionsCfg as HighLevelActionsCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import TerminationsCfg as HighLevelTerminationsCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import RewardsCfg as HighLevelRewardsCfg
-from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.flat_env_nav_cfg import DeeproboticsM20FlatNavEnvCfg as LOW_LEVEL_ENV_CFG
+
+from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.flat_env_cfg import DeeproboticsM20FlatEnvCfg as LOW_LEVEL_ENV_CFG  # noqa: F401, F403
 
 _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
 
 @configclass
-class HLFlatNavActionsCfg(HighLevelActionsCfg):
-    pre_trained_nav_action: mdp.PreTrainedNavActionCfg = mdp.PreTrainedNavActionCfg(
+class HLFlatPickActionsCfg(HighLevelActionsCfg):
+    pre_trained_policy_action: mdp.PreTrainedPolicyActionCfg = mdp.PreTrainedPolicyActionCfg(
         asset_name="robot",
-        policy_path=f"logs\\rsl_rl\\deeprobotics_m20_nav_flat\\2026-03-20_22-13-56\\exported\\policy.pt",
+        policy_path=f"logs/rsl_rl/deeprobotics_m20_flat/2026-03-18_18-06-34/exported/policy.pt",
         low_level_decimation=4,
-        low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
-        low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,
-        low_level_observations=_low_level_env_cfg.observations.policy,
+        low_level_leg_actions=LOW_LEVEL_ENV_CFG.actions.joint_pos,
+        low_level_wheel_actions=LOW_LEVEL_ENV_CFG.actions.joint_vel,
+        low_level_ee_actions=LOW_LEVEL_ENV_CFG.actions.ee_ik,
+        low_level_observations=LOW_LEVEL_ENV_CFG.observations.policy,
     )
 
 @configclass
-class HLFlatNavObservationsCfg(HighLevelObservationsCfg):
+class HLFlatPickObservationsCfg(HighLevelObservationsCfg):
     @configclass
     class PolicyCfg(HighLevelObservationsCfg.PolicyCfg):
         # 使用预训练视觉编码器
-        nav_camera_embedding = ObsTerm(
+        arm_camera_embedding = ObsTerm(
             func=mdp.image_features,
             params={
-                "sensor_cfg":    SceneEntityCfg("nav_camera"),
+                "sensor_cfg":    SceneEntityCfg("arm_camera"),
                 "data_type":     "rgb",
                 "model_zoo_cfg": None,
                 "model_name":    "resnet18",
@@ -84,10 +86,10 @@ class HLFlatNavObservationsCfg(HighLevelObservationsCfg):
     @configclass
     class CriticCfg(HighLevelObservationsCfg.CriticCfg):
         # 使用预训练视觉编码器
-        nav_camera_embedding = ObsTerm(
+        arm_camera_embedding = ObsTerm(
             func=mdp.image_features,
             params={
-                "sensor_cfg":    SceneEntityCfg("nav_camera"),
+                "sensor_cfg":    SceneEntityCfg("arm_camera"),
                 "data_type":     "rgb",
                 "model_zoo_cfg": None,
                 "model_name":    "resnet18",
@@ -116,7 +118,7 @@ class HLFlatNavObservationsCfg(HighLevelObservationsCfg):
     critic: CriticCfg = CriticCfg()
 
 @configclass
-class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
+class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     # 核心：越靠近目标得分越高（以距离倒数或负距离）
     approach_object = RewTerm(
@@ -154,7 +156,7 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
     
 
 @configclass
-class HLFlatNavTerminationsCfg(HighLevelTerminationsCfg):
+class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
     # 成功：到达物体附近足够近
     reach_object = DoneTerm(
         func=mdp.reached_target,   # 自定义，检查 dist < threshold
@@ -170,11 +172,11 @@ class HLFlatNavTerminationsCfg(HighLevelTerminationsCfg):
     
 
 @configclass
-class HLFlatNavEnvCfg(HighLevelFlatEnvCfg):
-    actions: HLFlatNavActionsCfg = HLFlatNavActionsCfg()
-    observations: HLFlatNavObservationsCfg = HLFlatNavObservationsCfg()
-    rewards: HLFlatNavRewardsCfg = HLFlatNavRewardsCfg()
-    terminations: HLFlatNavTerminationsCfg = HLFlatNavTerminationsCfg()
+class HLFlatPickEnvCfg(HighLevelFlatEnvCfg):
+    actions: HLFlatPickActionsCfg = HLFlatPickActionsCfg()
+    observations: HLFlatPickObservationsCfg = HLFlatPickObservationsCfg()
+    rewards: HLFlatPickRewardsCfg = HLFlatPickRewardsCfg()
+    terminations: HLFlatPickTerminationsCfg = HLFlatPickTerminationsCfg()
 
     def __post_init__(self):
         # post init of parent
@@ -182,5 +184,5 @@ class HLFlatNavEnvCfg(HighLevelFlatEnvCfg):
 
 
         # If the weight of rewards is 0, set rewards to None
-        if self.__class__.__name__ == "HLFlatNavEnvCfg":
+        if self.__class__.__name__ == "HLFlatPickEnvCfg":
             self.disable_zero_weight_rewards()

@@ -308,11 +308,11 @@ class RewardsCfg:
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-4.0)
 
     # 惩罚：碰撞（撞桌腿、撞物体）
-    collision_penalty = RewTerm(
-        func=mdp.contact_forces,
-        weight=-1.0,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces"), "threshold": 5.0},
-    )
+    # collision_penalty = RewTerm(
+    #     func=mdp.contact_forces,
+    #     weight=-1.0,
+    #     params={"sensor_cfg": SceneEntityCfg("contact_forces"), "threshold": 5.0},
+    # )
 
     # 惩罚：action rate，防止指令抖动
     action_rate = RewTerm(
