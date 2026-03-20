@@ -176,5 +176,8 @@ class DeeproboticsM20FlatNavEnvCfg(DeeproboticsM20FlatEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
+        self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
         if self.__class__.__name__ == "DeeproboticsM20FlatNavEnvCfg":
             self.disable_zero_weight_rewards()

@@ -1,6 +1,9 @@
 from isaaclab.utils import configclass
 from .high_level_flat_env_cfg import HighLevelFlatEnvCfg
 from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import SceneEntityCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.mdp.encoder import make_cnn_model_zoo_cfg
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
@@ -9,6 +12,8 @@ from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobo
 
 from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import ObservationsCfg as HighLevelObservationsCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import ActionsCfg as HighLevelActionsCfg
+from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import TerminationsCfg as HighLevelTerminationsCfg
+from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import RewardsCfg as HighLevelRewardsCfg
 from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.flat_env_nav_cfg import DeeproboticsM20FlatNavEnvCfg as LOW_LEVEL_ENV_CFG
 
 _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
@@ -55,17 +60,121 @@ class HLFlatNavObservationsCfg(HighLevelObservationsCfg):
         #         "model_name":    "nav_resnet18_unfrozen",
         #     },
         # )
+        # 桌子相对机器人的位置（在机器人body坐标系下）
+        target_table_rel_pos = ObsTerm(
+            func=mdp.object_position_in_robot_root_frame,  # 或自定义 mdp 函数
+            params={
+                "object_cfg": SceneEntityCfg("table"),
+                "robot_cfg":  SceneEntityCfg("robot"),
+            },
+        )
+
+        # 目标物体相对机器人的位置
+        target_object_rel_pos = ObsTerm(
+            func=mdp.object_position_in_robot_root_frame,
+            params={
+                "object_cfg": SceneEntityCfg("object"),
+                "robot_cfg":  SceneEntityCfg("robot"),
+            },
+        )
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = True   # 拼成一个向量送入 MLP
+
+    @configclass
+    class CriticCfg(HighLevelObservationsCfg.CriticCfg):
+        # 使用预训练视觉编码器
+        nav_camera_embedding = ObsTerm(
+            func=mdp.image_features,
+            params={
+                "sensor_cfg":    SceneEntityCfg("nav_camera"),
+                "data_type":     "rgb",
+                "model_zoo_cfg": None,
+                "model_name":    "resnet18",
+            },
+        )
+        target_table_rel_pos = ObsTerm(
+            func=mdp.object_position_in_robot_root_frame,  # 或自定义 mdp 函数
+            params={
+                "object_cfg": SceneEntityCfg("table"),
+                "robot_cfg":  SceneEntityCfg("robot"),
+            },
+        )
+
+        # 目标物体相对机器人的位置
+        target_object_rel_pos = ObsTerm(
+            func=mdp.object_position_in_robot_root_frame,
+            params={
+                "object_cfg": SceneEntityCfg("object"),
+                "robot_cfg":  SceneEntityCfg("robot"),
+            },
+        )
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
     policy: PolicyCfg = PolicyCfg()
+    critic: CriticCfg = CriticCfg()
+
+@configclass
+class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
+
+    # 核心：越靠近目标得分越高（以距离倒数或负距离）
+    approach_object = RewTerm(
+        func=mdp.distance_to_target_reward,   
+        weight=2.0,
+        params={"robot_cfg": SceneEntityCfg("robot"),"target_cfg": SceneEntityCfg("object")},
+    )
+
+    # 朝向奖励：机器人朝向桌子方向
+    heading_to_table = RewTerm(
+        func=mdp.heading_to_target_reward,
+        weight=0.5,
+        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("table")},
+    )
+
+    # 稀疏：成功到达桌边
+    reach_object_success = RewTerm(
+        func=mdp.is_terminated_term,   # 配合 TerminationCfg 使用
+        weight=10.0,
+        params={"term_keys": "reach_object"},
+    )
+
+    # 到达目标附近时，速度越小奖励越高，鼓励稳健停靠
+    slow_near_target = RewTerm(
+        func=mdp.slow_down_near_target_reward,
+        weight=1.5,                                  # 适当权重，不要盖过 approach
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "target_cfg": SceneEntityCfg("object"),
+            "distance_threshold": 0.6,              # 与 approach_object 保持一致
+            "vel_max": 0.5,                          # 超过 0.5m/s 则无奖励
+        },
+    )
+
+    
+
+@configclass
+class HLFlatNavTerminationsCfg(HighLevelTerminationsCfg):
+    # 成功：到达物体附近足够近
+    reach_object = DoneTerm(
+        func=mdp.reached_target,   # 自定义，检查 dist < threshold
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "target_cfg": SceneEntityCfg("object"),
+            "threshold": 0.4,
+            "vel_threshold": 0.1,   # 只有在速度足够慢时才算成功到达
+        },
+    )
 
 
+    
 
 @configclass
 class HLFlatNavEnvCfg(HighLevelFlatEnvCfg):
     actions: HLFlatNavActionsCfg = HLFlatNavActionsCfg()
     observations: HLFlatNavObservationsCfg = HLFlatNavObservationsCfg()
+    rewards: HLFlatNavRewardsCfg = HLFlatNavRewardsCfg()
+    terminations: HLFlatNavTerminationsCfg = HLFlatNavTerminationsCfg()
 
     def __post_init__(self):
         # post init of parent

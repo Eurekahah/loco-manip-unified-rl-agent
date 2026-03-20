@@ -52,10 +52,8 @@ class HighLevelSceneCfg(MySceneCfg):
     object: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Object",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",  # 换回原来的
-            # usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/Props/SM_CardBoxB_01_252.usd",
-            # usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/Props/SM_BottlePlasticA_02.usd", # A-E 5种形状，01-02两种贴纸，共10种品种
-            scale=(0.5, 0.5, 0.5),          # 缩小到半尺寸，更轻巧
+            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",  
+            scale=(1.0, 1.0, 1.0),          # 缩小到半尺寸，更轻巧
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 solver_position_iteration_count=16,
                 solver_velocity_iteration_count=1,
@@ -64,22 +62,32 @@ class HighLevelSceneCfg(MySceneCfg):
                 max_depenetration_velocity=5.0,
                 disable_gravity=False,
             ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.5, 0.0, 0.055),
+            pos=(2.0, 0.0, 0.455),
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
     )
 
     # 桌子（无物理交互的静态物体用 AssetBaseCfg）
-    table = AssetBaseCfg(
+    table: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Table",
-        spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.8, 1.2, 0.05),          # 桌面尺寸 (x, y, z)
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                kinematic_enabled=True,
+                disable_gravity=True,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=50.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.6, 0.4, 0.2),  # 木色
+            ),
         ),
-        init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(0.55, 0.0, 0.5),
-            rot=(0.70711, 0.0, 0.0, 0.70711),
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(2.0, 0.0, 0.5),   # 桌面中心高度 0.5m
+            rot=(1.0, 0.0, 0.0, 0.0),
         ),
     )
     # ---------------------------------------------------------------
@@ -97,11 +105,11 @@ class HighLevelSceneCfg(MySceneCfg):
             focus_distance=400.0,            # 对焦距离
             f_stop=0.0,                      # 光圈值，0.0表示为理想针孔模型
             horizontal_aperture=20.955,      # 水平视场，单位为度，根据焦距和传感器尺寸计算得出
-            clipping_range=(0.1, 20.0),      # 近裁剪面和远裁剪面，单位为米
+            clipping_range=(0.1, 3.0),      # 近裁剪面和远裁剪面，单位为米
         ),
         offset=TiledCameraCfg.OffsetCfg(
             pos=(0.0, 0.0, 0.0),              # 相机位于机械臂前端
-            rot=(1.0, 0.0, 0.0, 0.0),         # 四元数(w,x,y,z)
+            rot=(0.5, -0.5, 0.5, -0.5),         # 四元数(w,x,y,z)
             convention="ros",
         ),
     )
@@ -136,7 +144,7 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
+            "pose_range": {"x": (-0.5, 0.5), "y": (-0.2, 0.2),  "yaw": (-0.785, 0.785)},
             "velocity_range": {
                 "x": (-0.0, 0.0),
                 "y": (-0.0, 0.0),
@@ -156,7 +164,10 @@ class EventCfg:
             "pose_range": {
                 "x": (-0.1, 0.1),
                 "y": (-0.1, 0.1),
-                "z": (0.0, 0.0),
+                "z": (0.455, 0.455),
+                "roll": (-3.14, 3.14),
+                "pitch": (-3.14, 3.14),
+                "yaw": (-3.14, 3.14),
             },
             "velocity_range": {},
         },
@@ -229,27 +240,65 @@ class ObservationsCfg:
             clip=(-100.0, 100.0),
             scale=1.0,
         )
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True   # 拼成一个向量送入 MLP
 
-        # EE在世界系下的位姿
-        # ee_pose_w = ObsTerm(
-        #     func=mdp.body_pose_w,
-        #     params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
-        #     clip=(-100.0, 100.0),
-        #     scale=1.0,
-        # )
+    @configclass
+    class CriticCfg(ObsGroup):
+        """Observations for critic group."""
 
-        # arm_camera_embedding = ObsTerm(
-        #     func=mdp.camera_feature_embedding,
-        #     params={
-        #         "sensor_name":  "arm_camera",
-        #         "data_type":    "rgb",
-        #         "encoder_name": "dinov3_small",   # 换成 "dinov3_base" / "clip_vit" 等
-        #         "image_size":   (224, 224),
-        #     },
-        # )
+        # 基座线速度
+        base_lin_vel = ObsTerm(
+            func=mdp.base_lin_vel,
+            noise=Unoise(n_min=-0.1, n_max=0.1),
+            clip=(-100.0, 100.0),
+            scale=1.0,
+        )
+        # 基座角速度
+        base_ang_vel = ObsTerm(
+            func=mdp.base_ang_vel,
+            noise=Unoise(n_min=-0.2, n_max=0.2),
+            clip=(-100.0, 100.0),
+            scale=1.0,
+        )
+        # 投影重力，用于姿态感知
+        projected_gravity = ObsTerm(
+            func=mdp.projected_gravity,
+            noise=Unoise(n_min=-0.05, n_max=0.05),
+            clip=(-100.0, 100.0),
+            scale=1.0,
+        )
+        # 所有关节位置
+        joint_pos = ObsTerm(
+            func=mdp.joint_pos_rel,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*", preserve_order=True)},
+            noise=Unoise(n_min=-0.01, n_max=0.01),
+            clip=(-100.0, 100.0),
+            scale=1.0,
+        )
+        # 所有关节速度
+        joint_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*", preserve_order=True)},
+            noise=Unoise(n_min=-1.5, n_max=1.5),
+            clip=(-100.0, 100.0),
+            scale=1.0,
+        )
+        # 上一次行动
+        actions = ObsTerm(
+            func=mdp.last_action,
+            clip=(-100.0, 100.0),
+            scale=1.0,
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True   # 拼成一个向量送入 MLP
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
+    critic: CriticCfg = CriticCfg()
 
 
 @configclass
@@ -257,6 +306,19 @@ class RewardsCfg:
     """Reward terms for the MDP."""
 
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-4.0)
+
+    # 惩罚：碰撞（撞桌腿、撞物体）
+    collision_penalty = RewTerm(
+        func=mdp.contact_forces,
+        weight=-1.0,
+        params={"sensor_cfg": SceneEntityCfg("contact_forces"), "threshold": 5.0},
+    )
+
+    # 惩罚：action rate，防止指令抖动
+    action_rate = RewTerm(
+        func=mdp.action_rate_l2,
+        weight=-0.05,
+    )
     # position_tracking = RewTerm(
     #     func=mdp.position_command_error_tanh,
     #     weight=0.5,
@@ -277,14 +339,14 @@ class RewardsCfg:
 @configclass
 class CommandsCfg:
     """Command terms for the MDP."""
-
-    pose_command = mdp.UniformPose2dCommandCfg(
-        asset_name="robot",
-        simple_heading=False,
-        resampling_time_range=(8.0, 8.0),
-        debug_vis=True,
-        ranges=mdp.UniformPose2dCommandCfg.Ranges(pos_x=(-3.0, 3.0), pos_y=(-3.0, 3.0), heading=(-math.pi, math.pi)),
-    )
+    pass
+    # pose_command = mdp.UniformPose2dCommandCfg(
+    #     asset_name="robot",
+    #     simple_heading=False,
+    #     resampling_time_range=(8.0, 8.0),
+    #     debug_vis=False,
+    #     ranges=mdp.UniformPose2dCommandCfg.Ranges(pos_x=(-3.0, 3.0), pos_y=(-3.0, 3.0), heading=(-math.pi, math.pi)),
+    # )
 
 
 @configclass
@@ -295,6 +357,10 @@ class TerminationsCfg:
     base_contact = DoneTerm(
         func=mdp.illegal_contact,
         params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names="base_link"), "threshold": 1.0},
+    )
+    root_height_below_minimum = DoneTerm(
+        func=mdp.root_height_below_minimum,
+        params={"asset_cfg": SceneEntityCfg("robot"),"minimum_height": 0.3},
     )
 
 # @configclass
@@ -309,7 +375,7 @@ class HighLevelEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the high level environment."""
 
     # environment settings
-    scene: HighLevelSceneCfg = HighLevelSceneCfg(num_envs=4096, env_spacing=2.5)
+    scene: HighLevelSceneCfg = HighLevelSceneCfg(num_envs=32, env_spacing=5.0)
     actions: ActionsCfg = ActionsCfg()
     observations: ObservationsCfg = ObservationsCfg()
     events: EventCfg = EventCfg()
@@ -326,7 +392,7 @@ class HighLevelEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = LOW_LEVEL_ENV_CFG.sim.dt
         self.sim.render_interval = LOW_LEVEL_ENV_CFG.decimation
         self.decimation = LOW_LEVEL_ENV_CFG.decimation * 10
-        self.episode_length_s = self.commands.pose_command.resampling_time_range[1]
+        self.episode_length_s = 8.0
 
         # if self.scene.height_scanner is not None:
         #     self.scene.height_scanner.update_period = (

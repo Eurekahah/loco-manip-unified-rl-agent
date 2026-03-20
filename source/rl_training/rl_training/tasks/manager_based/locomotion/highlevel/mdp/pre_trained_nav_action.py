@@ -276,7 +276,7 @@ class PreTrainedNavActionCfg(ActionTermCfg):
     class LowLevelCommandRanges:
         """Clipping ranges for the 3-DoF chassis velocity command."""
         lin_vel_x: tuple[float, float] = (-1.0, 1.0)
-        lin_vel_y: tuple[float, float] = (0.0, 0.0)
+        lin_vel_y: tuple[float, float] = (-1.0, 1.0)
         ang_vel_z: tuple[float, float] = (-1.0, 1.0)
 
     low_level_command_ranges: LowLevelCommandRanges = LowLevelCommandRanges()
