@@ -175,11 +175,22 @@ def slow_down_near_target_reward(
     target_cfg: SceneEntityCfg,
     distance_threshold: float = 0.6,
     vel_max: float = 0.5,
+    penalty_scale: float = 1.0,
 ) -> torch.Tensor:
     """
-    当机器人进入目标附近 distance_threshold 范围内时，
-    速度越小奖励越高，最大奖励为 1.0，速度超过 vel_max 时奖励为 0。
+    当机器人进入目标附近 distance_threshold 范围内时：
+      - 速度 <= vel_max：线性奖励 [0, 1]，速度越小奖励越高
+      - 速度 >  vel_max：线性惩罚（负值），超速越多惩罚越重
     
+    奖励/惩罚曲线（speed 轴）：
+    
+      1.0 |*
+          | *
+      0.0 |----*------*--------> speed
+          |  vel_max  *
+     -1.0 |            *
+          |             * (惩罚随超速线性增大)
+
     Returns: (N,) float tensor
     """
     robot_pos_w  = robot_root_pos_w(env, robot_cfg)
@@ -191,16 +202,25 @@ def slow_down_near_target_reward(
 
     # 线速度大小
     robot: Articulation = env.scene[robot_cfg.name]
-    lin_vel = robot.data.root_lin_vel_w[:, :2]       # (N, 2) 水平速度
-    speed = torch.norm(lin_vel, dim=-1)              # (N,)
+    lin_vel = robot.data.root_lin_vel_w[:, :2]  # (N, 2) 水平速度
+    speed   = torch.norm(lin_vel, dim=-1)        # (N,)
 
     # 仅在距离足够近时激活
-    in_range = dist < distance_threshold             # (N,) bool
+    in_range = (dist < distance_threshold).float()  # (N,)
 
-    # 速度奖励：线性从1（speed=0）降到0（speed>=vel_max），截断到[0,1]
-    vel_reward = torch.clamp(1.0 - speed / vel_max, min=0.0, max=1.0)
+    # ---- 奖励/惩罚逻辑 ----
+    # 合规区间 [0, vel_max]：reward ∈ [0, 1]，speed=0 时最高
+    reward  = torch.clamp(1.0 - speed / vel_max, min=0.0, max=1.0)
 
-    return (vel_reward * in_range.float())           # (N,)
+    # 超速区间 (vel_max, +∞)：penalty < 0，超速量越大惩罚越重
+    # 超速量归一化：excess = (speed - vel_max) / vel_max
+    excess  = torch.clamp(speed - vel_max, min=0.0) / vel_max
+    penalty = -excess * penalty_scale               # 负值
+
+    # 叠加：合规时 penalty=0，超速时 reward=0
+    combined = reward + penalty                     # 两段函数自然拼接
+
+    return combined * in_range
 
 
 def collision_penalty(

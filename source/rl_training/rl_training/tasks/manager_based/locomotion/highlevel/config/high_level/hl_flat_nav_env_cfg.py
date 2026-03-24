@@ -61,13 +61,13 @@ class HLFlatNavObservationsCfg(HighLevelObservationsCfg):
         #     },
         # )
         # 桌子相对机器人的位置（在机器人body坐标系下）
-        target_table_rel_pos = ObsTerm(
-            func=mdp.object_position_in_robot_root_frame,  # 或自定义 mdp 函数
-            params={
-                "object_cfg": SceneEntityCfg("table"),
-                "robot_cfg":  SceneEntityCfg("robot"),
-            },
-        )
+        # target_table_rel_pos = ObsTerm(
+        #     func=mdp.object_position_in_robot_root_frame,  # 或自定义 mdp 函数
+        #     params={
+        #         "object_cfg": SceneEntityCfg("table"),
+        #         "robot_cfg":  SceneEntityCfg("robot"),
+        #     },
+        # )
 
         # 目标物体相对机器人的位置
         target_object_rel_pos = ObsTerm(
@@ -93,13 +93,13 @@ class HLFlatNavObservationsCfg(HighLevelObservationsCfg):
                 "model_name":    "resnet18",
             },
         )
-        target_table_rel_pos = ObsTerm(
-            func=mdp.object_position_in_robot_root_frame,  # 或自定义 mdp 函数
-            params={
-                "object_cfg": SceneEntityCfg("table"),
-                "robot_cfg":  SceneEntityCfg("robot"),
-            },
-        )
+        # target_table_rel_pos = ObsTerm(
+        #     func=mdp.object_position_in_robot_root_frame,  # 或自定义 mdp 函数
+        #     params={
+        #         "object_cfg": SceneEntityCfg("table"),
+        #         "robot_cfg":  SceneEntityCfg("robot"),
+        #     },
+        # )
 
         # 目标物体相对机器人的位置
         target_object_rel_pos = ObsTerm(
@@ -126,10 +126,10 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
     )
 
     # 朝向奖励：机器人朝向桌子方向
-    heading_to_table = RewTerm(
+    heading_to_object = RewTerm(
         func=mdp.heading_to_target_reward,
         weight=0.5,
-        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("table")},
+        params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("object")},
     )
 
     # 稀疏：成功到达桌边
@@ -137,6 +137,12 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
         func=mdp.is_terminated_term,   # 配合 TerminationCfg 使用
         weight=10.0,
         params={"term_keys": "reach_object"},
+    )
+
+    reach_object_high_vel = RewTerm(
+        func=mdp.is_terminated_term,   # 配合 TerminationCfg 使用
+        weight=7.0,
+        params={"term_keys": "reach_object_high_vel"},
     )
 
     # 到达目标附近时，速度越小奖励越高，鼓励稳健停靠
@@ -148,6 +154,7 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
             "target_cfg": SceneEntityCfg("object"),
             "distance_threshold": 0.6,              # 与 approach_object 保持一致
             "vel_max": 0.5,                          # 超过 0.5m/s 则无奖励
+            "penalty_scale": 1.0,                     # 超速惩罚强度
         },
     )
 
@@ -162,7 +169,17 @@ class HLFlatNavTerminationsCfg(HighLevelTerminationsCfg):
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
             "threshold": 0.4,
-            "vel_threshold": 0.1,   # 只有在速度足够慢时才算成功到达
+            "vel_threshold": 0.2,   # 只有在速度足够慢时才算成功到达
+        },
+    )
+
+    reach_object_high_vel = DoneTerm(
+        func=mdp.reached_target,   # 自定义，检查 dist < threshold
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "target_cfg": SceneEntityCfg("object"),
+            "threshold": 0.4,
+            "vel_threshold": 0.5,   # 到达目标但速度过快，给予较小奖励但不算完全成功
         },
     )
 
@@ -180,7 +197,7 @@ class HLFlatNavEnvCfg(HighLevelFlatEnvCfg):
         # post init of parent
         super().__post_init__()
 
-
+        self.scene.arm_camera = None
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "HLFlatNavEnvCfg":
             self.disable_zero_weight_rewards()

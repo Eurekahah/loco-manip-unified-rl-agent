@@ -48,7 +48,7 @@ class HighLevelSceneCfg(MySceneCfg):
         ),
     )
     
-    # 仓库小纸箱（比 DexCube 更轻小、更符合仓库场景）
+    # dex_cube
     object: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Object",
         spawn=sim_utils.UsdFileCfg(
@@ -71,25 +71,37 @@ class HighLevelSceneCfg(MySceneCfg):
     )
 
     # 桌子（无物理交互的静态物体用 AssetBaseCfg）
-    table: RigidObjectCfg = RigidObjectCfg(
+    # table: RigidObjectCfg = RigidObjectCfg(
+    #     prim_path="{ENV_REGEX_NS}/Table",
+    #     spawn=sim_utils.CuboidCfg(
+    #         size=(0.8, 1.2, 0.05),          # 桌面尺寸 (x, y, z)
+    #         rigid_props=sim_utils.RigidBodyPropertiesCfg(
+    #             kinematic_enabled=True,
+    #             disable_gravity=True,
+    #         ),
+    #         mass_props=sim_utils.MassPropertiesCfg(mass=50.0),
+    #         collision_props=sim_utils.CollisionPropertiesCfg(),
+    #         visual_material=sim_utils.PreviewSurfaceCfg(
+    #             diffuse_color=(0.6, 0.4, 0.2),  # 木色
+    #         ),
+    #     ),
+    #     init_state=RigidObjectCfg.InitialStateCfg(
+    #         pos=(2.0, 0.0, 0.5),   # 桌面中心高度 0.5m
+    #         rot=(1.0, 0.0, 0.0, 0.0),
+    #     ),
+    # )
+    table = AssetBaseCfg = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Table",
-        spawn=sim_utils.CuboidCfg(
-            size=(0.8, 1.2, 0.05),          # 桌面尺寸 (x, y, z)
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                kinematic_enabled=True,
-                disable_gravity=True,
-            ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=50.0),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-            visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=(0.6, 0.4, 0.2),  # 木色
-            ),
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/ThorlabsTable/table_instanceable.usd",
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(2.0, 0.0, 0.5),   # 桌面中心高度 0.5m
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(2.0, 0.0, 0.5),
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
     )
+    
+    # utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/ThorlabsTable/table_instanceable.usd")
     # ---------------------------------------------------------------
     # 前视 RGB-D 相机，挂载在机械臂的camera_link 上
     # ---------------------------------------------------------------
@@ -144,7 +156,7 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.5, 0.5), "y": (-0.2, 0.2),  "yaw": (-0.785, 0.785)},
+            "pose_range": {"x": (-0.5, 0.5), "y": (-0.2, 0.2),  "yaw": (-0.393, 0.393)},
             "velocity_range": {
                 "x": (-0.0, 0.0),
                 "y": (-0.0, 0.0),
@@ -164,7 +176,7 @@ class EventCfg:
             "pose_range": {
                 "x": (-0.1, 0.1),
                 "y": (-0.1, 0.1),
-                "z": (0.455, 0.455),
+                "z": (0.155, 0.155),
                 "roll": (-3.14, 3.14),
                 "pitch": (-3.14, 3.14),
                 "yaw": (-3.14, 3.14),
@@ -375,7 +387,7 @@ class HighLevelEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the high level environment."""
 
     # environment settings
-    scene: HighLevelSceneCfg = HighLevelSceneCfg(num_envs=32, env_spacing=5.0)
+    scene: HighLevelSceneCfg = HighLevelSceneCfg(num_envs=16, env_spacing=5.0)
     actions: ActionsCfg = ActionsCfg()
     observations: ObservationsCfg = ObservationsCfg()
     events: EventCfg = EventCfg()
