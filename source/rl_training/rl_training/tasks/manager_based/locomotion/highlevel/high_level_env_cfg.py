@@ -327,9 +327,10 @@ class RewardsCfg:
     # )
 
     # 惩罚：action rate，防止指令抖动
+    # batch_size也可以调小一点
     action_rate = RewTerm(
         func=mdp.action_rate_l2,
-        weight=-0.05,
+        weight=-0.01,
     )
     # position_tracking = RewTerm(
     #     func=mdp.position_command_error_tanh,
