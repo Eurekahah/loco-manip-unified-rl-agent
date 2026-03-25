@@ -223,6 +223,7 @@ class HLFlatNavEnvCfg(HighLevelFlatEnvCfg):
         if self.__class__.__name__ == "HLFlatNavEnvCfg":
             self.disable_zero_weight_rewards()
 
+
 @configclass
 class HLFlatNavTeacherEnvCfg(HLFlatNavEnvCfg):
     observations: HLFlatNavTeacherObservationsCfg = HLFlatNavTeacherObservationsCfg()
@@ -230,5 +231,6 @@ class HLFlatNavTeacherEnvCfg(HLFlatNavEnvCfg):
         super().__post_init__()
 
         self.scene.nav_camera = None
+        self.scene.warehouse = None
         if self.__class__.__name__ == "HLFlatNavTeacherEnvCfg":
             self.disable_zero_weight_rewards()
