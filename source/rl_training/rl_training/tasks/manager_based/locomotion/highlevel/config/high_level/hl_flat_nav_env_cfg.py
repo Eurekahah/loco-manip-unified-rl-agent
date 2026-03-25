@@ -5,6 +5,8 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ObservationGroupCfg as ObsGroup
+
 from rl_training.tasks.manager_based.locomotion.highlevel.mdp.encoder import make_cnn_model_zoo_cfg
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
 from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.flat_env_nav_cfg import ObservationsCfg as LowLevelObsCfg
@@ -30,90 +32,109 @@ class HLFlatNavActionsCfg(HighLevelActionsCfg):
     )
 
 @configclass
+class PolicyCfg(HighLevelObservationsCfg.PolicyCfg):
+    # 使用预训练视觉编码器
+    nav_camera_embedding = ObsTerm(
+        func=mdp.image_features,
+        params={
+            "sensor_cfg":    SceneEntityCfg("nav_camera"),
+            "data_type":     "rgb",
+            "model_zoo_cfg": None,
+            "model_name":    "resnet18",
+        },
+    )
+    # 直接将image展平作为输入
+    # nav_camera_embedding = ObsTerm(
+    #     func=mdp.image,
+    #     params={
+    #         "sensor_cfg":    SceneEntityCfg("nav_camera"),
+    #         "data_type":     "rgb",
+    #     },
+    # )
+    # nav_camera_embedding = ObsTerm(
+    #     func=mdp.image_features,
+    #     params={
+    #         "sensor_cfg":    SceneEntityCfg("nav_camera"),
+    #         "data_type":     "rgb",
+    #         "model_zoo_cfg": make_cnn_model_zoo_cfg(),
+    #         "model_name":    "nav_resnet18_unfrozen",
+    #     },
+    # )
+    # 桌子相对机器人的位置（在机器人body坐标系下）
+    # target_table_rel_pos = ObsTerm(
+    #     func=mdp.object_position_in_robot_root_frame,  # 或自定义 mdp 函数
+    #     params={
+    #         "object_cfg": SceneEntityCfg("table"),
+    #         "robot_cfg":  SceneEntityCfg("robot"),
+    #     },
+    # )
+
+    # 目标物体相对机器人的位置
+    target_object_rel_pos = ObsTerm(
+        func=mdp.object_position_in_robot_root_frame,
+        params={
+            "object_cfg": SceneEntityCfg("object"),
+            "robot_cfg":  SceneEntityCfg("robot"),
+        },
+    )
+    def __post_init__(self):
+        self.enable_corruption = False
+        self.concatenate_terms = True   # 拼成一个向量送入 MLP
+
+@configclass
+class ImageObsCfg(ObsGroup):
+    # 使用预训练视觉编码器
+    nav_camera_embedding = ObsTerm(
+        func=mdp.image_features,
+        params={
+            "sensor_cfg":    SceneEntityCfg("nav_camera"),
+            "data_type":     "rgb",
+            "model_zoo_cfg": None,
+            "model_name":    "resnet18",
+        },
+    )
+    def __post_init__(self):
+        self.enable_corruption = False
+        self.concatenate_terms = True  
+
+@configclass
+class CriticCfg(HighLevelObservationsCfg.CriticCfg):
+    # 目标物体相对机器人的位置
+    target_object_rel_pos = ObsTerm(
+        func=mdp.object_position_in_robot_root_frame,
+        params={
+            "object_cfg": SceneEntityCfg("object"),
+            "robot_cfg":  SceneEntityCfg("robot"),
+        },
+    )
+    def __post_init__(self):
+        self.enable_corruption = False
+        self.concatenate_terms = True
+
+@configclass
+class TeacherCfg(HighLevelObservationsCfg.PolicyCfg):
+    # 目标物体相对机器人的位置
+    target_object_rel_pos = ObsTerm(
+        func=mdp.object_position_in_robot_root_frame,
+        params={
+            "object_cfg": SceneEntityCfg("object"),
+            "robot_cfg":  SceneEntityCfg("robot"),
+        },
+    )
+    def __post_init__(self):
+        self.enable_corruption = False
+        self.concatenate_terms = True
+@configclass
 class HLFlatNavObservationsCfg(HighLevelObservationsCfg):
-    @configclass
-    class PolicyCfg(HighLevelObservationsCfg.PolicyCfg):
-        # 使用预训练视觉编码器
-        nav_camera_embedding = ObsTerm(
-            func=mdp.image_features,
-            params={
-                "sensor_cfg":    SceneEntityCfg("nav_camera"),
-                "data_type":     "rgb",
-                "model_zoo_cfg": None,
-                "model_name":    "resnet18",
-            },
-        )
-        # 直接将image展平作为输入
-        # nav_camera_embedding = ObsTerm(
-        #     func=mdp.image,
-        #     params={
-        #         "sensor_cfg":    SceneEntityCfg("nav_camera"),
-        #         "data_type":     "rgb",
-        #     },
-        # )
-        # nav_camera_embedding = ObsTerm(
-        #     func=mdp.image_features,
-        #     params={
-        #         "sensor_cfg":    SceneEntityCfg("nav_camera"),
-        #         "data_type":     "rgb",
-        #         "model_zoo_cfg": make_cnn_model_zoo_cfg(),
-        #         "model_name":    "nav_resnet18_unfrozen",
-        #     },
-        # )
-        # 桌子相对机器人的位置（在机器人body坐标系下）
-        # target_table_rel_pos = ObsTerm(
-        #     func=mdp.object_position_in_robot_root_frame,  # 或自定义 mdp 函数
-        #     params={
-        #         "object_cfg": SceneEntityCfg("table"),
-        #         "robot_cfg":  SceneEntityCfg("robot"),
-        #     },
-        # )
-
-        # 目标物体相对机器人的位置
-        target_object_rel_pos = ObsTerm(
-            func=mdp.object_position_in_robot_root_frame,
-            params={
-                "object_cfg": SceneEntityCfg("object"),
-                "robot_cfg":  SceneEntityCfg("robot"),
-            },
-        )
-        def __post_init__(self):
-            self.enable_corruption = False
-            self.concatenate_terms = True   # 拼成一个向量送入 MLP
-
-    @configclass
-    class CriticCfg(HighLevelObservationsCfg.CriticCfg):
-        # 使用预训练视觉编码器
-        nav_camera_embedding = ObsTerm(
-            func=mdp.image_features,
-            params={
-                "sensor_cfg":    SceneEntityCfg("nav_camera"),
-                "data_type":     "rgb",
-                "model_zoo_cfg": None,
-                "model_name":    "resnet18",
-            },
-        )
-        # target_table_rel_pos = ObsTerm(
-        #     func=mdp.object_position_in_robot_root_frame,  # 或自定义 mdp 函数
-        #     params={
-        #         "object_cfg": SceneEntityCfg("table"),
-        #         "robot_cfg":  SceneEntityCfg("robot"),
-        #     },
-        # )
-
-        # 目标物体相对机器人的位置
-        target_object_rel_pos = ObsTerm(
-            func=mdp.object_position_in_robot_root_frame,
-            params={
-                "object_cfg": SceneEntityCfg("object"),
-                "robot_cfg":  SceneEntityCfg("robot"),
-            },
-        )
-        def __post_init__(self):
-            self.enable_corruption = False
-            self.concatenate_terms = True
     policy: PolicyCfg = PolicyCfg()
     critic: CriticCfg = CriticCfg()
+    images: ImageObsCfg = ImageObsCfg()
+    teacher: TeacherCfg = TeacherCfg()
+
+@configclass
+class HLFlatNavTeacherObservationsCfg(HighLevelObservationsCfg):
+    critic: CriticCfg = CriticCfg()
+    teacher: TeacherCfg = TeacherCfg()
 
 @configclass
 class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
@@ -200,4 +221,14 @@ class HLFlatNavEnvCfg(HighLevelFlatEnvCfg):
         self.scene.arm_camera = None
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "HLFlatNavEnvCfg":
+            self.disable_zero_weight_rewards()
+
+@configclass
+class HLFlatNavTeacherEnvCfg(HLFlatNavEnvCfg):
+    observations: HLFlatNavTeacherObservationsCfg = HLFlatNavTeacherObservationsCfg()
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.scene.nav_camera = None
+        if self.__class__.__name__ == "HLFlatNavTeacherEnvCfg":
             self.disable_zero_weight_rewards()
