@@ -43,59 +43,9 @@ class PolicyCfg(HighLevelObservationsCfg.PolicyCfg):
             "model_name":    "resnet18",
         },
     )
-    # 直接将image展平作为输入
-    # nav_camera_embedding = ObsTerm(
-    #     func=mdp.image,
-    #     params={
-    #         "sensor_cfg":    SceneEntityCfg("nav_camera"),
-    #         "data_type":     "rgb",
-    #     },
-    # )
-    # nav_camera_embedding = ObsTerm(
-    #     func=mdp.image_features,
-    #     params={
-    #         "sensor_cfg":    SceneEntityCfg("nav_camera"),
-    #         "data_type":     "rgb",
-    #         "model_zoo_cfg": make_cnn_model_zoo_cfg(),
-    #         "model_name":    "nav_resnet18_unfrozen",
-    #     },
-    # )
-    # 桌子相对机器人的位置（在机器人body坐标系下）
-    # target_table_rel_pos = ObsTerm(
-    #     func=mdp.object_position_in_robot_root_frame,  # 或自定义 mdp 函数
-    #     params={
-    #         "object_cfg": SceneEntityCfg("table"),
-    #         "robot_cfg":  SceneEntityCfg("robot"),
-    #     },
-    # )
-
-    # 目标物体相对机器人的位置
-    target_object_rel_pos = ObsTerm(
-        func=mdp.object_position_in_robot_root_frame,
-        params={
-            "object_cfg": SceneEntityCfg("object"),
-            "robot_cfg":  SceneEntityCfg("robot"),
-        },
-    )
     def __post_init__(self):
         self.enable_corruption = False
         self.concatenate_terms = True   # 拼成一个向量送入 MLP
-
-@configclass
-class ImageObsCfg(ObsGroup):
-    # 使用预训练视觉编码器
-    nav_camera_embedding = ObsTerm(
-        func=mdp.image_features,
-        params={
-            "sensor_cfg":    SceneEntityCfg("nav_camera"),
-            "data_type":     "rgb",
-            "model_zoo_cfg": None,
-            "model_name":    "resnet18",
-        },
-    )
-    def __post_init__(self):
-        self.enable_corruption = False
-        self.concatenate_terms = True  
 
 @configclass
 class CriticCfg(HighLevelObservationsCfg.CriticCfg):
@@ -128,7 +78,6 @@ class TeacherCfg(HighLevelObservationsCfg.PolicyCfg):
 class HLFlatNavObservationsCfg(HighLevelObservationsCfg):
     policy: PolicyCfg = PolicyCfg()
     critic: CriticCfg = CriticCfg()
-    images: ImageObsCfg = ImageObsCfg()
     teacher: TeacherCfg = TeacherCfg()
 
 @configclass
