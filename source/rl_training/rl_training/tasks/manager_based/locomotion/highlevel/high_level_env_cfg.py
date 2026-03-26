@@ -398,6 +398,7 @@ class HighLevelEnvCfg(ManagerBasedRLEnvCfg):
     # curriculum: CurriculumCfg = CurriculumCfg()
     terminations: TerminationsCfg = TerminationsCfg()
 
+    foot_link_name = ".*_wheel"
 
     def __post_init__(self):
         """Post initialization."""

@@ -23,7 +23,7 @@ def reached_target(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     target_cfg: SceneEntityCfg,
-    threshold: float = 0.4,
+    threshold: float = 0.6,
     vel_threshold: float = 0.1,
 ) -> torch.Tensor:
     """
@@ -42,5 +42,7 @@ def reached_target(
     robot: Articulation = env.scene[robot_cfg.name]
     speed = torch.norm(robot.data.root_lin_vel_w[:, :2], dim=-1)  # (N,)
 
+    # print(f"Distance to target: {dist} m, ")
+    # print(f"Speed: {speed} m/s")
     return (dist < threshold) & (speed < vel_threshold)  # (N,) bool
  

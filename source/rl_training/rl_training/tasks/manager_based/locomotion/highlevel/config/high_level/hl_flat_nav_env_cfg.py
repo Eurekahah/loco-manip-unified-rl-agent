@@ -173,13 +173,20 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
-            "distance_threshold": 0.6,              # 与 approach_object 保持一致
-            "vel_max": 0.5,                          # 超过 0.5m/s 则无奖励
+            "distance_threshold": 1.0,              # 与 approach_object 保持一致
+            "vel_max": 0.5,                          # 超过 0.5m/s 则惩罚
             "penalty_scale": 1.0,                     # 超速惩罚强度
         },
     )
 
-    
+    undesired_contacts = RewTerm(
+        func=mdp.undesired_contacts,
+        weight=-1.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=""),
+            "threshold": 5.0
+        }
+    )
 
 @configclass
 class HLFlatNavTerminationsCfg(HighLevelTerminationsCfg):
@@ -189,8 +196,8 @@ class HLFlatNavTerminationsCfg(HighLevelTerminationsCfg):
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
-            "threshold": 0.4,
-            "vel_threshold": 0.2,   # 只有在速度足够慢时才算成功到达
+            "threshold": 0.7,
+            "vel_threshold": 0.1,   # 只有在速度足够慢时才算成功到达
         },
     )
 
@@ -199,7 +206,7 @@ class HLFlatNavTerminationsCfg(HighLevelTerminationsCfg):
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
-            "threshold": 0.4,
+            "threshold": 0.7,
             "vel_threshold": 0.5,   # 到达目标但速度过快，给予较小奖励但不算完全成功
         },
     )
@@ -219,6 +226,9 @@ class HLFlatNavEnvCfg(HighLevelFlatEnvCfg):
         super().__post_init__()
 
         self.scene.arm_camera = None
+        
+        self.rewards.undesired_contacts.weight = -1.0
+        self.rewards.undesired_contacts.params["sensor_cfg"].body_names = [f"^(?!.*{self.foot_link_name}).*"]
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "HLFlatNavEnvCfg":
             self.disable_zero_weight_rewards()

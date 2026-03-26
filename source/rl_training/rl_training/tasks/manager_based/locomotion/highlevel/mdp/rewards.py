@@ -8,6 +8,7 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
 from isaaclab.assets import Articulation, RigidObject
+from isaaclab.sensors import ContactSensor
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import (
     quat_rotate_inverse,
@@ -223,37 +224,18 @@ def slow_down_near_target_reward(
     return combined * in_range
 
 
-def collision_penalty(
-    env: ManagerBasedRLEnv,
-    sensor_cfg: SceneEntityCfg,
-    threshold: float = 5.0,
-) -> torch.Tensor:
-    """
-    Penalty proportional to the maximum contact force above `threshold`.
-
-    r = -max(0, max_force - threshold)
-
-    Uses IsaacLab's ContactSensor data.
-
-    Args:
-        sensor_cfg: SceneEntityCfg pointing to a ContactSensor on the robot.
-        threshold:  Force (N) below which no penalty is applied.
-
-    Returns shape (N,).
-    """
-    from isaaclab.sensors import ContactSensor
-
-    sensor_cfg.resolve(env.scene)
-    sensor: ContactSensor = env.scene[sensor_cfg.name]
-
-    # net_forces_w: (N, num_bodies, 3)
-    forces     = sensor.data.net_forces_w
-    force_norm = torch.norm(forces, dim=-1)          # (N, num_bodies)
-    max_force  = force_norm.max(dim=-1).values       # (N,)
-
-    penalty = torch.clamp(max_force - threshold, min=0.0)
-    return -penalty  # negative reward
-
+def undesired_contacts(env: ManagerBasedRLEnv, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Penalize undesired contacts as the number of violations that are above a threshold."""
+    # extract the used quantities (to enable type-hinting)
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    # check if contact force is above threshold
+    net_contact_forces = contact_sensor.data.net_forces_w_history
+    is_contact = torch.max(torch.norm(net_contact_forces[:, :, sensor_cfg.body_ids], dim=-1), dim=1)[0] > threshold
+    # sum over contacts for each environment
+    reward = torch.sum(is_contact, dim=1).float()
+    # reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
+    # print(f"Undesired contacts: {reward}")
+    return reward
 
 
 
