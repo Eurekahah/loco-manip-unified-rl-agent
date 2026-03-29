@@ -76,6 +76,59 @@ def track_ang_vel_z_world_exp(
     reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
     return reward
 
+def body_height_tracking(
+    env: ManagerBasedRLEnv,
+    command_name: str = "body_pose",
+    std: float = 0.05,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """机身高度跟踪奖励（高斯核，误差越小奖励越高）。"""
+    asset = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)  # (N, 3)
+    target_h = cmd[:, 0]
+
+    actual_h = asset.data.root_state_w[:, 2]  # z 高度
+    error = (actual_h - target_h).pow(2)
+    return torch.exp(-error / (2 * std ** 2))
+
+
+def body_pitch_tracking(
+    env: ManagerBasedRLEnv,
+    command_name: str = "body_pose",
+    std: float = 0.1,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """机身 pitch 跟踪奖励。"""
+
+    from isaaclab.utils.math import euler_xyz_from_quat
+    asset = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)  # (N, 3)
+    target_p = cmd[:, 1]
+
+    quat = asset.data.root_quat_w  # (N, 4) w,x,y,z
+    _, actual_p, _ = euler_xyz_from_quat(quat)  # roll, pitch, yaw
+
+    error = (actual_p - target_p).pow(2)
+    return torch.exp(-error / (2 * std ** 2))
+
+
+def body_roll_tracking(
+    env: ManagerBasedRLEnv,
+    command_name: str = "body_pose",
+    std: float = 0.1,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """机身 roll 跟踪奖励。"""
+    from isaaclab.utils.math import euler_xyz_from_quat
+    asset = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)  # (N, 3)
+    target_r = cmd[:, 2]
+
+    quat = asset.data.root_quat_w  # (N, 4) w,x,y,z
+    actual_r, _, _ = euler_xyz_from_quat(quat)  # roll, pitch, yaw
+
+    error = (actual_r - target_r).pow(2)
+    return torch.exp(-error / (2 * std ** 2))
 
 def joint_power(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     """Reward joint_power"""

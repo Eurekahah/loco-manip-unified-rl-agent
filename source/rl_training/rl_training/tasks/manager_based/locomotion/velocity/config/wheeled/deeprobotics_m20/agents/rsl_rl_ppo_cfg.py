@@ -54,3 +54,11 @@ class DeeproboticsM20NavFlatPPORunnerCfg(DeeproboticsM20RoughPPORunnerCfg):
 
         self.max_iterations = 5000
         self.experiment_name = "deeprobotics_m20_nav_flat"
+
+@configclass
+class DeeproboticsM20WBCFlatPPORunnerCfg(DeeproboticsM20RoughPPORunnerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.max_iterations = 5000
+        self.experiment_name = "deeprobotics_m20_wbc_flat"
