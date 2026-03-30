@@ -381,7 +381,7 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         # ------------------------------Rewards------------------------------
         # General
-        self.rewards.is_terminated.weight = -10.0
+        self.rewards.is_terminated.weight = -5.0
 
         # Root penalties
         self.rewards.lin_vel_z_l2.weight = -2.0

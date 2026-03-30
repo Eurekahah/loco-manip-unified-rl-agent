@@ -17,7 +17,8 @@ import isaaclab.utils.math as math_utils
 
 import rl_training.tasks.manager_based.locomotion.velocity.mdp as mdp
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
-from isaaclab.markers.config import FRAME_MARKER_CFG
+from isaaclab.markers.config import FRAME_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG, BLUE_ARROW_X_MARKER_CFG
+
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
@@ -605,24 +606,33 @@ class BodyPoseCommand(CommandTerm):
         # command buffer: [height, pitch, roll]
         self.command = torch.zeros(self.num_envs, 3, device=self.device)
 
-        # 把配置参数搬到 tensor，方便向量化运算
-        self._mean = torch.tensor(
-            [cfg.height_mean, cfg.pitch_mean, cfg.roll_mean],
-            device=self.device,
-        )
-        self._std = torch.tensor(
-            [cfg.height_std, cfg.pitch_std, cfg.roll_std],
-            device=self.device,
-        )
-        self._low = torch.tensor(
-            [cfg.height_range[0], cfg.pitch_range[0], cfg.roll_range[0]],
-            device=self.device,
-        )
-        self._high = torch.tensor(
-            [cfg.height_range[1], cfg.pitch_range[1], cfg.roll_range[1]],
+    @property
+    def _mean(self) -> torch.Tensor:
+        return torch.tensor(
+            [self.cfg.height_mean, self.cfg.pitch_mean, self.cfg.roll_mean],
             device=self.device,
         )
 
+    @property
+    def _std(self) -> torch.Tensor:
+        return torch.tensor(
+            [self.cfg.height_std, self.cfg.pitch_std, self.cfg.roll_std],
+            device=self.device,
+        )
+
+    @property
+    def _low(self) -> torch.Tensor:
+        return torch.tensor(
+            [self.cfg.height_range[0], self.cfg.pitch_range[0], self.cfg.roll_range[0]],
+            device=self.device,
+        )
+
+    @property
+    def _high(self) -> torch.Tensor:
+        return torch.tensor(
+            [self.cfg.height_range[1], self.cfg.pitch_range[1], self.cfg.roll_range[1]],
+            device=self.device,
+        )
     # ------------------------------------------------------------------
     # 必须实现的抽象方法
     # ------------------------------------------------------------------
@@ -661,15 +671,102 @@ class BodyPoseCommand(CommandTerm):
 
     def _update_metrics(self):
         """可选：记录命令统计量用于 tensorboard。"""
+        # ------------------------------------------------------------------ #
+        # 1. 命令本身的均值（描述当前采样分布的中心）
+        # ------------------------------------------------------------------ #
         self.metrics["height_mean"] = self._command[:, 0]
         self.metrics["pitch_mean"]  = self._command[:, 1]
         self.metrics["roll_mean"]   = self._command[:, 2]
+        # ------------------------------------------------------------------ #
+        # 2. 读取实际 body pose
+        # ------------------------------------------------------------------ #
+        # 实际高度：root 在世界系下的 z 坐标
+        actual_height = self.robot.data.root_pos_w[:, 2]        # (num_envs,)
+
+        # 实际 pitch / roll：从四元数转欧拉角
+        # euler_xyz_from_quat 返回顺序为 (roll, pitch, yaw)，单位 rad
+        actual_quat = self.robot.data.root_quat_w                       # (num_envs, 4) — w,x,y,z
+        actual_roll, actual_pitch, _ = math_utils.euler_xyz_from_quat(actual_quat)  # (num_envs,) each
+
+        # ------------------------------------------------------------------ #
+        # 3. 误差 = 命令 - 实际
+        # ------------------------------------------------------------------ #
+        height_error = self._command[:, 0] - actual_height
+        pitch_error  = self._command[:, 1] - actual_pitch
+        roll_error   = self._command[:, 2] - actual_roll
+
+        # MAE：反映平均跟踪精度
+        self.metrics["height_error_mean"] = height_error.abs().mean()
+        self.metrics["pitch_error_mean"]  = pitch_error.abs().mean()
+        self.metrics["roll_error_mean"]   = roll_error.abs().mean()
+
+        # 带符号误差均值：反映系统性偏高 / 偏低趋势
+        self.metrics["height_error_bias"] = height_error.mean()
+        self.metrics["pitch_error_bias"]  = pitch_error.mean()
+        self.metrics["roll_error_bias"]   = roll_error.mean()
 
     def _set_debug_vis_impl(self, debug_vis: bool):
-        pass
+        """创建 / 销毁可视化 marker。"""
+        if debug_vis:
+            # ① 倾斜圆片（绿色）：编码目标 pitch / roll
+            if not hasattr(self, "_tilted_disc_visualizer"):
+                tilted_cfg: VisualizationMarkersCfg = GREEN_ARROW_X_MARKER_CFG.replace(
+                    prim_path="/Visuals/BodyPoseCommand/body_pose_disc_tilted",
+                )
+                self._tilted_disc_visualizer = VisualizationMarkers(tilted_cfg)
+            self._tilted_disc_visualizer.set_visibility(True)
+
+            # ② 水平参考圆片（红色）：始终水平，仅表示高度
+            if not hasattr(self, "_ref_disc_visualizer"):
+                ref_cfg: VisualizationMarkersCfg = BLUE_ARROW_X_MARKER_CFG.replace(
+                    prim_path="/Visuals/BodyPoseCommand/body_pose_disc_ref",
+                )
+                self._ref_disc_visualizer = VisualizationMarkers(ref_cfg)
+            self._ref_disc_visualizer.set_visibility(True)
+        else:
+            if self._tilted_disc_visualizer is not None:
+                self._tilted_disc_visualizer.set_visibility(False)
+            if self._ref_disc_visualizer is not None:
+                self._ref_disc_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
-        pass
+        """每帧更新 marker 位置和姿态。"""
+        if not self.cfg.debug_vis:
+            return
+
+        # 获取机器人基座在世界坐标系下的 XY 位置
+        root_state = self._env.scene["robot"].data.root_state_w  # (N, 13)
+        base_xy = root_state[:, :2]  # (N, 2)
+
+        target_h = self._command[:, 0]  # (N,)
+        target_p = self._command[:, 1]  # (N,)  pitch
+        target_r = self._command[:, 2]  # (N,)  roll
+
+        zeros = torch.zeros(self.num_envs, device=self.device)
+
+        # ---------- 公共：圆片位置（两个圆片同位置）----------
+        disc_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        disc_pos[:, :2] = base_xy
+        disc_pos[:, 2] = target_h
+
+        # ---------- 公共：基础旋转（法线朝上，圆片水平）----------
+        half_pi = torch.full((self.num_envs,), -torch.pi / 2, device=self.device)
+        q_base = math_utils.quat_from_euler_xyz(zeros, half_pi, zeros)  # (N, 4)
+
+        # ---------- 公共：圆片尺寸 ----------
+        disc_scale = torch.ones(self.num_envs, 3, device=self.device)
+        disc_scale[:, 0] = 0.01   # 法线方向极薄
+        disc_scale[:, 1] = 10.0   # 直径 Y
+        disc_scale[:, 2] = 1.0    # 直径 Z
+
+        # ---------- ① 倾斜圆片（绿色）：叠加 pitch / roll ----------
+        q_tilt = math_utils.quat_from_euler_xyz(target_r, target_p, zeros)  # (N, 4)
+        tilted_quat = math_utils.quat_mul(q_tilt, q_base)
+
+        self._tilted_disc_visualizer.visualize(disc_pos, tilted_quat, disc_scale)
+
+        # ---------- ② 水平参考圆片（红色）：始终保持 q_base，不叠加任何倾斜 ----------
+        self._ref_disc_visualizer.visualize(disc_pos, q_base, disc_scale)
 
 
 @configclass
