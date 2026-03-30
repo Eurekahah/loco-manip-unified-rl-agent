@@ -1,7 +1,6 @@
 from isaaclab.utils import configclass
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
-from isaaclab.utils.math_utils import override_value
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 

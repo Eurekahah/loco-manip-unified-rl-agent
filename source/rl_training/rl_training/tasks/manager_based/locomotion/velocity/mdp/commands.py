@@ -681,11 +681,11 @@ class BodyPoseCommand(CommandTerm):
         # 2. 读取实际 body pose
         # ------------------------------------------------------------------ #
         # 实际高度：root 在世界系下的 z 坐标
-        actual_height = self.robot.data.root_pos_w[:, 2]        # (num_envs,)
+        actual_height = self._env.scene["robot"].data.root_pos_w[:, 2]        # (num_envs,)
 
         # 实际 pitch / roll：从四元数转欧拉角
         # euler_xyz_from_quat 返回顺序为 (roll, pitch, yaw)，单位 rad
-        actual_quat = self.robot.data.root_quat_w                       # (num_envs, 4) — w,x,y,z
+        actual_quat = self._env.scene["robot"].data.root_quat_w                       # (num_envs, 4) — w,x,y,z
         actual_roll, actual_pitch, _ = math_utils.euler_xyz_from_quat(actual_quat)  # (num_envs,) each
 
         # ------------------------------------------------------------------ #
