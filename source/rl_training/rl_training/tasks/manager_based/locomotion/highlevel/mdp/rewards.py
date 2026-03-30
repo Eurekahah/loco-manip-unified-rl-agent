@@ -14,6 +14,7 @@ from isaaclab.utils.math import (
     quat_rotate_inverse,
     yaw_quat,
     wrap_to_pi,
+    quat_error_magnitude,
 )
 
 from .utils import robot_root_pos_w, robot_root_quat_w, object_root_pos_w
@@ -228,14 +229,160 @@ def undesired_contacts(env: ManagerBasedRLEnv, threshold: float, sensor_cfg: Sce
     """Penalize undesired contacts as the number of violations that are above a threshold."""
     # extract the used quantities (to enable type-hinting)
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    # print("force_matrix_w:", contact_sensor.data.force_matrix_w)
+    # print("force_matrix_w shape:", contact_sensor.data.force_matrix_w.shape if contact_sensor.data.force_matrix_w is not None else "None")
     # check if contact force is above threshold
     net_contact_forces = contact_sensor.data.net_forces_w_history
     is_contact = torch.max(torch.norm(net_contact_forces[:, :, sensor_cfg.body_ids], dim=-1), dim=1)[0] > threshold
     # sum over contacts for each environment
     reward = torch.sum(is_contact, dim=1).float()
     # reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
-    # print(f"Undesired contacts: {reward}")
+   
+    # if sensor_cfg.name == "arm_contact_forces" and reward.sum() > 0:
+    #     print(f"Net contact forces: {net_contact_forces[:, :, sensor_cfg.body_ids]}")
+    #     print(f"Undesired contacts: {reward}")
     return reward
 
+def gripper_object_contact(
+    env: ManagerBasedRLEnv,
+    threshold: float,
+    sensor_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
 
+    # force_matrix_w shape: [N, H, num_sensor_bodies, 3]
+    force_matrix = contact_sensor.data.force_matrix_w
 
+    # ✅ 用 sensor 内部局部索引，而不是全局 body_ids
+    # contact_sensor.body_names 是 sensor 追踪的 body 列表
+    # 找到目标 body 在 sensor 内部的索引
+    target_body_name = sensor_cfg.body_names  # 例如 "arm_link7"
+    if isinstance(target_body_name, str):
+        target_body_name = [target_body_name]
+    
+    # 在 sensor.body_names 中查找局部索引
+    local_ids = [
+        contact_sensor.body_names.index(name)
+        for name in target_body_name
+        if name in contact_sensor.body_names
+    ]
+
+    if not local_ids:
+        # 找不到目标 body，返回零奖励
+        print(f"[WARN] body {target_body_name} not found in sensor bodies: {contact_sensor.body_names}")
+        return torch.zeros(force_matrix.shape[0], device=force_matrix.device)
+
+    # print(f"Gripper-object contact sensor '{sensor_cfg.name}'")
+    # print(f"Tracking bodies: {contact_sensor.body_names}")
+    # print(f"Local IDs: {local_ids}")
+    # print(f"force_matrix_w shape: {force_matrix.shape}")          # [N, H, 2, 3]
+    # print(f"body_names count: {len(contact_sensor.body_names)}")
+    # shape: [N, H, len(local_ids), 3]
+    finger_forces = force_matrix[:, local_ids, :,  :]
+
+    # 计算力的大小并取历史最大值
+    force_norm = torch.norm(finger_forces, dim=-1)   # [N, H, len(local_ids)]
+    N = force_norm.shape[0]
+    max_force = force_norm.view(N, -1).max(dim=-1)[0]  # [N]
+
+    is_contact = max_force > threshold
+    reward = is_contact.float()
+
+    if reward.sum() > 0:
+        print(f"[{target_body_name}] object contact max force: {max_force[is_contact]}")
+
+    return reward
+
+def object_ee_distance(
+    env: ManagerBasedRLEnv,
+    std: float,
+    object_cfg: SceneEntityCfg,
+    ee_frame_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    object_asset = env.scene[object_cfg.name]
+    robot_asset = env.scene[ee_frame_cfg.name]
+
+    # 物体位置：有 body_ids 用 body_pos_w，否则用 root_pos_w
+    
+    object_pos_w = object_asset.data.root_pos_w[:, :3]
+
+    # EE 位置：必须指定 body_names，body_ids 由框架解析
+    if ee_frame_cfg.body_ids is not None:
+        ee_pos_w = robot_asset.data.body_pos_w[:, ee_frame_cfg.body_ids[0], :]
+    else:
+        # fallback：取最后一个 body（不推荐，应确保 body_names 已配置）
+        ee_pos_w = robot_asset.data.body_pos_w[:, -1, :]
+
+    distance = torch.norm(object_pos_w - ee_pos_w, dim=-1)
+    reward = torch.exp(-distance ** 2 / (2 * std ** 2))
+
+    return reward
+
+def object_is_lifted(
+    env: ManagerBasedRLEnv,
+    minimal_height: float,
+    object_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """
+    物体被抬起的奖励。
+    
+    物体高于初始放置高度（spawn height）+ minimal_height 时给予奖励。
+    奖励为连续值：超出越多奖励越高（clamp 在 [0, 1] 内），
+    避免纯稀疏奖励带来的训练困难。
+
+    Args:
+        env: RL 环境实例
+        minimal_height: 物体需要被抬起的最小高度（相对于初始高度），单位：米
+        object_cfg: 物体的 SceneEntityCfg
+
+    Returns:
+        shape (num_envs,) 的奖励张量，值域 [0, 1]
+    """
+    object_asset = env.scene[object_cfg.name]
+
+    # 当前物体 z 轴高度
+    current_height = object_asset.data.root_pos_w[:, 2]  # (N,)
+
+    # 初始高度（reset 时记录，存储在 extras 或直接用 default_root_state）
+    # IsaacLab 中 default_root_state 的第 2 列是初始 z
+    initial_height = object_asset.data.default_root_state[:, 2]  # (N,)
+
+    # 相对抬起高度
+    lifted_height = current_height - initial_height  # (N,)
+
+    # 连续奖励：超过 minimal_height 才开始给分，线性增长后 clamp
+    # 你也可以换成纯 bool：(lifted_height > minimal_height).float()
+    reward = torch.clamp(
+        (lifted_height - minimal_height) / minimal_height,
+        min=0.0,
+        max=1.0,
+    )
+
+    return reward
+
+def cmd_pos_to_object_reward(
+    env: ManagerBasedRLEnv,
+    action_term_name: str = "pre_trained_pick_action",
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+    pos_sigma: float = 0.1,
+) -> torch.Tensor:
+    """教师网络生成的EE命令位姿与目标物体质心位置的接近度奖励。
+
+    位置项：Gaussian kernel，命令位置与物体质心越近越高。
+
+    Returns:
+        shape (num_envs,) 的奖励张量，值域 (0, 1]
+    """
+    # ── 1. 获取命令位姿（world frame，process_actions末尾已转换）──────
+    action_term = env.action_manager.get_term(action_term_name)
+    cmd_pos_w  = action_term.raw_actions[:, 3:6]   # (N, 3)  world frame
+
+    # ── 2. 获取目标物体质心位置（world frame）────────────────────────
+    obj: RigidObject = env.scene[object_cfg.name]
+    obj_pos_w  = obj.data.root_pos_w   # (N, 3)
+
+    # ── 3. 位置奖励：Gaussian kernel ──────────────────────────────
+    pos_dist   = torch.norm(cmd_pos_w - obj_pos_w, dim=-1)          # (N,)
+    pos_reward = torch.exp(-pos_dist.pow(2) / (2 * pos_sigma ** 2)) # (N,)
+
+    return pos_reward 

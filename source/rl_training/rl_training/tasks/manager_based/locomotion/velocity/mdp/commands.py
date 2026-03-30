@@ -696,14 +696,14 @@ class BodyPoseCommand(CommandTerm):
         roll_error   = self._command[:, 2] - actual_roll
 
         # MAE：反映平均跟踪精度
-        self.metrics["height_error_mean"] = height_error.abs().mean()
-        self.metrics["pitch_error_mean"]  = pitch_error.abs().mean()
-        self.metrics["roll_error_mean"]   = roll_error.abs().mean()
+        self.metrics["height_error_mean"] = height_error.abs()
+        self.metrics["pitch_error_mean"]  = pitch_error.abs()
+        self.metrics["roll_error_mean"]   = roll_error.abs()
 
         # 带符号误差均值：反映系统性偏高 / 偏低趋势
-        self.metrics["height_error_bias"] = height_error.mean()
-        self.metrics["pitch_error_bias"]  = pitch_error.mean()
-        self.metrics["roll_error_bias"]   = roll_error.mean()
+        self.metrics["height_error_bias"] = height_error
+        self.metrics["pitch_error_bias"]  = pitch_error
+        self.metrics["roll_error_bias"]   = roll_error
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         """创建 / 销毁可视化 marker。"""

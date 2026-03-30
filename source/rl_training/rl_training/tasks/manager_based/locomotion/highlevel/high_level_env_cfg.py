@@ -17,7 +17,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR, ISAAC_NUCLEUS_DIR
-from isaaclab.sensors import CameraCfg, RayCasterCfg, patterns, TiledCameraCfg
+from isaaclab.sensors import TiledCameraCfg, ContactSensorCfg
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 import isaaclab.sim as sim_utils
 
@@ -53,7 +53,7 @@ class HighLevelSceneCfg(MySceneCfg):
         prim_path="{ENV_REGEX_NS}/Object",
         spawn=sim_utils.UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",  
-            scale=(1.0, 1.0, 1.0),          # 缩小到半尺寸，更轻巧
+            scale=(1.0, 1.0, 1.0),          
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 solver_position_iteration_count=16,
                 solver_velocity_iteration_count=1,
@@ -65,31 +65,11 @@ class HighLevelSceneCfg(MySceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(2.0, 0.0, 0.455),
+            pos=(2.0, 0.0, 0.5145),
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
     )
 
-    # 桌子（无物理交互的静态物体用 AssetBaseCfg）
-    # table: RigidObjectCfg = RigidObjectCfg(
-    #     prim_path="{ENV_REGEX_NS}/Table",
-    #     spawn=sim_utils.CuboidCfg(
-    #         size=(0.8, 1.2, 0.05),          # 桌面尺寸 (x, y, z)
-    #         rigid_props=sim_utils.RigidBodyPropertiesCfg(
-    #             kinematic_enabled=True,
-    #             disable_gravity=True,
-    #         ),
-    #         mass_props=sim_utils.MassPropertiesCfg(mass=50.0),
-    #         collision_props=sim_utils.CollisionPropertiesCfg(),
-    #         visual_material=sim_utils.PreviewSurfaceCfg(
-    #             diffuse_color=(0.6, 0.4, 0.2),  # 木色
-    #         ),
-    #     ),
-    #     init_state=RigidObjectCfg.InitialStateCfg(
-    #         pos=(2.0, 0.0, 0.5),   # 桌面中心高度 0.5m
-    #         rot=(1.0, 0.0, 0.0, 0.0),
-    #     ),
-    # )
     table = AssetBaseCfg = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Table",
         spawn=sim_utils.UsdFileCfg(
@@ -145,6 +125,13 @@ class HighLevelSceneCfg(MySceneCfg):
             rot=(0.5, -0.5, 0.5, -0.5),       # 四元数(w,x,y,z)
             convention="ros",
         ),
+    )
+    arm_contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/piper_camera/.*", 
+        history_length=3, 
+        track_air_time=True,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Object",
+                                "{ENV_REGEX_NS}/Object/.*",],
     )
 
 

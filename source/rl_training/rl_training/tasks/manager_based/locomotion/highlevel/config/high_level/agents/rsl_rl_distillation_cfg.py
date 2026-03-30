@@ -44,7 +44,7 @@ class HighLevelPickFlatDistillationRunnerCfg(HighLevelNavFlatDistillationRunnerC
         super().__post_init__()
 
         self.max_iterations = 1500
-        self.experiment_name = "high_level_pick_flat_student"
+        self.experiment_name = "high_level_pick_flat_teacher"
 
         # ★ 核心：学生 policy 组 = 本体 + 图像；teacher 组 = 教师特权观测
         self.obs_groups = {
