@@ -24,7 +24,7 @@ _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
 class HLFlatNavActionsCfg(HighLevelActionsCfg):
     pre_trained_nav_action: mdp.PreTrainedNavActionCfg = mdp.PreTrainedNavActionCfg(
         asset_name="robot",
-        policy_path=f"logs\\rsl_rl\\deeprobotics_m20_nav_flat\\2026-03-20_22-13-56\\exported\\policy.pt",
+        policy_path=f"logs/rsl_rl/deeprobotics_m20_nav_flat/2026-03-20_22-13-56/exported/policy.pt",
         low_level_decimation=4,
         low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
         low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,
