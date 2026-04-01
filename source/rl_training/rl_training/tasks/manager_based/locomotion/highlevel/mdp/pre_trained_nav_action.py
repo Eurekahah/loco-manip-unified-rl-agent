@@ -225,6 +225,8 @@ class PreTrainedNavAction(ActionTerm):
         vel_arrow_scale, vel_arrow_quat = self._resolve_xy_velocity_to_arrow(
             self.robot.data.root_lin_vel_b[:, :2]
         )
+        # print(f"Desired velocity: {self.raw_actions[:, :2]} m/s, Actual velocity: {self.robot.data.root_lin_vel_b[:, :2]} m/s")
+    
         self.base_vel_goal_visualizer.visualize(base_pos_w, vel_des_arrow_quat, vel_des_arrow_scale)
         self.base_vel_visualizer.visualize(base_pos_w, vel_arrow_quat, vel_arrow_scale)
 

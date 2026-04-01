@@ -24,7 +24,6 @@ def reached_target(
     robot_cfg: SceneEntityCfg,
     target_cfg: SceneEntityCfg,
     threshold: float = 0.6,
-    vel_threshold: float = 0.1,
 ) -> torch.Tensor:
     """
     Terminate (done=True) when the robot is within `threshold` metres of the
@@ -39,10 +38,5 @@ def reached_target(
     diff = target_pos_w[:, :2] - robot_pos_w[:, :2]
     dist = torch.norm(diff, dim=-1)  # (N,)
 
-    robot: Articulation = env.scene[robot_cfg.name]
-    speed = torch.norm(robot.data.root_lin_vel_w[:, :2], dim=-1)  # (N,)
-
-    # print(f"Distance to target: {dist} m, ")
-    # print(f"Speed: {speed} m/s")
-    return (dist < threshold) & (speed < vel_threshold)  # (N,) bool
+    return dist < threshold  # (N,) bool
  

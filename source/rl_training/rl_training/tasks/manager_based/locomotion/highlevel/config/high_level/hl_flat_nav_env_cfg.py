@@ -103,16 +103,10 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
     )
 
     # 稀疏：成功到达桌边
-    reach_object_success = RewTerm(
+    reach_object = RewTerm(
         func=mdp.is_terminated_term,   # 配合 TerminationCfg 使用
         weight=10.0,
         params={"term_keys": "reach_object"},
-    )
-
-    reach_object_high_vel = RewTerm(
-        func=mdp.is_terminated_term,   # 配合 TerminationCfg 使用
-        weight=7.0,
-        params={"term_keys": "reach_object_high_vel"},
     )
 
     # 到达目标附近时，速度越小奖励越高，鼓励稳健停靠
@@ -123,11 +117,22 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
             "distance_threshold": 1.0,              # 与 approach_object 保持一致
-            "vel_max": 0.5,                          # 超过 0.5m/s 则惩罚
+            "vel_max": 0.3,                          # 超过 0.3m/s 则惩罚
             "penalty_scale": 1.0,                     # 超速惩罚强度
         },
     )
 
+    reach_quality = RewTerm(
+        func=mdp.reach_target_velocity_reward,
+        weight=10.0,           # 主要成功信号
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "target_cfg": SceneEntityCfg("object"),
+            "threshold": 0.7,
+            "vel_good": 0.1,   # 与原 vel_threshold 对齐
+            "vel_bad":  0.5,
+        },
+    )
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
         weight=-1.0,
@@ -146,19 +151,9 @@ class HLFlatNavTerminationsCfg(HighLevelTerminationsCfg):
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
             "threshold": 0.7,
-            "vel_threshold": 0.1,   # 只有在速度足够慢时才算成功到达
         },
     )
 
-    reach_object_high_vel = DoneTerm(
-        func=mdp.reached_target,   # 自定义，检查 dist < threshold
-        params={
-            "robot_cfg": SceneEntityCfg("robot"),
-            "target_cfg": SceneEntityCfg("object"),
-            "threshold": 0.7,
-            "vel_threshold": 0.5,   # 到达目标但速度过快，给予较小奖励但不算完全成功
-        },
-    )
 
 
     

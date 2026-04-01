@@ -224,6 +224,49 @@ def slow_down_near_target_reward(
 
     return combined * in_range
 
+def reach_target_velocity_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    target_cfg: SceneEntityCfg,
+    threshold: float = 0.7,
+    vel_good: float = 0.1,    # 低于此速度：满分
+    vel_bad: float = 0.5,     # 高于此速度：负分上限
+) -> torch.Tensor:
+    """
+    仅在到达目标的终止帧触发，根据速度给连续奖励：
+    
+    speed:   0         vel_good      vel_bad       +∞
+             |            |             |
+    reward:  +1.0  ----  +1.0  \  0.0  \ -1.0 ----  -1.0
+                               线性下降   线性下降（钳位）
+    
+    非终止帧返回 0，不干扰日常训练。
+    """
+    robot_pos_w  = robot_root_pos_w(env, robot_cfg)
+    target_pos_w = object_root_pos_w(env, target_cfg)
+
+    dist = torch.norm(
+        target_pos_w[:, :2] - robot_pos_w[:, :2], dim=-1
+    )  # (N,)
+
+    robot: Articulation = env.scene[robot_cfg.name]
+    speed = torch.norm(
+        robot.data.root_lin_vel_w[:, :2], dim=-1
+    )  # (N,)
+
+    # ── 连续速度评分 ──────────────────────────────────────────
+    # 段1: speed ∈ [0, vel_good]         → reward = 1.0
+    # 段2: speed ∈ [vel_good, vel_bad]   → reward 从 1.0 线性降到 -1.0
+    # 段3: speed ∈ [vel_bad, +∞)         → reward = -1.0（钳位）
+    t = (speed - vel_good) / (vel_bad - vel_good + 1e-6)  # 0→1
+    t = torch.clamp(t, 0.0, 1.0)
+    vel_score = 1.0 - 2.0 * t   # 1.0 → -1.0
+
+    # 仅在到达目标帧激活（用 reset_buf 或直接检查距离）
+    in_target = (dist < threshold).float()  # (N,)
+
+    return vel_score * in_target
+
 
 def undesired_contacts(env: ManagerBasedRLEnv, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     """Penalize undesired contacts as the number of violations that are above a threshold."""
@@ -352,6 +395,8 @@ def object_is_lifted(
 
     # 连续奖励：超过 minimal_height 才开始给分，线性增长后 clamp
     # 你也可以换成纯 bool：(lifted_height > minimal_height).float()
+    # if lifted_height.sum() > 1e-4:
+    #     print(f"Current height: {current_height}, Initial height: {initial_height}, Lifted height: {lifted_height}")
     reward = torch.clamp(
         (lifted_height - minimal_height) / minimal_height,
         min=0.0,
@@ -365,24 +410,24 @@ def cmd_pos_to_object_reward(
     action_term_name: str = "pre_trained_pick_action",
     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
     pos_sigma: float = 0.1,
+    use_shaped: bool = True,
 ) -> torch.Tensor:
-    """教师网络生成的EE命令位姿与目标物体质心位置的接近度奖励。
-
-    位置项：Gaussian kernel，命令位置与物体质心越近越高。
-
-    Returns:
-        shape (num_envs,) 的奖励张量，值域 (0, 1]
-    """
-    # ── 1. 获取命令位姿（world frame，process_actions末尾已转换）──────
     action_term = env.action_manager.get_term(action_term_name)
-    cmd_pos_w  = action_term.raw_actions[:, 3:6]   # (N, 3)  world frame
-
-    # ── 2. 获取目标物体质心位置（world frame）────────────────────────
+    cmd_pos_w = action_term.raw_actions[:, 3:6]
+    
     obj: RigidObject = env.scene[object_cfg.name]
-    obj_pos_w  = obj.data.root_pos_w   # (N, 3)
-
-    # ── 3. 位置奖励：Gaussian kernel ──────────────────────────────
-    pos_dist   = torch.norm(cmd_pos_w - obj_pos_w, dim=-1)          # (N,)
-    pos_reward = torch.exp(-pos_dist.pow(2) / (2 * pos_sigma ** 2)) # (N,)
-
-    return pos_reward 
+    obj_pos_w = obj.data.root_pos_w
+    
+    pos_dist = torch.norm(cmd_pos_w - obj_pos_w, dim=-1)  # (N,)
+    
+    if use_shaped:
+        # ✅ 方案A：线性 + Gaussian 混合
+        # 远处线性引导（始终有梯度），近处Gaussian精确奖励
+        linear_reward   = 1.0 / (1.0 + pos_dist)                               # 始终有信号
+        gaussian_reward = torch.exp(-pos_dist.pow(2) / (2 * pos_sigma ** 2))    # 近处精确
+        reward = 0.3 * linear_reward + 0.7 * gaussian_reward
+    else:
+        # 原始Gaussian（梯度消失，不推荐）
+        reward = torch.exp(-pos_dist.pow(2) / (2 * pos_sigma ** 2))
+    
+    return reward
