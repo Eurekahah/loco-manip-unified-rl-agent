@@ -59,7 +59,7 @@ class HighLevelNavFlatTeacherPPORunnerCfg(HighLevelRoughPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
 
-        self.max_iterations = 3000
+        self.max_iterations = 1000
         self.experiment_name = "high_level_nav_flat_teacher"
 
         self.obs_groups = {
