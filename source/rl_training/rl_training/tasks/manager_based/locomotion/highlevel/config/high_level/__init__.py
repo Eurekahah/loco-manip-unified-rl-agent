@@ -94,6 +94,6 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.hl_flat_pick_env_cfg:HLFlatPickEnvCfg", # 学生专用环境（带视觉）
-        "rsl_rl_cfg_entry_point": f"{__name__}.agents.rsl_rl_distillation_cfg:HighLevelPickFlatDistillationRunnerCfg",
+        "rsl_rl_distillation_cfg_entry_point": f"{__name__}.agents.rsl_rl_distillation_cfg:HighLevelPickFlatDistillationRunnerCfg",
     },
 )
