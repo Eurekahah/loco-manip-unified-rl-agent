@@ -674,9 +674,9 @@ class BodyPoseCommand(CommandTerm):
         # ------------------------------------------------------------------ #
         # 1. 命令本身的均值（描述当前采样分布的中心）
         # ------------------------------------------------------------------ #
-        self.metrics["height_mean"] = self._command[:, 0]
-        self.metrics["pitch_mean"]  = self._command[:, 1]
-        self.metrics["roll_mean"]   = self._command[:, 2]
+        self.metrics["height_abs_mean"] = self._command[:, 0].abs()
+        self.metrics["pitch_abs_mean"]  = self._command[:, 1].abs()
+        self.metrics["roll_abs_mean"]   = self._command[:, 2].abs()
         # ------------------------------------------------------------------ #
         # 2. 读取实际 body pose
         # ------------------------------------------------------------------ #

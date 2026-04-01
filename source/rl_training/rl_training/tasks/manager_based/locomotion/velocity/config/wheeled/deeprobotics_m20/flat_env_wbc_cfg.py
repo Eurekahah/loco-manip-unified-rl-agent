@@ -112,45 +112,95 @@ class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
         },
     )
 
-# 通用的覆盖函数，超过 num_steps 后直接替换为新值
-def override_value(env, env_ids, old_value, value, num_steps):
-    if env.common_step_counter > num_steps:
-        return value
-    return mdp.modify_term_cfg.NO_CHANGE
+TOTAL_STEPS = 5_000 * 24 * 4096   # ≈ 491_520_000
+
+# 四段切分点（按25%, 50%, 75%, 100%）
+S1 = int(TOTAL_STEPS * 0.25)   # ~122_880_000
+S2 = int(TOTAL_STEPS * 0.50)   # ~245_760_000
+S3 = int(TOTAL_STEPS * 0.75)   # ~368_640_000
+S4 = TOTAL_STEPS               # ~491_520_000
+
+# height std 四阶段：0.05 → 0.07 → 0.10 → 0.13 → 0.09*（range=0.27, 均匀≈range/√12≈0.078，取略大）
+# pitch std 四阶段：0.08 → 0.12 → 0.17 → 0.20 （range=0.70, 均匀≈0.202）
+# roll  std 四阶段：0.06 → 0.09 → 0.13 → 0.14 （range=0.50, 均匀≈0.144）
+
+def step_curriculum(env, env_ids, old_value, thresholds_values, num_steps=None):
+    """
+    thresholds_values: list of (threshold, value) 按从小到大排列
+    超过对应 threshold 就切换到对应 value，否则 NO_CHANGE
+    """
+    counter = env.common_step_counter
+    result = mdp.modify_term_cfg.NO_CHANGE
+    for threshold, value in thresholds_values:
+        if counter > threshold:
+            result = value
+    return result
 
 @configclass
 class WBCCurriculumCfg:
-    """全身控制（WBC）课程配置。"""
-    # 可选：定义课程相关的参数，例如难度递增的时间点、奖励权重调整等
+    """全身控制（WBC）课程配置 —— 四阶段 std 放大。"""
+
+    # ------------------------------------------------------------------ #
+    # height_std:  0.05 → 0.07 → 0.10 → 0.13
+    # range=(0.33, 0.60), span=0.27
+    # 均匀分布等效 std = 0.27/√12 ≈ 0.078  →  末段取 0.13 使尾部充分覆盖
+    # ------------------------------------------------------------------ #
     body_pose_height_std = CurrTerm(
         func=mdp.modify_term_cfg,
         params={
             "address": "commands.body_pose.height_std",
-            "modify_fn": override_value,
-            "modify_params": {"value": 0.10, "num_steps": 1_000*24*4096},
+            "modify_fn": step_curriculum,
+            "modify_params": {
+                "thresholds_values": [
+                    (S1, 0.07),
+                    (S2, 0.10),
+                    (S3, 0.13),
+                    # S4 段不再变化，保持 0.13
+                ],
+            },
         },
     )
 
-    # 逐步增大 pitch_std
+    # ------------------------------------------------------------------ #
+    # pitch_std:  0.08 → 0.12 → 0.17 → 0.20
+    # range=(-0.35, 0.35), span=0.70
+    # 均匀分布等效 std = 0.70/√12 ≈ 0.202  →  末段取 0.20 贴近均匀
+    # ------------------------------------------------------------------ #
     body_pose_pitch_std = CurrTerm(
         func=mdp.modify_term_cfg,
         params={
             "address": "commands.body_pose.pitch_std",
-            "modify_fn": override_value,
-            "modify_params": {"value": 0.15, "num_steps": 1_000*24*4096},
+            "modify_fn": step_curriculum,
+            "modify_params": {
+                "thresholds_values": [
+                    (S1, 0.12),
+                    (S2, 0.17),
+                    (S3, 0.20),
+                ],
+            },
         },
     )
 
-    # 逐步增大 roll_std
+    # ------------------------------------------------------------------ #
+    # roll_std:   0.06 → 0.09 → 0.12 → 0.14
+    # range=(-0.25, 0.25), span=0.50
+    # 均匀分布等效 std = 0.50/√12 ≈ 0.144  →  末段取 0.14 贴近均匀
+    # ------------------------------------------------------------------ #
     body_pose_roll_std = CurrTerm(
         func=mdp.modify_term_cfg,
         params={
             "address": "commands.body_pose.roll_std",
-            "modify_fn": override_value,
-            "modify_params": {"value": 0.12, "num_steps": 1_000*24*4096},
+            "modify_fn": step_curriculum,
+            "modify_params": {
+                "thresholds_values": [
+                    (S1, 0.09),
+                    (S2, 0.12),
+                    (S3, 0.14),
+                ],
+            },
         },
     )
-
+    
 @configclass
 class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
     commands: WBCCommandsCfg = WBCCommandsCfg()
