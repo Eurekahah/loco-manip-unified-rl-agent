@@ -116,7 +116,7 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
-            "distance_threshold": 1.2,              # 与 approach_object 保持一致
+            "distance_threshold": 1.0,              # 与 approach_object 保持一致
             "vel_max": 0.3,                          # 超过 0.3m/s 则惩罚
             "penalty_scale": 1.0,                     # 超速惩罚强度
         },
