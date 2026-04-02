@@ -91,7 +91,7 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
     # 核心：越靠近目标得分越高（以距离倒数或负距离）
     approach_object = RewTerm(
         func=mdp.distance_to_target_reward,   
-        weight=2.0,
+        weight=1.5,
         params={"robot_cfg": SceneEntityCfg("robot"),"target_cfg": SceneEntityCfg("object")},
     )
 
@@ -105,7 +105,7 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
     # 稀疏：成功到达桌边
     reach_object = RewTerm(
         func=mdp.is_terminated_term,   # 配合 TerminationCfg 使用
-        weight=5.0,
+        weight=150.0,
         params={"term_keys": "reach_object"},
     )
 
