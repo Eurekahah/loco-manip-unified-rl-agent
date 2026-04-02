@@ -102,11 +102,11 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
         params={"robot_cfg": SceneEntityCfg("robot"), "target_cfg": SceneEntityCfg("object")},
     )
 
-    lateral_penalty = RewTerm(
-        func=mdp.lateral_velocity_penalty,
-        weight=-1.0,
-        params={"robot_cfg": SceneEntityCfg("robot")},
-    )
+    # lateral_penalty = RewTerm(
+    #     func=mdp.lateral_velocity_penalty,
+    #     weight=-1.0,
+    #     params={"robot_cfg": SceneEntityCfg("robot")},
+    # )
 
     # 稀疏：成功到达桌边
     reach_object = RewTerm(
@@ -135,7 +135,7 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
             "threshold": 0.7,
-            "vel_good": 0.1,   # 与原 vel_threshold 对齐
+            "vel_good": 0.25,   
             "vel_bad":  0.5,
         },
     )
