@@ -112,7 +112,7 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
     # 到达目标附近时，速度越小奖励越高，鼓励稳健停靠
     slow_near_target = RewTerm(
         func=mdp.slow_down_near_target_reward,
-        weight=1.0,                                  # 适当权重，不要盖过 approach
+        weight=0.2,                                  # 适当权重，不要盖过 approach
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
