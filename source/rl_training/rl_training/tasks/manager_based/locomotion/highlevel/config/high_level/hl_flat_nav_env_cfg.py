@@ -110,29 +110,29 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
     )
 
     # 到达目标附近时，速度越小奖励越高，鼓励稳健停靠
-    slow_near_target = RewTerm(
-        func=mdp.slow_down_near_target_reward,
-        weight=0.2,                                  # 适当权重，不要盖过 approach
-        params={
-            "robot_cfg": SceneEntityCfg("robot"),
-            "target_cfg": SceneEntityCfg("object"),
-            "distance_threshold": 1.0,              # 与 approach_object 保持一致
-            "vel_max": 0.3,                          # 超过 0.3m/s 则惩罚
-            "penalty_scale": 1.0,                     # 超速惩罚强度
-        },
-    )
-
-    # reach_quality = RewTerm(
-    #     func=mdp.reach_target_velocity_reward,
-    #     weight=5.0,           # 主要成功信号
+    # slow_near_target = RewTerm(
+    #     func=mdp.slow_down_near_target_reward,
+    #     weight=0.2,                                  # 适当权重，不要盖过 approach
     #     params={
     #         "robot_cfg": SceneEntityCfg("robot"),
     #         "target_cfg": SceneEntityCfg("object"),
-    #         "threshold": 0.7,
-    #         "vel_good": 0.1,   # 与原 vel_threshold 对齐
-    #         "vel_bad":  0.5,
+    #         "distance_threshold": 1.0,              # 与 approach_object 保持一致
+    #         "vel_max": 0.3,                          # 超过 0.3m/s 则惩罚
+    #         "penalty_scale": 1.0,                     # 超速惩罚强度
     #     },
     # )
+
+    reach_quality = RewTerm(
+        func=mdp.reach_target_velocity_reward,
+        weight=5.0,           # 主要成功信号
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "target_cfg": SceneEntityCfg("object"),
+            "threshold": 0.7,
+            "vel_good": 0.1,   # 与原 vel_threshold 对齐
+            "vel_bad":  0.5,
+        },
+    )
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
         weight=-1.0,
