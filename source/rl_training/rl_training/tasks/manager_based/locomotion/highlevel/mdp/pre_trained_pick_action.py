@@ -187,7 +187,7 @@ class PreTrainedPickAction(ActionTerm):
         # self._raw_actions[:, 7].clamp_(r.ee_quat_x[0],  r.ee_quat_x[1])
         # self._raw_actions[:, 8].clamp_(r.ee_quat_y[0],  r.ee_quat_y[1])
         # self._raw_actions[:, 9].clamp_(r.ee_quat_z[0],  r.ee_quat_z[1])
-
+        # print("Raw EE pos commands after clipping: ", self._raw_actions[:, 3:6])
         # 四元数：不做 clamp，直接归一化
         quat = self._raw_actions[:, 6:10]
         self._raw_actions[:, 6:10] = torch.nn.functional.normalize(quat, p=2, dim=-1)
@@ -200,6 +200,7 @@ class PreTrainedPickAction(ActionTerm):
             root_pos_w, root_quat_w, target_pos_b, target_quat_b 
         )
         self._raw_actions[:, 3:6] = target_pos_w
+        # print("Target EE pos commands in world frame: ", self._raw_actions[:, 3:6])
         self._raw_actions[:, 6:10] = target_quat_w
 
     def apply_actions(self):
@@ -360,7 +361,7 @@ class PreTrainedPickActionCfg(ActionTermCfg):
         # ee_pose ranges，对应 CommandsCfg.ee_pose 的 command 输出空间
         # command 输出是世界坐标系下的 [x, y, z, qw, qx, qy, qz]
         # 四元数各分量天然在 [-1, 1]，位置范围根据实际场景设置
-        ee_pos_x: tuple[float, float] = (0.0, 1.0)
+        ee_pos_x: tuple[float, float] = (0.2, 0.8)
         ee_pos_y: tuple[float, float] = (-0.3, 0.3)
         ee_pos_z: tuple[float, float] = (0.3, 0.65)
         ee_quat_w: tuple[float, float] = (-1.0, 1.0)

@@ -115,7 +115,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 整体接近：机器人基座靠近物体
     approach_object = RewTerm(
         func=mdp.distance_to_target_reward,
-        weight=0.25,                          # 略降权重，让位给 EE 精确接近
+        weight=0.025,                          # 略降权重，让位给 EE 精确接近
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
@@ -125,7 +125,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 底盘朝向物体
     heading_to_object = RewTerm(
         func=mdp.heading_to_target_reward,
-        weight=0.25,
+        weight=0.025,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
@@ -135,7 +135,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 靠近后减速，稳定底盘（沿用原逻辑）
     slow_near_target = RewTerm(
         func=mdp.slow_down_near_target_reward,
-        weight=0.5,
+        weight=0.025,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
@@ -149,13 +149,14 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 阶段二：末端执行器精确接近物体
     # =========================================================
 
-    cmd_pose_to_object = RewTerm(
+    cmd_pos_to_object = RewTerm(
         func=mdp.cmd_pos_to_object_reward,
         weight=1.5,
         params={
             "action_term_name": "pre_trained_pick_action",
             "object_cfg":       SceneEntityCfg("object"),
-            "pos_sigma":        0.1,   # 单位：米，10cm内奖励显著上升
+            "pos_sigma":        0.2,   # 单位：米，20cm内奖励显著上升
+            "use_shaped":       True,
         },
     )
 
@@ -230,7 +231,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         func=mdp.object_is_lifted,
         weight=10.0,                         # 最高权重，作为最终目标信号
         params={
-            "minimal_height": 0.04,          # 离桌面 4cm 算抬起
+            "minimal_height": 0.10,          # 离桌面 10cm 算抬起
             "object_cfg": SceneEntityCfg("object"),
         },
     )
@@ -265,13 +266,13 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     )
 
     # 关节速度惩罚：防止手臂抖动、过激运动
-    joint_vel_penalty = RewTerm(
-        func=mdp.joint_vel_l2,
-        weight=-0.005,
-        params={
-            "asset_cfg": SceneEntityCfg("robot"),
-        },
-    )
+    # joint_vel_penalty = RewTerm(
+    #     func=mdp.joint_vel_l2,
+    #     weight=-0.005,
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot"),
+    #     },
+    # )
 
 
 
