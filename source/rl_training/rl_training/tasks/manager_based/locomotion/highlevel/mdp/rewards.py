@@ -71,6 +71,24 @@ def distance_to_target_reward(
     reward = torch.exp(-dist**2 / (2.0 * std**2))     # (N,)  ∈ (0, 1]
     return reward
 
+# def distance_to_target_reward(env, robot_cfg, target_cfg, std=1.0):
+#     robot_pos_w  = robot_root_pos_w(env, robot_cfg)
+#     target_pos_w = object_root_pos_w(env, target_cfg)
+#     diff = target_pos_w[:, :2] - robot_pos_w[:, :2]
+#     dist = torch.norm(diff, dim=-1)
+    
+#     # 用 1/(1+dist) 代替 Gaussian
+#     # 0.9m → 0.526,  0.7m → 0.588,  0.0m → 1.0
+#     # 越近梯度越大，越有动力冲进去
+#     reward = 1.0 / (1.0 + dist)
+#     return reward
+
+def lateral_velocity_penalty(env, robot_cfg):
+    # 惩罚 v_y 分量
+    
+    robot: Articulation = env.scene[robot_cfg.name]
+    lin_vel_y = robot.data.root_lin_vel_w[:, 1]
+    return torch.abs(lin_vel_y)  # v_y 绝对值
 
 def distance_to_target_potential(
     env: ManagerBasedRLEnv,
@@ -221,6 +239,7 @@ def slow_down_near_target_reward(
 
     # 叠加：合规时 penalty=0，超速时 reward=0
     combined = reward + penalty                     # 两段函数自然拼接
+    print(f"Distance: {dist}, Speed: {speed}, Reward: {reward}, Penalty: {penalty}, Combined: {combined}")
 
     return combined * in_range
 
