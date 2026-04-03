@@ -128,17 +128,17 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
     #     },
     # )
 
-    reach_quality = RewTerm(
-        func=mdp.reach_target_velocity_reward,
-        weight=5.0,           # 主要成功信号
-        params={
-            "robot_cfg": SceneEntityCfg("robot"),
-            "target_cfg": SceneEntityCfg("object"),
-            "threshold": 0.7,
-            "vel_good": 0.25,   
-            "vel_bad":  0.5,
-        },
-    )
+    # reach_quality = RewTerm(
+    #     func=mdp.reach_target_velocity_reward,
+    #     weight=5.0,           # 主要成功信号
+    #     params={
+    #         "robot_cfg": SceneEntityCfg("robot"),
+    #         "target_cfg": SceneEntityCfg("object"),
+    #         "threshold": 0.7,
+    #         "vel_good": 0.25,   
+    #         "vel_bad":  0.5,
+    #     },
+    # )
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
         weight=-1.0,
