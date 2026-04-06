@@ -168,21 +168,27 @@ class PreTrainedPickAction(ActionTerm):
     """
     Operations.
     """
+    def tanh_scale(self, x, lo, hi):
+        # 将无界输入映射到 [lo, hi]，全程可微
+        return lo + (hi - lo) * (torch.tanh(x) * 0.5 + 0.5)
 
     def process_actions(self, actions: torch.Tensor):
         self._raw_actions[:] = actions
 
         r = self.cfg.low_level_command_ranges
 
-        # clip base_velocity commands
-        self._raw_actions[:, 0].clamp_(r.lin_vel_x[0], r.lin_vel_x[1])
-        self._raw_actions[:, 1].clamp_(r.lin_vel_y[0], r.lin_vel_y[1])
-        self._raw_actions[:, 2].clamp_(r.ang_vel_z[0], r.ang_vel_z[1])
+        # 底盘速度
+        self._raw_actions[:, 0] = self.tanh_scale(actions[:, 0], r.lin_vel_x[0], r.lin_vel_x[1])
+        self._raw_actions[:, 1] = self.tanh_scale(actions[:, 1], r.lin_vel_y[0], r.lin_vel_y[1])
+        self._raw_actions[:, 2] = self.tanh_scale(actions[:, 2], r.ang_vel_z[0], r.ang_vel_z[1])
 
         # clip ee_pose commands
-        self._raw_actions[:, 3].clamp_(r.ee_pos_x[0],   r.ee_pos_x[1])
-        self._raw_actions[:, 4].clamp_(r.ee_pos_y[0],   r.ee_pos_y[1])
-        self._raw_actions[:, 5].clamp_(r.ee_pos_z[0],   r.ee_pos_z[1])
+        # print(f"Raw EE pos commands before clipping(root): {self._raw_actions[:, 3:6]}")
+        self._raw_actions[:, 3] = self.tanh_scale(actions[:, 3], r.ee_pos_x[0], r.ee_pos_x[1])
+        self._raw_actions[:, 4] = self.tanh_scale(actions[:, 4], r.ee_pos_y[0], r.ee_pos_y[1])
+        self._raw_actions[:, 5] = self.tanh_scale(actions[:, 5], r.ee_pos_z[0], r.ee_pos_z[1])
+
+        # print(f"Raw EE pos commands after clipping(root): {self._raw_actions[:, 3:6]}")
         # self._raw_actions[:, 6].clamp_(r.ee_quat_w[0],  r.ee_quat_w[1])
         # self._raw_actions[:, 7].clamp_(r.ee_quat_x[0],  r.ee_quat_x[1])
         # self._raw_actions[:, 8].clamp_(r.ee_quat_y[0],  r.ee_quat_y[1])
@@ -200,7 +206,7 @@ class PreTrainedPickAction(ActionTerm):
             root_pos_w, root_quat_w, target_pos_b, target_quat_b 
         )
         self._raw_actions[:, 3:6] = target_pos_w
-        # print("Target EE pos commands in world frame: ", self._raw_actions[:, 3:6])
+        # print("Target EE pos commands(world): ", self._raw_actions[:, 3:6])
         self._raw_actions[:, 6:10] = target_quat_w
 
     def apply_actions(self):
@@ -356,14 +362,14 @@ class PreTrainedPickActionCfg(ActionTermCfg):
     class LowLevelCommandRanges:
         # base_velocity ranges，对应 CommandsCfg.base_velocity.ranges
         lin_vel_x: tuple[float, float] = (-0.2, 0.2)
-        lin_vel_y: tuple[float, float] = (0.0, 0.0)
+        lin_vel_y: tuple[float, float] = (-0.01, 0.01)
         ang_vel_z: tuple[float, float] = (-1.0, 1.0)
         # ee_pose ranges，对应 CommandsCfg.ee_pose 的 command 输出空间
         # command 输出是世界坐标系下的 [x, y, z, qw, qx, qy, qz]
         # 四元数各分量天然在 [-1, 1]，位置范围根据实际场景设置
-        ee_pos_x: tuple[float, float] = (0.2, 0.8)
-        ee_pos_y: tuple[float, float] = (-0.3, 0.3)
-        ee_pos_z: tuple[float, float] = (0.3, 0.65)
+        ee_pos_x: tuple[float, float] = (0.7, 0.9)
+        ee_pos_y: tuple[float, float] = (-0.1, 0.1)
+        ee_pos_z: tuple[float, float] = (-0.1, 0.2)
         ee_quat_w: tuple[float, float] = (-1.0, 1.0)
         ee_quat_x: tuple[float, float] = (-1.0, 1.0)
         ee_quat_y: tuple[float, float] = (-1.0, 1.0)

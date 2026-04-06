@@ -203,7 +203,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         weight=1.5,
         params={
             "sensor_cfg": SceneEntityCfg(
-                "arm_contact_forces",
+                "arm_link7_contact_forces",
                 body_names="arm_link7",
             ),
             "threshold": 0.5,               # 最小接触力阈值（N），低于此不奖励
@@ -215,7 +215,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         weight=1.5,
         params={
             "sensor_cfg": SceneEntityCfg(
-                "arm_contact_forces",
+                "arm_link8_contact_forces",
                 body_names="arm_link8",
             ),
             "threshold": 0.5,

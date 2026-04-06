@@ -437,7 +437,10 @@ def cmd_pos_to_object_reward(
     obj_pos_w = obj.data.root_pos_w
     
     pos_dist = torch.norm(cmd_pos_w - obj_pos_w, dim=-1)  # (N,)
-    
+
+    # print(f"Command position(world): {cmd_pos_w}")
+    # print(f"Object position(world): {obj_pos_w}")
+
     if use_shaped:
         # ✅ 方案A：线性 + Gaussian 混合
         # 远处线性引导（始终有梯度），近处Gaussian精确奖励

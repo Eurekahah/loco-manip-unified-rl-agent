@@ -109,6 +109,8 @@ def object_position_in_robot_root_frame(
     else:
         rel_pos_b = quat_apply_inverse(robot_quat_w, rel_pos_w)
 
+    # print(f"Relative position(root): {rel_pos_b}")
+
     return rel_pos_b  # (N, 3)
 
 

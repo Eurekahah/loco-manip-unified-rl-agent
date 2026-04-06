@@ -126,12 +126,22 @@ class HighLevelSceneCfg(MySceneCfg):
             convention="ros",
         ),
     )
-    arm_contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/piper_camera/.*", 
+    arm_link7_contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/piper_camera/arm_link7", 
         history_length=3, 
         track_air_time=True,
-        filter_prim_paths_expr=["{ENV_REGEX_NS}/Object",
-                                "{ENV_REGEX_NS}/Object/.*",],
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Object",],
+    )
+    arm_link8_contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/piper_camera/arm_link8", 
+        history_length=3, 
+        track_air_time=True,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Object",],
+    )
+    arm_contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/piper_camera/.*",  # 负向前瞻正则，匹配除了arm_link7和arm_link8以外的所有链接
+        history_length=3, 
+        track_air_time=True,
     )
 
 
