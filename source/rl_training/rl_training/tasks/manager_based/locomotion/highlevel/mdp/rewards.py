@@ -349,8 +349,8 @@ def gripper_object_contact(
     is_contact = max_force > threshold
     reward = is_contact.float()
 
-    if reward.sum() > 0:
-        print(f"[{target_body_name}] object contact max force: {max_force[is_contact]}")
+    # if reward.sum() > 0:
+    #     print(f"[{target_body_name}] object contact max force: {max_force[is_contact]}")
 
     return reward
 
