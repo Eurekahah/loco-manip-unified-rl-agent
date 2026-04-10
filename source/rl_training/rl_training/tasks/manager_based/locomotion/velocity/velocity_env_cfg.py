@@ -303,8 +303,9 @@ class ObservationsCfg:
         #     # 不设置 clip，四元数本身有界
         # )
         ee_goal = ObsTerm(
-            func=mdp.ee_goal_local,        params={"command_name": "ee_pose"},
-            noise=Unoise(n_min=-0.05, n_max=0.05),  clip=(-3.0, 3.0), scale=1.0,
+            func=mdp.ee_goal_local,        
+            params={"command_name": "ee_pose"},
+            clip=(-3.0, 3.0), scale=1.0,
         )
 
         def __post_init__(self):

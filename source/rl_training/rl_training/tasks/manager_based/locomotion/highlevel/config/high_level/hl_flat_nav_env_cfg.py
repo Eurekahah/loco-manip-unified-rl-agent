@@ -115,6 +115,18 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
         params={"term_keys": "reach_object"},
     )
 
+    lateral_velocity_penalty = RewTerm(
+        func=mdp.lateral_velocity_penalty,
+        weight=-0.5,
+        params={"action_name": "pre_trained_nav_action"},
+    )
+
+    angular_velocity_penalty = RewTerm(
+        func=mdp.angular_velocity_penalty,
+        weight=-0.2,
+        params={"action_name": "pre_trained_nav_action"},
+    )
+
     # 到达目标附近时，速度越小奖励越高，鼓励稳健停靠
     # slow_near_target = RewTerm(
     #     func=mdp.slow_down_near_target_reward,
@@ -130,7 +142,7 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
 
     # reach_quality = RewTerm(
     #     func=mdp.reach_target_velocity_reward,
-    #     weight=5.0,           # 主要成功信号
+    #     weight=50.0,           # 主要成功信号
     #     params={
     #         "robot_cfg": SceneEntityCfg("robot"),
     #         "target_cfg": SceneEntityCfg("object"),

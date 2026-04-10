@@ -25,7 +25,7 @@ class HighLevelNavFlatDistillationRunnerCfg(RslRlDistillationRunnerCfg):
     policy = RslRlDistillationStudentTeacherCfg(
         class_name="StudentTeacher",
         init_noise_std          = 0.5,
-        student_hidden_dims     = [512, 256, 128],
+        student_hidden_dims     = [1024, 512, 256],
         teacher_hidden_dims     = [512, 256, 128],  # 需与教师训练时一致
         activation              = "elu",
         student_obs_normalization = False,
