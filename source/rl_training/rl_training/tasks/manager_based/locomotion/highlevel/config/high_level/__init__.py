@@ -97,3 +97,14 @@ gym.register(
         "rsl_rl_distillation_cfg_entry_point": f"{__name__}.agents.rsl_rl_distillation_cfg:HighLevelPickFlatDistillationRunnerCfg",
     },
 )
+
+
+gym.register(
+    id="Isaac-Deeprobotics-High-Level-Pick-Flat-Teacher-With-Camera-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.hl_flat_pick_env_cfg:HLFlatPickTeacherWithCameraEnvCfg", # 教师专用环境
+        "rsl_rl_cfg_entry_point": f"{__name__}.agents.rsl_rl_ppo_cfg:HighLevelPickFlatTeacherWithCameraPPORunnerCfg",
+    },
+)

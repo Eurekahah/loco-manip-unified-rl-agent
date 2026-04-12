@@ -7,6 +7,7 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
+from isaaclab.sensors import TiledCameraCfg
 
 from rl_training.tasks.manager_based.locomotion.highlevel.mdp.encoder import make_cnn_model_zoo_cfg
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
@@ -19,7 +20,9 @@ from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg imp
 from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import CommandsCfg as HighLevelCommandsCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import RewardsCfg as HighLevelRewardsCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import EventCfg as HighLevelEventCfg
+from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import HighLevelSceneCfg
 from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.flat_env_cfg import DeeproboticsM20FlatEnvCfg as LOW_LEVEL_ENV_CFG
+import isaaclab.sim as sim_utils
 
 from rl_training.tasks.manager_based.locomotion.velocity.mdp.commands import HeightInvariantEECommandCfg
 
@@ -35,12 +38,13 @@ class HLFlatPickActionsCfg(HighLevelActionsCfg):
         low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,
         low_level_ee_actions=_low_level_env_cfg.actions.ee_ik,
         low_level_observations=_low_level_env_cfg.observations.policy,
+        debug_vis=False,
     )
 
     gripper_action = mdp.BinaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=["arm_joint7", "arm_joint8"],
-        open_command_expr={"arm_joint7": 0.04, "arm_joint8": 0.04},
+        open_command_expr={"arm_joint7": 0.04, "arm_joint8": -0.04},
         close_command_expr={"arm_joint7": 0.0, "arm_joint8": 0.0},
     )
 
@@ -99,6 +103,72 @@ class HLFlatPickTeacherObservationsCfg(HighLevelObservationsCfg):
     teacher: TeacherCfg = TeacherCfg()
 
 @configclass
+class HLFlatPickTeacherWithCameraObservationsCfg(HighLevelObservationsCfg):
+    @configclass
+    class CameraTeacherCfg(TeacherCfg):
+        arm_camera_embedding = ObsTerm(
+            func=mdp.image_features,
+            params={
+                "sensor_cfg":    SceneEntityCfg("arm_camera"),
+                "data_type":     "rgb",
+                "model_zoo_cfg": None,
+                "model_name":    "resnet18",
+            },
+        )
+        side_camera_embedding = ObsTerm(
+            func=mdp.image_features,
+            params={
+                "sensor_cfg":    SceneEntityCfg("side_camera"),
+                "data_type":     "rgb",
+                "model_zoo_cfg": None,
+                "model_name":    "resnet18",
+            },
+        )
+        target_object_rel_pos = ObsTerm(
+            func=mdp.object_position_in_robot_root_frame,
+            params={
+                "object_cfg": SceneEntityCfg("object"),
+                "robot_cfg":  SceneEntityCfg("robot"),
+            },
+        )
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+    @configclass
+    class CameraCriticCfg(CriticCfg):
+        arm_camera_embedding = ObsTerm(
+            func=mdp.image_features,
+            params={
+                "sensor_cfg":    SceneEntityCfg("arm_camera"),
+                "data_type":     "rgb",
+                "model_zoo_cfg": None,
+                "model_name":    "resnet18",
+            },
+        )
+        side_camera_embedding = ObsTerm(
+            func=mdp.image_features,
+            params={
+                "sensor_cfg":    SceneEntityCfg("side_camera"),
+                "data_type":     "rgb",
+                "model_zoo_cfg": None,
+                "model_name":    "resnet18",
+            },
+        )
+        target_object_rel_pos = ObsTerm(
+            func=mdp.object_position_in_robot_root_frame,
+            params={
+                "object_cfg": SceneEntityCfg("object"),
+                "robot_cfg":  SceneEntityCfg("robot"),
+            },
+        )
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+    critic: CameraCriticCfg = CameraCriticCfg()
+    teacher: CameraTeacherCfg = CameraTeacherCfg()
+
+
+@configclass
 class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     """
     抓取任务奖励配置
@@ -115,7 +185,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 整体接近：机器人基座靠近物体
     approach_object = RewTerm(
         func=mdp.distance_to_target_reward,
-        weight=0.025,                          # 略降权重，让位给 EE 精确接近
+        weight=0.01,                          # 略降权重，让位给 EE 精确接近
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
@@ -125,7 +195,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 底盘朝向物体
     heading_to_object = RewTerm(
         func=mdp.heading_to_target_reward,
-        weight=0.025,
+        weight=0.2,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
@@ -135,7 +205,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 靠近后减速，稳定底盘（沿用原逻辑）
     slow_near_target = RewTerm(
         func=mdp.slow_down_near_target_reward,
-        weight=0.025,
+        weight=0.01,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
@@ -151,7 +221,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     cmd_pos_to_object = RewTerm(
         func=mdp.cmd_pos_to_object_reward,
-        weight=1.5,
+        weight=4.0,
         params={
             "action_term_name": "pre_trained_pick_action",
             "object_cfg":       SceneEntityCfg("object"),
@@ -177,48 +247,92 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     # 夹爪朝向对准：arm_link7/8 两指到物体的距离之和最小化
     # 鼓励物体处于两指正中间（对称抓取）
-    gripper_alignment = RewTerm(
-        func=mdp.object_ee_distance,
-        weight=2.0,
-        params={
-            "std": 0.05,                     # 更小的核，要求更精确的对准
-            "object_cfg": SceneEntityCfg("object"),
-            "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link7"),
-        },
-    )
+    # gripper_alignment = RewTerm(
+    #     func=mdp.object_ee_distance,
+    #     weight=2.0,
+    #     params={
+    #         "std": 0.05,                     # 更小的核，要求更精确的对准
+    #         "object_cfg": SceneEntityCfg("object"),
+    #         "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link7"),
+    #     },
+    # )
 
-    gripper_alignment_finger2 = RewTerm(
-        func=mdp.object_ee_distance,
-        weight=2.0,
+    # gripper_alignment_finger2 = RewTerm(
+    #     func=mdp.object_ee_distance,
+    #     weight=2.0,
+    #     params={
+    #         "std": 0.05,
+    #         "object_cfg": SceneEntityCfg("object"),
+    #         "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link8"),
+    #     },
+    # )
+    # 删除原来的 gripper_alignment 和 gripper_alignment_finger2
+    # 替换为：
+    gripper_alignment_symmetric = RewTerm(
+        func=mdp.object_ee_symmetric_alignment,
+        weight=20.0,
         params={
             "std": 0.05,
+            "min_finger_dist": 0.04,   # 新增，根据夹爪实际尺寸设置
+                                    # 物体直径约多少就设多少，例如物体直径4cm
             "object_cfg": SceneEntityCfg("object"),
-            "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link8"),
+            "ee_frame_cfg_finger1": SceneEntityCfg("robot", body_names="arm_link7"),
+            "ee_frame_cfg_finger2": SceneEntityCfg("robot", body_names="arm_link8"),
         },
     )
 
     # 夹爪接触物体奖励：两指均应有接触力
-    grasp_contact_finger1 = RewTerm(
-        func=mdp.gripper_object_contact,         # 正权重 → 鼓励夹爪接触
-        weight=1.5,
-        params={
-            "sensor_cfg": SceneEntityCfg(
-                "arm_link7_contact_forces",
-                body_names="arm_link7",
-            ),
-            "threshold": 0.5,               # 最小接触力阈值（N），低于此不奖励
-        },
-    )
+    # grasp_contact_finger1 = RewTerm(
+    #     func=mdp.gripper_object_contact,         # 正权重 → 鼓励夹爪接触
+    #     weight=1.5,
+    #     params={
+    #         "sensor_cfg": SceneEntityCfg(
+    #             "arm_link7_contact_forces",
+    #             body_names="arm_link7",
+    #         ),
+    #         "threshold": 0.5,               # 最小接触力阈值（N），低于此不奖励
+    #     },
+    # )
 
-    grasp_contact_finger2 = RewTerm(
-        func=mdp.gripper_object_contact,         # 正权重 → 鼓励夹爪接触
-        weight=1.5,
+    # grasp_contact_finger2 = RewTerm(
+    #     func=mdp.gripper_object_contact,         # 正权重 → 鼓励夹爪接触
+    #     weight=1.5,
+    #     params={
+    #         "sensor_cfg": SceneEntityCfg(
+    #             "arm_link8_contact_forces",
+    #             body_names="arm_link8",
+    #         ),
+    #         "threshold": 0.5,
+    #     },
+    # )
+
+    # 只有双指同时接触才给奖励
+    # grasp_contact_both = RewTerm(
+    #     func=mdp.gripper_both_fingers_contact,  
+    #     weight=10.0,
+    #     params={
+    #         "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
+    #         "sensor_cfg_finger2": SceneEntityCfg("arm_link8_contact_forces", body_names="arm_link8"),
+    #         "threshold": 0.5,
+    #     },
+    # )
+    # # 惩罚不对称的接触，鼓励物体位于两指中间
+    # grasp_contact_symmetry = RewTerm(
+    #     func=mdp.gripper_contact_symmetry,   
+    #     weight=-5.0,                          # 惩罚不对称
+    #     params={
+    #         "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
+    #         "sensor_cfg_finger2": SceneEntityCfg("arm_link8_contact_forces", body_names="arm_link8"),
+    #     },
+    # )
+
+    grasp_contact_symmetric = RewTerm(
+        func=mdp.gripper_contact_symmetric_grasp,
+        weight=500.0,  
         params={
-            "sensor_cfg": SceneEntityCfg(
-                "arm_link8_contact_forces",
-                body_names="arm_link8",
-            ),
             "threshold": 0.5,
+            "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
+            "sensor_cfg_finger2": SceneEntityCfg("arm_link8_contact_forces", body_names="arm_link8"),
         },
     )
 
@@ -229,27 +343,33 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 稀疏成功奖励：物体高度超过阈值即触发
     lift_object = RewTerm(
         func=mdp.object_is_lifted,
-        weight=10.0,                         # 最高权重，作为最终目标信号
+        weight=2000.0,                         # 最高权重，作为最终目标信号
         params={
-            "minimal_height": 0.10,          # 离桌面 10cm 算抬起
+            "minimal_height": 0.04,          # 离桌面 4cm 算抬起
             "object_cfg": SceneEntityCfg("object"),
         },
     )
 
     # 抬起后 EE 与物体高度保持同步（防止松手后继续乱动）
-    ee_object_height_sync = RewTerm(
-        func=mdp.object_ee_distance,
-        weight=1.5,
-        params={
-            "std": 0.08,
-            "object_cfg": SceneEntityCfg("object"),
-            "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
-        },
-    )
+    # ee_object_height_sync = RewTerm(
+    #     func=mdp.object_ee_distance,
+    #     weight=1.0,
+    #     params={
+    #         "std": 0.08,
+    #         "object_cfg": SceneEntityCfg("object"),
+    #         "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
+    #     },
+    # )
 
     # =========================================================
     # 全程惩罚项
     # =========================================================
+
+    # gripper_stage_reward = RewTerm(
+    #     func=mdp.gripper_state_stage_reward,
+    #     weight=1.0,
+    #     params={"approach_dist": 0.15, "grasp_dist": 0.135}
+    # )
 
     # 手臂主体非预期碰撞（排除夹爪，夹爪需要接触物体）
     undesired_contacts = RewTerm(
@@ -278,8 +398,13 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
 @configclass
 class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
-    
-    pass
+    object_dropped = DoneTerm(
+        func=mdp.object_dropped,
+        params={
+            "object_cfg": SceneEntityCfg("object"),
+            "height_threshold": 0.5,  # 物体世界位姿高度小于0.5m算掉落
+        },  
+    )
 
 @configclass
 class HLFlatPickCommandCfg(HighLevelCommandsCfg):
@@ -287,7 +412,7 @@ class HLFlatPickCommandCfg(HighLevelCommandsCfg):
         asset_name="robot",
         body_name="arm_link6",
         resampling_time_range=(5.0, 5.0),
-        debug_vis=True,
+        debug_vis=False,
         sampled_height=0.6,  # 采样坐标系的固定高度
         arm_base_link_name="arm_base",  # 采样坐标系xy位置
         ranges=HeightInvariantEECommandCfg.Ranges(
@@ -323,6 +448,38 @@ class HLFlatPickEventCfg(HighLevelEventCfg):
         },
     )
 
+    reset_arm_default = EventTerm(
+        func=mdp.reset_joints_by_scale,
+        mode="reset",
+        params={
+            "position_range": (1.0, 1.0), # 1.0 表示缩放到默认关节位置的 100%
+            "velocity_range": (0.0, 0.0), # 速度重置为 0
+        },
+    ) 
+
+@configclass
+class HLFlatSideCameraSceneCfg(HighLevelSceneCfg):
+    side_camera = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/side_camera",
+        update_period=0.1,                      # 10 Hz
+        height=224,
+        width=224,
+        data_types=["rgb"],
+        debug_vis=False,
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0,               # 焦距
+            focus_distance=400.0,            # 对焦距离
+            f_stop=0.0,                      # 光圈值，0.0表示为理想针孔模型
+            horizontal_aperture=20.955,      # 水平视场，单位为度，根据焦距和传感器尺寸计算得出
+            clipping_range=(0.1, 10.0),      # 近裁剪面和远裁剪面，单位为米
+        ),
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=(2.0, 0.0, 2.0),              # 相机位于桌面正上方
+            rot=(0.0, 1.0, 0.0, 0.0),         # 四元数(w,x,y,z)
+            convention="ros",
+        ),
+    )
+
 @configclass
 class HLFlatPickEnvCfg(HighLevelFlatEnvCfg):
     actions: HLFlatPickActionsCfg = HLFlatPickActionsCfg()
@@ -355,4 +512,16 @@ class HLFlatPickTeacherEnvCfg(HLFlatPickEnvCfg):
         self.scene.arm_camera = None
         self.scene.warehouse = None
         if self.__class__.__name__ == "HLFlatPickTeacherEnvCfg":
+            self.disable_zero_weight_rewards()
+
+@configclass
+class HLFlatPickTeacherWithCameraEnvCfg(HLFlatPickEnvCfg):
+    observations: HLFlatPickTeacherWithCameraObservationsCfg = HLFlatPickTeacherWithCameraObservationsCfg()
+    scene: HLFlatSideCameraSceneCfg = HLFlatSideCameraSceneCfg(num_envs=16, env_spacing=5.0)
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.scene.warehouse = None
+        self.terminations.base_contact = None  # 取消底盘碰撞终止条件
+        if self.__class__.__name__ == "HLFlatPickTeacherWithCameraEnvCfg":
             self.disable_zero_weight_rewards()

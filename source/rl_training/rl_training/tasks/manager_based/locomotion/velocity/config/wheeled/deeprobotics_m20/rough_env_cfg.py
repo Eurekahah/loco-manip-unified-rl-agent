@@ -76,6 +76,10 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
             ik_method="dls",
             ik_params={"lambda_val": 0.01}
         ),
+        body_offset=mdp.DifferentialInverseKinematicsActionCfg.OffsetCfg(
+            pos=(0.0, 0.0, 0.135),  # EE frame 相对于 body frame 的位置偏移
+            rot=(1.0, 0.0, 0.0, 0.0),  # EE frame 相对于 body frame 的姿态偏移（四元数）
+        ),
         scale=1.0,
     )
 

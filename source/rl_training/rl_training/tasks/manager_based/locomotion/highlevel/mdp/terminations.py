@@ -37,6 +37,26 @@ def reached_target(
 
     diff = target_pos_w[:, :2] - robot_pos_w[:, :2]
     dist = torch.norm(diff, dim=-1)  # (N,)
+    # print(f"Distance to target: {dist}")  # 调试用，观察距离分布
 
     return dist < threshold  # (N,) bool
+
+def object_dropped(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    height_threshold: float = 0.5,
+) -> torch.Tensor:
+    """
+    Terminate (done=True) when the object is dropped, defined as the object's
+    height above the table being less than `height_threshold`.
+
+    Returns bool tensor of shape (N,).
+    """
+    object_pos_w = object_root_pos_w(env, object_cfg)
+    object_height = object_pos_w[:, 2]  # (N,)
+
+    # print(f"Current object height: {object_height}")  # 调试用，观察高度分布
+    # print(f"Height threshold: {height_threshold}")
+
+    return object_height < height_threshold  # (N,) bool
  

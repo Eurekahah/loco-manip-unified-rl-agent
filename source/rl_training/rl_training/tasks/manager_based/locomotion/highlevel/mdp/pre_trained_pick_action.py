@@ -171,43 +171,118 @@ class PreTrainedPickAction(ActionTerm):
     def tanh_scale(self, x, lo, hi):
         # 将无界输入映射到 [lo, hi]，全程可微
         return lo + (hi - lo) * (torch.tanh(x) * 0.5 + 0.5)
+    
+    def range_to_scale_offset(self, lo: float, hi: float):
+        """将 [lo, hi] 范围转换为 scale 和 offset"""
+        scale = (hi - lo) / 2.0
+        offset = (hi + lo) / 2.0
+        return scale, offset
 
     def process_actions(self, actions: torch.Tensor):
         self._raw_actions[:] = actions
-
         r = self.cfg.low_level_command_ranges
 
-        # 底盘速度
-        self._raw_actions[:, 0] = self.tanh_scale(actions[:, 0], r.lin_vel_x[0], r.lin_vel_x[1])
-        self._raw_actions[:, 1] = self.tanh_scale(actions[:, 1], r.lin_vel_y[0], r.lin_vel_y[1])
-        self._raw_actions[:, 2] = self.tanh_scale(actions[:, 2], r.ang_vel_z[0], r.ang_vel_z[1])
+        # ── 1. 底盘速度：tanh + scale/offset ──────────────────────────
+        for i, (lo, hi) in enumerate([
+            (r.lin_vel_x[0], r.lin_vel_x[1]),
+            (r.lin_vel_y[0], r.lin_vel_y[1]),
+            (r.ang_vel_z[0], r.ang_vel_z[1]),
+        ]):
+            scale, offset = self.range_to_scale_offset(lo, hi)
+            self._raw_actions[:, i] = torch.tanh(actions[:, i]) * scale + offset
 
-        # clip ee_pose commands
-        # print(f"Raw EE pos commands before clipping(root): {self._raw_actions[:, 3:6]}")
-        self._raw_actions[:, 3] = self.tanh_scale(actions[:, 3], r.ee_pos_x[0], r.ee_pos_x[1])
-        self._raw_actions[:, 4] = self.tanh_scale(actions[:, 4], r.ee_pos_y[0], r.ee_pos_y[1])
-        self._raw_actions[:, 5] = self.tanh_scale(actions[:, 5], r.ee_pos_z[0], r.ee_pos_z[1])
-
-        # print(f"Raw EE pos commands after clipping(root): {self._raw_actions[:, 3:6]}")
-        # self._raw_actions[:, 6].clamp_(r.ee_quat_w[0],  r.ee_quat_w[1])
-        # self._raw_actions[:, 7].clamp_(r.ee_quat_x[0],  r.ee_quat_x[1])
-        # self._raw_actions[:, 8].clamp_(r.ee_quat_y[0],  r.ee_quat_y[1])
-        # self._raw_actions[:, 9].clamp_(r.ee_quat_z[0],  r.ee_quat_z[1])
-        # print("Raw EE pos commands after clipping: ", self._raw_actions[:, 3:6])
-        # 四元数：不做 clamp，直接归一化
-        quat = self._raw_actions[:, 6:10]
-        self._raw_actions[:, 6:10] = torch.nn.functional.normalize(quat, p=2, dim=-1)
-        target_pos_b = self._raw_actions[:, 3:6]
-        target_quat_b = self._raw_actions[:, 6:10]
-        root_pos_w = self.robot.data.root_pos_w
-        root_quat_w = self.robot.data.root_quat_w
-        # 将 ee_pose command 从 base 坐标系转换到 world 坐标系
-        target_pos_w, target_quat_w = math_utils.combine_frame_transforms(
-            root_pos_w, root_quat_w, target_pos_b, target_quat_b 
+        # ── 2. 底盘线速度死区 ──────────────────────────────────────────
+        lin_vel_norm = torch.norm(self._raw_actions[:, 0:2], p=2, dim=-1, keepdim=True)
+        self._raw_actions[:, 0:2] = torch.where(
+            lin_vel_norm < 0.2,
+            torch.zeros_like(self._raw_actions[:, 0:2]),
+            self._raw_actions[:, 0:2]
         )
-        self._raw_actions[:, 3:6] = target_pos_w
-        # print("Target EE pos commands(world): ", self._raw_actions[:, 3:6])
+
+        # ── 3. ee_pos：tanh + scale/offset，base 坐标系 ────────────────
+        # print(f"Raw ee_pos commands before scaling(base): {actions[:, 3:6]}")
+        for i, (lo, hi) in enumerate([
+            (r.ee_pos_x[0], r.ee_pos_x[1]),   # col 3
+            (r.ee_pos_y[0], r.ee_pos_y[1]),   # col 4
+            (r.ee_pos_z[0], r.ee_pos_z[1]),   # col 5
+        ]):
+            scale, offset = self.range_to_scale_offset(lo, hi)
+            self._raw_actions[:, 3 + i] = torch.tanh(actions[:, 3 + i]) * scale + offset
+        # print(f"Raw ee_pos commands after scaling(base): {self._raw_actions[:, 3:6]}")
+
+        # ── 4. 四元数：归一化，不做 scale ─────────────────────────────
+        quat = actions[:, 6:10].clone()
+        self._raw_actions[:, 6:10] = torch.nn.functional.normalize(quat, p=2, dim=-1)
+
+        # ── 5. base → world 坐标变换 ───────────────────────────────────
+        root_pos_w  = self.robot.data.root_pos_w
+        root_quat_w = self.robot.data.root_quat_w
+
+        target_pos_w, target_quat_w = math_utils.combine_frame_transforms(
+            root_pos_w, root_quat_w,
+            self._raw_actions[:, 3:6],
+            self._raw_actions[:, 6:10],
+        )
+        self._raw_actions[:, 3:6]  = target_pos_w
         self._raw_actions[:, 6:10] = target_quat_w
+
+        # ==================== DEBUG: 边界框转换到世界坐标 ====================
+        # num_envs = root_pos_w.shape[0]
+        # device = root_pos_w.device
+
+        # # 构造 base 系下的 8 个角点（AABB 包围盒）
+        # # x: [r.ee_pos_x[0], r.ee_pos_x[1]]
+        # # y: [r.ee_pos_y[0], r.ee_pos_y[1]]
+        # # z: [r.ee_pos_z[0], r.ee_pos_z[1]]
+        # corners_b = torch.tensor([
+        #     [r.ee_pos_x[0], r.ee_pos_y[0], r.ee_pos_z[0]],
+        #     [r.ee_pos_x[0], r.ee_pos_y[0], r.ee_pos_z[1]],
+        #     [r.ee_pos_x[0], r.ee_pos_y[1], r.ee_pos_z[0]],
+        #     [r.ee_pos_x[0], r.ee_pos_y[1], r.ee_pos_z[1]],
+        #     [r.ee_pos_x[1], r.ee_pos_y[0], r.ee_pos_z[0]],
+        #     [r.ee_pos_x[1], r.ee_pos_y[0], r.ee_pos_z[1]],
+        #     [r.ee_pos_x[1], r.ee_pos_y[1], r.ee_pos_z[0]],
+        #     [r.ee_pos_x[1], r.ee_pos_y[1], r.ee_pos_z[1]],
+        # ], dtype=torch.float32, device=device)  # shape: (8, 3)
+
+        # # 取第 0 个 env 的 root pose 做 debug（如需全部 env 可循环）
+        # root_pos_w_0  = root_pos_w[0:1]   # (1, 3)
+        # root_quat_w_0 = root_quat_w[0:1]  # (1, 4)
+
+        # # 将 8 个角点逐一转换到世界坐标
+        # corners_w_list = []
+        # for i in range(8):
+        #     corner_b_i = corners_b[i:i+1]  # (1, 3)
+        #     # identity quat: 角点只是点，不携带方向，用单位四元数
+        #     identity_quat = torch.zeros(1, 4, device=device)
+        #     identity_quat[:, 0] = 1.0  # w=1
+        #     corner_w_i, _ = math_utils.combine_frame_transforms(
+        #         root_pos_w_0, root_quat_w_0, corner_b_i, identity_quat
+        #     )
+        #     corners_w_list.append(corner_w_i)
+
+        # corners_w = torch.cat(corners_w_list, dim=0)  # (8, 3)
+
+        # # 计算世界系下的 AABB（轴对齐包围盒）
+        # bbox_min_w = corners_w.min(dim=0).values
+        # bbox_max_w = corners_w.max(dim=0).values
+
+        # print("=" * 60)
+        # print(f"[DEBUG] Env-0 root_pos_w      : {root_pos_w_0.squeeze().tolist()}")
+        # print(f"[DEBUG] EE bbox in BASE frame :")
+        # print(f"         x: [{r.ee_pos_x[0]:.3f}, {r.ee_pos_x[1]:.3f}]")
+        # print(f"         y: [{r.ee_pos_y[0]:.3f}, {r.ee_pos_y[1]:.3f}]")
+        # print(f"         z: [{r.ee_pos_z[0]:.3f}, {r.ee_pos_z[1]:.3f}]")
+        # print(f"[DEBUG] EE bbox in WORLD frame (env-0, AABB after rotation):")
+        # print(f"         x: [{bbox_min_w[0]:.3f}, {bbox_max_w[0]:.3f}]")
+        # print(f"         y: [{bbox_min_w[1]:.3f}, {bbox_max_w[1]:.3f}]")
+        # print(f"         z: [{bbox_min_w[2]:.3f}, {bbox_max_w[2]:.3f}]")
+        # print(f"[DEBUG] EE target_pos_w (env-0): {target_pos_w[0].tolist()}")
+        # print(f"[DEBUG] All 8 corners in world frame:")
+        # for i, c in enumerate(corners_w):
+        #     print(f"         corner[{i}]: {c.tolist()}")
+        # print("=" * 60)
+        # # =====================================================================
 
     def apply_actions(self):
         
@@ -356,20 +431,20 @@ class PreTrainedPickActionCfg(ActionTermCfg):
     """Low level observation configuration."""
     ee_command_name: str = "ee_pose"
     """The command name in CommandManager that this action term outputs to. Should correspond to a command in CommandsCfg."""
-    debug_vis: bool = True
+    debug_vis: bool = False
     """Whether to visualize debug information. Defaults to False."""
     @configclass
     class LowLevelCommandRanges:
         # base_velocity ranges，对应 CommandsCfg.base_velocity.ranges
-        lin_vel_x: tuple[float, float] = (-0.2, 0.2)
-        lin_vel_y: tuple[float, float] = (-0.01, 0.01)
+        lin_vel_x: tuple[float, float] = (-0.3, 0.3)
+        lin_vel_y: tuple[float, float] = (-0.1, 0.1)
         ang_vel_z: tuple[float, float] = (-1.0, 1.0)
         # ee_pose ranges，对应 CommandsCfg.ee_pose 的 command 输出空间
         # command 输出是世界坐标系下的 [x, y, z, qw, qx, qy, qz]
         # 四元数各分量天然在 [-1, 1]，位置范围根据实际场景设置
-        ee_pos_x: tuple[float, float] = (0.7, 0.9)
-        ee_pos_y: tuple[float, float] = (-0.1, 0.1)
-        ee_pos_z: tuple[float, float] = (-0.1, 0.2)
+        ee_pos_x: tuple[float, float] = (0.3, 0.8)
+        ee_pos_y: tuple[float, float] = (-0.4, 0.4)
+        ee_pos_z: tuple[float, float] = (-0.1, 0.3)
         ee_quat_w: tuple[float, float] = (-1.0, 1.0)
         ee_quat_x: tuple[float, float] = (-1.0, 1.0)
         ee_quat_y: tuple[float, float] = (-1.0, 1.0)

@@ -88,8 +88,8 @@ class HighLevelSceneCfg(MySceneCfg):
     arm_camera = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot/abase",
         update_period=0.1,                      # 10 Hz
-        height=120,
-        width=160,
+        height=224,
+        width=224,
         data_types=["rgb", "depth"],
         debug_vis=False,
         spawn=sim_utils.PinholeCameraCfg(

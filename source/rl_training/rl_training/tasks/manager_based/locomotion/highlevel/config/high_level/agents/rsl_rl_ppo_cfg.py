@@ -83,3 +83,23 @@ class HighLevelPickFlatTeacherPPORunnerCfg(HighLevelNavFlatTeacherPPORunnerCfg):
             "critic": ["critic"],
         }
 
+@configclass
+class HighLevelPickFlatTeacherWithCameraPPORunnerCfg(HighLevelNavFlatTeacherPPORunnerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.max_iterations = 1000
+        self.experiment_name = "high_level_pick_flat_teacher_with_camera"
+
+        self.obs_groups = {
+            "policy": ["teacher"],
+            "critic": ["critic"],
+        }
+        self.policy = RslRlPpoActorCriticCfg(
+            init_noise_std=1.0,
+            noise_std_type="log",
+            actor_hidden_dims=[1024, 512, 256, 128],
+            critic_hidden_dims=[1024, 512, 256, 128],
+            activation="elu",
+        )
+

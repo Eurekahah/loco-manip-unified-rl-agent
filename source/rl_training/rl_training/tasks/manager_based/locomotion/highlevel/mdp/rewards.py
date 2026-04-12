@@ -282,6 +282,7 @@ def reach_target_velocity_reward(
 
     # 仅在到达目标帧激活（用 reset_buf 或直接检查距离）
     in_target = (dist < threshold).float()  # (N,)
+    # print(speed)
 
     return vel_score * in_target
 
@@ -379,6 +380,254 @@ def object_ee_distance(
 
     return reward
 
+def gripper_state_stage_reward(
+    env: ManagerBasedRLEnv,
+    gripper_action_term_name: str = "gripper_action",
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="arm_link6"),
+    approach_dist: float = 0.15,
+    grasp_dist: float = 0.15,
+) -> torch.Tensor:
+    robot_asset = env.scene[ee_frame_cfg.name]
+
+    # ── EE 位置：处理 body_ids 为 slice / list / None 三种情况 ──
+    body_ids = ee_frame_cfg.body_ids
+    if body_ids is None:
+        ee_pos_w = robot_asset.data.body_pos_w[:, -1, :]
+    elif isinstance(body_ids, slice):
+        # slice → 取解析后的第一个真实索引
+        all_ids = list(range(robot_asset.data.body_pos_w.shape[1]))
+        resolved = all_ids[body_ids]
+        ee_pos_w = robot_asset.data.body_pos_w[:, resolved[0], :]
+    else:
+        # list / tuple
+        ee_pos_w = robot_asset.data.body_pos_w[:, body_ids[0], :]
+
+    # ── 物体位置 ──────────────────────────────────────────────────
+    obj: RigidObject = env.scene[object_cfg.name]
+    obj_pos_w = obj.data.root_pos_w[:, :3]
+
+    # ── 夹爪指令 ──────────────────────────────────────────────────
+    action_term = env.action_manager.get_term(gripper_action_term_name)
+    gripper_cmd = action_term.raw_actions[:, 0]
+    gripper_closed = (gripper_cmd > 0.5).float()
+    gripper_open   = 1.0 - gripper_closed
+
+    print(f"gripper_cmd: {gripper_cmd}")
+    # ── 距离 & 阶段奖励 ───────────────────────────────────────────
+    dist = torch.norm(ee_pos_w - obj_pos_w, dim=-1)
+
+    should_open  = (dist > approach_dist).float()
+    should_close = (dist < grasp_dist).float()
+
+    print(f"should_close: {should_close}")
+    print(f"should_open: {should_open}")
+
+    reward  =  should_open  * gripper_open   * 0.2
+    reward += should_close  * gripper_closed * 0.5
+    penalty =  should_open  * gripper_closed * (-0.2)
+
+    return reward + penalty
+
+def object_ee_symmetric_alignment(
+    env: ManagerBasedRLEnv,
+    std: float,
+    min_finger_dist: float,          # 新增：夹爪最小张开距离（米）
+    object_cfg: SceneEntityCfg,
+    ee_frame_cfg_finger1: SceneEntityCfg,
+    ee_frame_cfg_finger2: SceneEntityCfg,
+) -> torch.Tensor:
+    """
+    对称夹爪对准奖励：
+    1. 两指到物体距离之和最小（整体靠近）
+    2. 两指到物体距离之差最小（对称）
+    3. 两指间距必须大于 min_finger_dist（防止夹爪闭合作弊）
+    """
+    object_asset = env.scene[object_cfg.name]
+    robot_asset = env.scene[ee_frame_cfg_finger1.name]
+
+    object_pos_w = object_asset.data.root_pos_w[:, :3]
+
+    def get_finger_pos(ee_frame_cfg: SceneEntityCfg) -> torch.Tensor:
+        if ee_frame_cfg.body_ids is not None:
+            return robot_asset.data.body_pos_w[:, ee_frame_cfg.body_ids[0], :]
+        else:
+            return robot_asset.data.body_pos_w[:, -1, :]
+
+    pos1 = get_finger_pos(ee_frame_cfg_finger1)  # [N, 3]
+    pos2 = get_finger_pos(ee_frame_cfg_finger2)  # [N, 3]
+
+    # print(f"Finger1 pos: {pos1}")
+    # print(f"Finger2 pos: {pos2}")
+
+    dist1 = torch.norm(object_pos_w - pos1, dim=-1)   # [N]
+    dist2 = torch.norm(object_pos_w - pos2, dim=-1)   # [N]
+
+    # 1. 平均距离奖励
+    mean_dist = (dist1 + dist2) / 2.0
+    reward_proximity = torch.exp(-mean_dist ** 2 / (2 * std ** 2))
+
+    # 2. 对称性奖励
+    asymmetry = (dist1 - dist2).abs()
+    reward_symmetry = torch.exp(-asymmetry ** 2 / (2 * std ** 2))
+
+    # 3. 夹爪张开门控：两指间距必须 > min_finger_dist 才给奖励
+    #    用软门控保留梯度，避免硬截断
+    finger_span = torch.norm(pos1 - pos2, dim=-1)     # [N]
+    # print(f"Finger span: {finger_span}")
+    gate_open = torch.sigmoid(
+        20.0 * (finger_span - min_finger_dist)        # 在 min_finger_dist 处从0过渡到1
+    )
+
+    return reward_proximity * reward_symmetry * gate_open
+
+def lateral_velocity_penalty(env: ManagerBasedRLEnv, action_name: str = "pre_trained_nav_action") -> torch.Tensor:
+    """惩罚侧向速度命令 v_y（raw_actions[:, 1]）"""
+    action_term = env.action_manager.get_term(action_name)
+    vy = action_term.raw_actions[:, 1]  # v_y
+    return vy.pow(2)
+
+
+def angular_velocity_penalty(env: ManagerBasedRLEnv, action_name: str = "pre_trained_nav_action") -> torch.Tensor:
+    """惩罚角速度命令 omega_z（raw_actions[:, 2]）"""
+    action_term = env.action_manager.get_term(action_name)
+    wz = action_term.raw_actions[:, 2]  # omega_z
+    return wz.pow(2)
+
+def _measure_ee_offset(robot):
+    """临时调用来测量 body_offset，确认后删除"""
+    
+    # ---- 获取 body indices ----
+    # IsaacLab 2.3.0 用 find_bodies 返回 (indices, names)
+    link6_indices, _  = robot.find_bodies("arm_link6")
+    link7_indices, _  = robot.find_bodies("arm_link7")
+    link8_indices, _  = robot.find_bodies("arm_link8")
+
+    link6_idx = link6_indices[0]
+    link7_idx = link7_indices[0]
+    link8_idx = link8_indices[0]
+
+    # ---- 世界坐标 (num_envs, 3) ----
+    link6_pos_w = robot.data.body_pos_w[:, link6_idx, :]   # wrist
+    link7_pos_w = robot.data.body_pos_w[:, link7_idx, :]   # finger1
+    link8_pos_w = robot.data.body_pos_w[:, link8_idx, :]   # finger2
+
+    link6_quat_w = robot.data.body_quat_w[:, link6_idx, :] # (w,x,y,z)
+
+    # ---- 夹爪中心 = link7 和 link8 的中点 ----
+    gripper_center_w = (link7_pos_w + link8_pos_w) / 2.0
+
+    # ---- 计算 link6 -> gripper_center 在 link6 局部坐标系下的偏移 ----
+    from isaaclab.utils.math import quat_inv, quat_rotate
+    
+    # link6 坐标系的逆旋转
+    link6_quat_inv = quat_inv(link6_quat_w)  # (num_envs, 4)
+    
+    # 世界坐标系下的位移向量
+    diff_w = gripper_center_w - link6_pos_w  # (num_envs, 3)
+    
+    # 转换到 link6 局部坐标系
+    diff_local = quat_rotate(link6_quat_inv, diff_w)  # (num_envs, 3)
+
+    # ---- 只打印第一个 env 的结果 ----
+    print("=" * 50)
+    print(f"[link6]  world pos  : {link6_pos_w[0].cpu().numpy()}")
+    print(f"[link6]  world quat : {link6_quat_w[0].cpu().numpy()}  (w,x,y,z)")
+    print(f"[link7]  world pos  : {link7_pos_w[0].cpu().numpy()}")
+    print(f"[link8]  world pos  : {link8_pos_w[0].cpu().numpy()}")
+    print(f"[gripper center] world pos : {gripper_center_w[0].cpu().numpy()}")
+    print(f"[body_offset] pos (in link6 frame) : {diff_local[0].cpu().numpy()}")
+    print("=" * 50)
+
+def get_max_force(env: ManagerBasedRLEnv,sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Helper function to extract the maximum contact force for specified bodies from a ContactSensor."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    force_matrix = contact_sensor.data.force_matrix_w  # [N, H, num_bodies, 3]
+
+    target_body_name = sensor_cfg.body_names
+    if isinstance(target_body_name, str):
+        target_body_name = [target_body_name]
+
+    local_ids = [
+        contact_sensor.body_names.index(name)
+        for name in target_body_name
+        if name in contact_sensor.body_names
+    ]
+    if not local_ids:
+        return torch.zeros(force_matrix.shape[0], device=force_matrix.device)
+
+    # ✅ 修正：第2维才是 body
+    finger_forces = force_matrix[:, :, local_ids, :]  # [N, H, len(local_ids), 3]
+    # print(f"Sensor '{sensor_cfg.name}' tracking bodies: {contact_sensor.body_names}, local_ids: {local_ids}")
+    # print(f"force_matrix_w shape: {force_matrix.shape}, finger_forces shape: {finger_forces.shape}")
+    force_norm = torch.norm(finger_forces, dim=-1)     # [N, H, len(local_ids)]
+    N = force_norm.shape[0]
+    max_force = force_norm.view(N, -1).max(dim=-1)[0]  # [N]
+    return max_force
+
+
+def gripper_both_fingers_contact(
+    env: ManagerBasedRLEnv,
+    threshold: float,
+    sensor_cfg_finger1: SceneEntityCfg,
+    sensor_cfg_finger2: SceneEntityCfg,
+) -> torch.Tensor:
+    """双指同时接触才给奖励（乘法耦合，消除单指靠墙局部最优）"""
+
+
+    max_force1 = get_max_force(env, sensor_cfg_finger1)  # [N]
+    max_force2 = get_max_force(env, sensor_cfg_finger2)  # [N]
+
+    # print(f"Finger1 max force: {max_force1}")
+    # print(f"Finger2 max force: {max_force2}")
+    contact1 = (max_force1 > threshold).float()
+    contact2 = (max_force2 > threshold).float()
+
+    # 乘法耦合：两指都接触才得奖励
+    return contact1 * contact2
+
+def gripper_contact_symmetry(
+    env: ManagerBasedRLEnv,
+    sensor_cfg_finger1: SceneEntityCfg,
+    sensor_cfg_finger2: SceneEntityCfg,
+) -> torch.Tensor:
+    """惩罚两指接触力不对称（返回负值，配合负权重使用或直接用正权重+负号）"""
+
+    max_force1 = get_max_force(env, sensor_cfg_finger1)  # [N]
+    max_force2 = get_max_force(env, sensor_cfg_finger2)  # [N]
+
+    asymmetry = (max_force1 - max_force2).abs()          # [N]
+    # 归一化防止数值过大
+    return asymmetry / (max_force1 + max_force2 + 1e-6)
+
+def gripper_contact_symmetric_grasp(
+    env: ManagerBasedRLEnv,
+    threshold: float,
+    sensor_cfg_finger1: SceneEntityCfg,
+    sensor_cfg_finger2: SceneEntityCfg,
+) -> torch.Tensor:
+    """
+    对称双指接触奖励（合并 both_fingers_contact + contact_symmetry）：
+    1. 双指同时接触才给奖励（乘法耦合，消除单指靠墙局部最优）
+    2. 接触力越对称奖励越高（鼓励物体位于两指中间）
+    只有两指都接触且力对称时才给最高奖励
+    """
+    max_force1 = get_max_force(env, sensor_cfg_finger1)  # [N]
+    max_force2 = get_max_force(env, sensor_cfg_finger2)  # [N]
+
+    # 1. 双指同时接触门控（乘法耦合）
+    contact1 = (max_force1 > threshold).float()
+    contact2 = (max_force2 > threshold).float()
+    gate = contact1 * contact2  # 任一未接触则奖励归零
+
+    # 2. 接触力对称性奖励：力差越小越好，归一化到 [0, 1]
+    asymmetry = (max_force1 - max_force2).abs()
+    reward_symmetry = 1.0 - asymmetry / (max_force1 + max_force2 + 1e-6)
+
+    # 门控 × 对称性：双指同时接触 且 力对称才得高奖励
+    return gate * reward_symmetry
+
 def object_is_lifted(
     env: ManagerBasedRLEnv,
     minimal_height: float,
@@ -403,6 +652,7 @@ def object_is_lifted(
 
     # 当前物体 z 轴高度
     current_height = object_asset.data.root_pos_w[:, 2]  # (N,)
+    # print(f"Current object height: {current_height}")
 
     # 初始高度（reset 时记录，存储在 extras 或直接用 default_root_state）
     # IsaacLab 中 default_root_state 的第 2 列是初始 z
@@ -410,7 +660,8 @@ def object_is_lifted(
 
     # 相对抬起高度
     lifted_height = current_height - initial_height  # (N,)
-
+    # if (lifted_height > 0.04).sum() > 0:
+    #     print(f"Current height: {current_height}, Initial height: {initial_height}, Lifted height: {lifted_height}")
     # 连续奖励：超过 minimal_height 才开始给分，线性增长后 clamp
     # 你也可以换成纯 bool：(lifted_height > minimal_height).float()
     # if lifted_height.sum() > 1e-4:
@@ -452,3 +703,4 @@ def cmd_pos_to_object_reward(
         reward = torch.exp(-pos_dist.pow(2) / (2 * pos_sigma ** 2))
     
     return reward
+
