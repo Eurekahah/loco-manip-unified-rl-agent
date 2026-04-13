@@ -8,6 +8,7 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.sensors import TiledCameraCfg
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 
 from rl_training.tasks.manager_based.locomotion.highlevel.mdp.encoder import make_cnn_model_zoo_cfg
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
@@ -225,8 +226,19 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         params={
             "action_term_name": "pre_trained_pick_action",
             "object_cfg":       SceneEntityCfg("object"),
-            "pos_sigma":        0.2,   # 单位：米，20cm内奖励显著上升
+            "pos_sigma":        0.3,   # 单位：米，30cm内奖励显著上升
             "use_shaped":       True,
+        },
+    )
+
+    cmd_pos_to_object_fine_grained = RewTerm(
+        func=mdp.cmd_pos_to_object_reward,
+        weight=4.0,
+        params={
+            "action_term_name": "pre_trained_pick_action",
+            "object_cfg":       SceneEntityCfg("object"),
+            "pos_sigma":        0.05,   # 单位：米，5cm内奖励显著上升
+            "use_shaped":       False,
         },
     )
 
@@ -235,7 +247,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         func=mdp.object_ee_distance,
         weight=3.0,                          # 权重高于底盘接近，引导手臂精细运动
         params={
-            "std": 0.1,                      # 高斯核宽度，越小精度要求越高
+            "std": 0.05,                      # 高斯核宽度，越小精度要求越高
             "object_cfg": SceneEntityCfg("object"),
             "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
         },
@@ -246,28 +258,6 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # =========================================================
 
     # 夹爪朝向对准：arm_link7/8 两指到物体的距离之和最小化
-    # 鼓励物体处于两指正中间（对称抓取）
-    # gripper_alignment = RewTerm(
-    #     func=mdp.object_ee_distance,
-    #     weight=2.0,
-    #     params={
-    #         "std": 0.05,                     # 更小的核，要求更精确的对准
-    #         "object_cfg": SceneEntityCfg("object"),
-    #         "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link7"),
-    #     },
-    # )
-
-    # gripper_alignment_finger2 = RewTerm(
-    #     func=mdp.object_ee_distance,
-    #     weight=2.0,
-    #     params={
-    #         "std": 0.05,
-    #         "object_cfg": SceneEntityCfg("object"),
-    #         "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link8"),
-    #     },
-    # )
-    # 删除原来的 gripper_alignment 和 gripper_alignment_finger2
-    # 替换为：
     gripper_alignment_symmetric = RewTerm(
         func=mdp.object_ee_symmetric_alignment,
         weight=20.0,
@@ -281,51 +271,8 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         },
     )
 
-    # 夹爪接触物体奖励：两指均应有接触力
-    # grasp_contact_finger1 = RewTerm(
-    #     func=mdp.gripper_object_contact,         # 正权重 → 鼓励夹爪接触
-    #     weight=1.5,
-    #     params={
-    #         "sensor_cfg": SceneEntityCfg(
-    #             "arm_link7_contact_forces",
-    #             body_names="arm_link7",
-    #         ),
-    #         "threshold": 0.5,               # 最小接触力阈值（N），低于此不奖励
-    #     },
-    # )
 
-    # grasp_contact_finger2 = RewTerm(
-    #     func=mdp.gripper_object_contact,         # 正权重 → 鼓励夹爪接触
-    #     weight=1.5,
-    #     params={
-    #         "sensor_cfg": SceneEntityCfg(
-    #             "arm_link8_contact_forces",
-    #             body_names="arm_link8",
-    #         ),
-    #         "threshold": 0.5,
-    #     },
-    # )
-
-    # 只有双指同时接触才给奖励
-    # grasp_contact_both = RewTerm(
-    #     func=mdp.gripper_both_fingers_contact,  
-    #     weight=10.0,
-    #     params={
-    #         "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
-    #         "sensor_cfg_finger2": SceneEntityCfg("arm_link8_contact_forces", body_names="arm_link8"),
-    #         "threshold": 0.5,
-    #     },
-    # )
-    # # 惩罚不对称的接触，鼓励物体位于两指中间
-    # grasp_contact_symmetry = RewTerm(
-    #     func=mdp.gripper_contact_symmetry,   
-    #     weight=-5.0,                          # 惩罚不对称
-    #     params={
-    #         "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
-    #         "sensor_cfg_finger2": SceneEntityCfg("arm_link8_contact_forces", body_names="arm_link8"),
-    #     },
-    # )
-
+    # 夹爪同步接触奖励：arm_link7/8 两指同时接触物体时给予奖励
     grasp_contact_symmetric = RewTerm(
         func=mdp.gripper_contact_symmetric_grasp,
         weight=500.0,  
@@ -350,26 +297,11 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         },
     )
 
-    # 抬起后 EE 与物体高度保持同步（防止松手后继续乱动）
-    # ee_object_height_sync = RewTerm(
-    #     func=mdp.object_ee_distance,
-    #     weight=1.0,
-    #     params={
-    #         "std": 0.08,
-    #         "object_cfg": SceneEntityCfg("object"),
-    #         "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
-    #     },
-    # )
 
     # =========================================================
     # 全程惩罚项
     # =========================================================
 
-    # gripper_stage_reward = RewTerm(
-    #     func=mdp.gripper_state_stage_reward,
-    #     weight=1.0,
-    #     params={"approach_dist": 0.15, "grasp_dist": 0.135}
-    # )
 
     # 手臂主体非预期碰撞（排除夹爪，夹爪需要接触物体）
     undesired_contacts = RewTerm(
@@ -405,6 +337,15 @@ class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
             "height_threshold": 0.5,  # 物体世界位姿高度小于0.5m算掉落
         },  
     )
+    # hold_object = DoneTerm(
+    #     func=mdp.object_held_for_duration,  # 替换为新函数
+    #     params={
+    #         "object_cfg": SceneEntityCfg("object"),
+    #         "minimal_height": 0.04,
+    #         "hold_duration": 5.0,           # 持续举起 5 秒终止
+    #     },
+    # )
+
 
 @configclass
 class HLFlatPickCommandCfg(HighLevelCommandsCfg):
@@ -412,7 +353,7 @@ class HLFlatPickCommandCfg(HighLevelCommandsCfg):
         asset_name="robot",
         body_name="arm_link6",
         resampling_time_range=(5.0, 5.0),
-        debug_vis=False,
+        debug_vis=True,
         sampled_height=0.6,  # 采样坐标系的固定高度
         arm_base_link_name="arm_base",  # 采样坐标系xy位置
         ranges=HeightInvariantEECommandCfg.Ranges(
@@ -479,6 +420,17 @@ class HLFlatSideCameraSceneCfg(HighLevelSceneCfg):
             convention="ros",
         ),
     )
+
+# @configclass
+# class HLFlatPickCurriculumCfg:
+#     action_rate_0 = CurrTerm(
+#         func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -1e-3, "num_steps": 0}
+#     )
+#     action_rate_1 = CurrTerm(
+#         func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -1e-2, "num_steps": 4096 * 500}
+#     )
+
+
 
 @configclass
 class HLFlatPickEnvCfg(HighLevelFlatEnvCfg):

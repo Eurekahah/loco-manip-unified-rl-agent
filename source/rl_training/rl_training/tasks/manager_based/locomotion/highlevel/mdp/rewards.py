@@ -473,13 +473,11 @@ def object_ee_symmetric_alignment(
     reward_symmetry = torch.exp(-asymmetry ** 2 / (2 * std ** 2))
 
     # 3. 夹爪张开门控：两指间距必须 > min_finger_dist 才给奖励
-    #    用软门控保留梯度，避免硬截断
     finger_span = torch.norm(pos1 - pos2, dim=-1)     # [N]
     # print(f"Finger span: {finger_span}")
-    gate_open = torch.sigmoid(
-        20.0 * (finger_span - min_finger_dist)        # 在 min_finger_dist 处从0过渡到1
-    )
+    gate_open = (finger_span > min_finger_dist).float()
 
+    # print(f"gate_open: {gate_open}")
     return reward_proximity * reward_symmetry * gate_open
 
 def lateral_velocity_penalty(env: ManagerBasedRLEnv, action_name: str = "pre_trained_nav_action") -> torch.Tensor:
@@ -691,13 +689,14 @@ def cmd_pos_to_object_reward(
 
     # print(f"Command position(world): {cmd_pos_w}")
     # print(f"Object position(world): {obj_pos_w}")
-
+    # print(f"Position distance: {pos_dist}")
     if use_shaped:
         # ✅ 方案A：线性 + Gaussian 混合
         # 远处线性引导（始终有梯度），近处Gaussian精确奖励
         linear_reward   = 1.0 / (1.0 + pos_dist)                               # 始终有信号
         gaussian_reward = torch.exp(-pos_dist.pow(2) / (2 * pos_sigma ** 2))    # 近处精确
         reward = 0.3 * linear_reward + 0.7 * gaussian_reward
+        # print(f"Linear reward: {linear_reward}, Gaussian reward: {gaussian_reward}, Combined reward: {reward}")
     else:
         # 原始Gaussian（梯度消失，不推荐）
         reward = torch.exp(-pos_dist.pow(2) / (2 * pos_sigma ** 2))

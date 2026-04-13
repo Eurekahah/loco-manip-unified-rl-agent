@@ -156,6 +156,7 @@ class PreTrainedPickAction(ActionTerm):
     def action_dim(self) -> int:
         return 10   # base_velocity(3) + ee_pose(7): [vx, vy, wz, x, y, z, qw, qx, qy, qz]
                     # 此处根据low-level policy的输入维度进行设置。当前设置为10维，包含3维的底盘速度和7维的末端执行器位姿（位置+四元数）。
+        # return 7    # base_velocity(3) + ee_pos(3) + yaw(1)
 
     @property
     def raw_actions(self) -> torch.Tensor:
@@ -211,8 +212,28 @@ class PreTrainedPickAction(ActionTerm):
         # print(f"Raw ee_pos commands after scaling(base): {self._raw_actions[:, 3:6]}")
 
         # ── 4. 四元数：归一化，不做 scale ─────────────────────────────
-        quat = actions[:, 6:10].clone()
-        self._raw_actions[:, 6:10] = torch.nn.functional.normalize(quat, p=2, dim=-1)
+        # ── 4. 构造固定朝下 + yaw 的四元数 ─────────────────────────────
+        yaw = actions[:, 6]
+
+        # 可选：限制范围（防止抖动）
+        yaw = torch.tanh(yaw) * 0.5* torch.pi  # [-pi, pi]
+
+        zeros = torch.zeros_like(yaw)
+
+        # Rz(yaw)
+        quat_z = math_utils.quat_from_euler_xyz(zeros, zeros, yaw)
+
+        # Rx(pi) → 朝下
+        quat_down = math_utils.quat_from_euler_xyz(
+            torch.full_like(yaw, torch.pi),  # roll = pi
+            zeros,
+            zeros,
+        )
+
+        # 最终姿态：Rz * Rx
+        quat = math_utils.quat_mul(quat_z, quat_down)
+
+        self._raw_actions[:, 6:10] = quat
 
         # ── 5. base → world 坐标变换 ───────────────────────────────────
         root_pos_w  = self.robot.data.root_pos_w
@@ -444,7 +465,7 @@ class PreTrainedPickActionCfg(ActionTermCfg):
         # 四元数各分量天然在 [-1, 1]，位置范围根据实际场景设置
         ee_pos_x: tuple[float, float] = (0.3, 0.8)
         ee_pos_y: tuple[float, float] = (-0.4, 0.4)
-        ee_pos_z: tuple[float, float] = (-0.1, 0.3)
+        ee_pos_z: tuple[float, float] = (-0.1, 0.2)
         ee_quat_w: tuple[float, float] = (-1.0, 1.0)
         ee_quat_x: tuple[float, float] = (-1.0, 1.0)
         ee_quat_y: tuple[float, float] = (-1.0, 1.0)
