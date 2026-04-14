@@ -200,53 +200,37 @@ class PreTrainedPickAction(ActionTerm):
             self._raw_actions[:, 0:2]
         )
 
-        # ── 3. ee_pos：tanh + scale/offset，base 坐标系 ────────────────
-        # print(f"Raw ee_pos commands before scaling(base): {actions[:, 3:6]}")
-        for i, (lo, hi) in enumerate([
-            (r.ee_pos_x[0], r.ee_pos_x[1]),   # col 3
-            (r.ee_pos_y[0], r.ee_pos_y[1]),   # col 4
-            (r.ee_pos_z[0], r.ee_pos_z[1]),   # col 5
-        ]):
-            scale, offset = self.range_to_scale_offset(lo, hi)
-            self._raw_actions[:, 3 + i] = torch.tanh(actions[:, 3 + i]) * scale + offset
-        # print(f"Raw ee_pos commands after scaling(base): {self._raw_actions[:, 3:6]}")
+        # ── 3. EE 目标位置：直接使用 object 的 world 坐标 ─────────────
+        # 忽略 policy 输出的 actions[:, 3:6]，从 scene 中取物体位置
+        offset = torch.tensor([0.0, 0.0, 0.1], device=self.device)  # x, y, z 偏置（米）
+        object_pos_w = self._env.scene["object"].data.root_pos_w  # (N, 3)
+        self._raw_actions[:, 3:6] = object_pos_w + offset
 
-        # ── 4. 四元数：归一化，不做 scale ─────────────────────────────
-        # ── 4. 构造固定朝下 + yaw 的四元数 ─────────────────────────────
+        # ── 4. 构造固定朝下 + yaw 的四元数 ────────────────────────────
         yaw = actions[:, 6]
-
-        # 可选：限制范围（防止抖动）
-        yaw = torch.tanh(yaw) * 0.5* torch.pi  # [-pi, pi]
-
+        yaw = torch.tanh(yaw) * 0.5 * torch.pi  # [-0.5π, 0.5π]
         zeros = torch.zeros_like(yaw)
 
         # Rz(yaw)
         quat_z = math_utils.quat_from_euler_xyz(zeros, zeros, yaw)
-
         # Rx(pi) → 朝下
         quat_down = math_utils.quat_from_euler_xyz(
-            torch.full_like(yaw, torch.pi),  # roll = pi
+            torch.full_like(yaw, torch.pi),
             zeros,
             zeros,
         )
-
         # 最终姿态：Rz * Rx
         quat = math_utils.quat_mul(quat_z, quat_down)
-
         self._raw_actions[:, 6:10] = quat
 
-        # ── 5. base → world 坐标变换 ───────────────────────────────────
-        root_pos_w  = self.robot.data.root_pos_w
+        # ── 5. 位置已是 world 系，只需将四元数也保持 world 系 ──────────
+        # EE 姿态：将 quat（当前以 base 系构造的偏航）转到 world 系
         root_quat_w = self.robot.data.root_quat_w
-
-        target_pos_w, target_quat_w = math_utils.combine_frame_transforms(
-            root_pos_w, root_quat_w,
-            self._raw_actions[:, 3:6],
-            self._raw_actions[:, 6:10],
-        )
-        self._raw_actions[:, 3:6]  = target_pos_w
+        # 仅旋转姿态：world_quat = root_quat_w * local_quat
+        target_quat_w = math_utils.quat_mul(root_quat_w, quat)
         self._raw_actions[:, 6:10] = target_quat_w
 
+        # 位置直接保留 step 3 写入的 world 坐标，无需再变换
         # ==================== DEBUG: 边界框转换到世界坐标 ====================
         # num_envs = root_pos_w.shape[0]
         # device = root_pos_w.device

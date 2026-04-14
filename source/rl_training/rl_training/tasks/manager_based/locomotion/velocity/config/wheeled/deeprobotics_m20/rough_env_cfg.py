@@ -81,6 +81,7 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
             rot=(1.0, 0.0, 0.0, 0.0),  # EE frame 相对于 body frame 的姿态偏移（四元数）
         ),
         scale=1.0,
+        debug_vis=True,
     )
 
     # gripper_action = mdp.BinaryJointPositionActionCfg(
