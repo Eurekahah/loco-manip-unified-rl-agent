@@ -71,6 +71,19 @@ def distance_to_target_reward(
     reward = torch.exp(-dist**2 / (2.0 * std**2))     # (N,)  ∈ (0, 1]
     return reward
 
+def distance_to_target_reward_shift(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    target_cfg: SceneEntityCfg,
+    lam: float = 2.0,   # λ 越大，收敛越快（建议 3.0–5.0）
+) -> torch.Tensor:
+    robot_pos_w  = robot_root_pos_w(env, robot_cfg)
+    target_pos_w = object_root_pos_w(env, target_cfg)
+    diff = target_pos_w[:, :2] - robot_pos_w[:, :2]
+    dist = torch.norm(diff, dim=-1).clamp(min=1e-3)   # 防除零
+    reward = 1.0 - torch.exp(-lam / dist)              # ∈ (0, 1)
+    return reward
+
 # def distance_to_target_reward(env, robot_cfg, target_cfg, std=1.0):
 #     robot_pos_w  = robot_root_pos_w(env, robot_cfg)
 #     target_pos_w = object_root_pos_w(env, target_cfg)
@@ -479,6 +492,12 @@ def object_ee_symmetric_alignment(
 
     # print(f"gate_open: {gate_open}")
     return reward_proximity * reward_symmetry * gate_open
+
+def forward_velocity_penalty(env: ManagerBasedRLEnv, action_name: str = "pre_trained_nav_action") -> torch.Tensor:
+    """惩罚前向速度命令 v_x（raw_actions[:, 0]）"""
+    action_term = env.action_manager.get_term(action_name)
+    vx = action_term.raw_actions[:, 0]  # v_x
+    return vx.pow(2)
 
 def lateral_velocity_penalty(env: ManagerBasedRLEnv, action_name: str = "pre_trained_nav_action") -> torch.Tensor:
     """惩罚侧向速度命令 v_y（raw_actions[:, 1]）"""

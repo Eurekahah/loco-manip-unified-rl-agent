@@ -185,21 +185,23 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     # 整体接近：机器人基座靠近物体
     approach_object = RewTerm(
-        func=mdp.distance_to_target_reward,
-        weight=0.01,                          # 略降权重，让位给 EE 精确接近
+        func=mdp.distance_to_target_reward_shift,
+        weight=1.5,                          # 略降权重，让位给 EE 精确接近
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
+            "lam": 3.8,                        # λ 越大，收敛越快（建议 3.0–5.0）
         },
     )
 
     # 底盘朝向物体
     heading_to_object = RewTerm(
         func=mdp.heading_to_target_reward,
-        weight=0.2,
+        weight=1.0,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
+            "std": 0.3,                        # 角度奖励的σ，单位：弧度，约17度
         },
     )
 
@@ -216,13 +218,31 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         },
     )
 
+    forward_velocity_penalty = RewTerm(
+        func=mdp.forward_velocity_penalty,
+        weight=-0.5,
+        params={"action_name": "pre_trained_pick_action"},
+        )
+
+    lateral_velocity_penalty = RewTerm(
+        func=mdp.lateral_velocity_penalty,
+        weight=-0.5,
+        params={"action_name": "pre_trained_pick_action"},
+    )
+
+    angular_velocity_penalty = RewTerm(
+        func=mdp.angular_velocity_penalty,
+        weight=-0.2,
+        params={"action_name": "pre_trained_pick_action"},
+    )
+
     # =========================================================
     # 阶段二：末端执行器精确接近物体
     # =========================================================
 
     cmd_pos_to_object = RewTerm(
         func=mdp.cmd_pos_to_object_reward,
-        weight=4.0,
+        weight=2.0,
         params={
             "action_term_name": "pre_trained_pick_action",
             "object_cfg":       SceneEntityCfg("object"),
@@ -231,23 +251,23 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         },
     )
 
-    cmd_pos_to_object_fine_grained = RewTerm(
-        func=mdp.cmd_pos_to_object_reward,
-        weight=4.0,
-        params={
-            "action_term_name": "pre_trained_pick_action",
-            "object_cfg":       SceneEntityCfg("object"),
-            "pos_sigma":        0.05,   # 单位：米，5cm内奖励显著上升
-            "use_shaped":       False,
-        },
-    )
+    # cmd_pos_to_object_fine_grained = RewTerm(
+    #     func=mdp.cmd_pos_to_object_reward,
+    #     weight=4.0,
+    #     params={
+    #         "action_term_name": "pre_trained_pick_action",
+    #         "object_cfg":       SceneEntityCfg("object"),
+    #         "pos_sigma":        0.05,   # 单位：米，5cm内奖励显著上升
+    #         "use_shaped":       False,
+    #     },
+    # )
 
     # 核心密集奖励：arm_link6（EE）到物体距离，高斯核塑形
     reach_object_ee = RewTerm(
         func=mdp.object_ee_distance,
         weight=3.0,                          # 权重高于底盘接近，引导手臂精细运动
         params={
-            "std": 0.05,                      # 高斯核宽度，越小精度要求越高
+            "std": 0.3,                      # 高斯核宽度，越小精度要求越高
             "object_cfg": SceneEntityCfg("object"),
             "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
         },
