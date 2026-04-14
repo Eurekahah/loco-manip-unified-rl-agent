@@ -190,7 +190,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
-            "lam": 3.8,                        # λ 越大，收敛越快（建议 3.0–5.0）
+            "lam": 2.0,                        # λ 越大，收敛越快（建议 3.0–5.0）
         },
     )
 
@@ -206,17 +206,17 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     )
 
     # 靠近后减速，稳定底盘（沿用原逻辑）
-    slow_near_target = RewTerm(
-        func=mdp.slow_down_near_target_reward,
-        weight=0.01,
-        params={
-            "robot_cfg": SceneEntityCfg("robot"),
-            "target_cfg": SceneEntityCfg("object"),
-            "distance_threshold": 1.0,
-            "vel_max": 0.5,
-            "penalty_scale": 1.0,
-        },
-    )
+    # slow_near_target = RewTerm(
+    #     func=mdp.slow_down_near_target_reward,
+    #     weight=0.01,
+    #     params={
+    #         "robot_cfg": SceneEntityCfg("robot"),
+    #         "target_cfg": SceneEntityCfg("object"),
+    #         "distance_threshold": 1.0,
+    #         "vel_max": 0.5,
+    #         "penalty_scale": 1.0,
+    #     },
+    # )
 
     forward_velocity_penalty = RewTerm(
         func=mdp.forward_velocity_penalty,
@@ -397,7 +397,7 @@ class HLFlatPickEventCfg(HighLevelEventCfg):
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (1.2, 1.3), "y": (-0.1, 0.1),  "yaw": (-0.393, 0.393)},
+            "pose_range": {"x": (0.2, 0.3), "y": (-0.1, 0.1),  "yaw": (-0.393, 0.393)},
             "velocity_range": {
                 "x": (-0.0, 0.0),
                 "y": (-0.0, 0.0),

@@ -96,12 +96,6 @@ def distance_to_target_reward_shift(
 #     reward = 1.0 / (1.0 + dist)
 #     return reward
 
-def lateral_velocity_penalty(env, robot_cfg):
-    # 惩罚 v_y 分量
-    
-    robot: Articulation = env.scene[robot_cfg.name]
-    lin_vel_y = robot.data.root_lin_vel_b[:, 1]
-    return torch.abs(lin_vel_y)  # v_y 绝对值
 
 def distance_to_target_potential(
     env: ManagerBasedRLEnv,
