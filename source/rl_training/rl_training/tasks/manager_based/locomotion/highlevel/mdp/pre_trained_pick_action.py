@@ -128,7 +128,7 @@ class PreTrainedPickAction(ActionTerm):
         cfg.low_level_observations.velocity_commands.func = lambda dummy_env: self._raw_actions[:, :3]
         cfg.low_level_observations.velocity_commands.params = dict()
 
-        cfg.low_level_observations.ee_goal.func = lambda dummy_env: self._raw_actions[:, 3:]
+        cfg.low_level_observations.ee_goal.func = lambda dummy_env: self._raw_actions[:, 3:10]
         cfg.low_level_observations.ee_goal.params = dict()
 
         cfg.low_level_observations.joint_pos.func = mdp.joint_pos_rel_without_wheel
@@ -167,7 +167,8 @@ class PreTrainedPickAction(ActionTerm):
 
     @property
     def action_dim(self) -> int:
-        return 10   # base_velocity(3) + ee_pose(7): [vx, vy, wz, x, y, z, qw, qx, qy, qz]
+        return 11   # base_velocity(3) + ee_pose(7): [vx, vy, wz, x, y, z, qw, qx, qy, qz, delta_scale]
+        # return 10   # base_velocity(3) + ee_pose(7): [vx, vy, wz, x, y, z, qw, qx, qy, qz]
                     # 此处根据low-level policy的输入维度进行设置。当前设置为10维，包含3维的底盘速度和7维的末端执行器位姿（位置+四元数）。
         # return 7    # base_velocity(3) + ee_pos(3) + yaw(1)
 
@@ -317,6 +318,9 @@ class PreTrainedPickAction(ActionTerm):
         self._raw_actions[:] = actions
         r = self.cfg.low_level_command_ranges
 
+        delta_scale = torch.sigmoid(actions[:, 10])  # [0,1] 之间的缩放因子
+        # print(f"Delta scale from action: {delta_scale}")
+
         # ── 1. 底盘速度：tanh + scale/offset（保持不变）─────────────────
         for i, (lo, hi) in enumerate([
             (r.lin_vel_x[0], r.lin_vel_x[1]),
@@ -343,9 +347,9 @@ class PreTrainedPickAction(ActionTerm):
         # actions[:, 3:6] 被解释为 base 系下的位置增量方向
         # 先用 tanh 压缩到 [-1,1]，再乘以最大步长（米/step）
         delta_pos_max = self.cfg.delta_pos_max   # e.g. 0.05 m per high-level step
-        delta_pos_b = torch.tanh(self._raw_actions[:, 3:6]) * delta_pos_max  # (N, 3), base 系
-        print(f"Raw ee_pos commands before scaling(base): {self._raw_actions[:, 3:6]}")
-        print(f"Delta ee_pos commands after tanh and scaling(base): {delta_pos_b}")
+        delta_pos_b = torch.tanh(self._raw_actions[:, 3:6]) * delta_pos_max * delta_scale.unsqueeze(-1)  # (N, 3), base 系
+        # print(f"Raw ee_pos commands before scaling(base): {self._raw_actions[:, 3:6]}")
+        # print(f"Delta ee_pos commands after tanh and scaling(base): {delta_pos_b}")
 
         # base → world：只旋转方向，不平移（增量是方向向量）
         root_quat_w = self.robot.data.root_quat_w  # (N,4)

@@ -387,6 +387,28 @@ def object_ee_distance(
 
     return reward
 
+def reward_delta_scale(env: ManagerBasedRLEnv,
+                       action_name: str = "pre_trained_nav_action",
+                       object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+                       d_max: float = 0.5,
+                       ) -> torch.Tensor:
+    action_term = env.action_manager.get_term(action_name)
+    delta_scale = action_term.raw_actions[:,10]  # (N, action_dim)
+    target_pos_w = action_term.raw_actions[:, 3:6]  # (N, 3)
+    object_pos = env.scene[object_cfg.name].data.root_pos_w[:, :3]
+
+    dist = torch.norm(object_pos - target_pos_w, dim=-1)
+
+    target_scale = torch.clamp(dist / d_max, 0.0, 1.0)
+
+    reward = -torch.nn.functional.smooth_l1_loss(
+        delta_scale, target_scale, reduction="none"
+    )
+
+    reward -= 0.01 * delta_scale
+
+    return reward
+
 def gripper_state_stage_reward(
     env: ManagerBasedRLEnv,
     gripper_action_term_name: str = "gripper_action",

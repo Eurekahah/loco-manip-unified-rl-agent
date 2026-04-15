@@ -329,6 +329,15 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         },
     )
 
+    delta_scale_reward = RewTerm(
+        func=mdp.reward_delta_scale,
+        weight=3.0,
+        params={
+            "action_name": "pre_trained_pick_action",
+            "object_cfg": SceneEntityCfg("object"),
+            "d_max": 0.5,  
+        }
+    )
     # =========================================================
     # 阶段四：抬起物体（稀疏高奖励）
     # =========================================================
@@ -401,6 +410,15 @@ class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
             "object_cfg": SceneEntityCfg("object"),
             "height_threshold": 0.5,  # 物体世界位姿高度小于0.5m算掉落
         },  
+    )
+
+    action_target_too_far = DoneTerm(
+        func=mdp.action_target_too_far,
+        params={
+            "action_term_name": "pre_trained_pick_action",
+            "ee_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
+            "distance_threshold": 0.7,
+        },
     )
     # hold_object = DoneTerm(
     #     func=mdp.object_held_for_duration,  # 替换为新函数

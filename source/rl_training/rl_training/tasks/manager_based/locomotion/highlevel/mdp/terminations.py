@@ -59,6 +59,41 @@ def object_dropped(
     # print(f"Height threshold: {height_threshold}")
 
     return object_height < height_threshold  # (N,) bool
+
+
+def action_target_too_far(
+    env: ManagerBasedRLEnv,
+    action_term_name: str = "pre_trained_pick_action",
+    ee_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="arm_link6"),
+    distance_threshold: float = 0.3,
+) -> torch.Tensor:
+    """Terminate if the policy target position (raw_action[:, 3:6]) is too far from current EE position.
+
+    Args:
+        env: The environment instance.
+        action_term_name: Name of the action term to read raw actions from.
+        ee_cfg: Scene entity config for the end-effector frame.
+        distance_threshold: Max allowed distance (meters) between target and EE.
+
+    Returns:
+        Boolean tensor of shape (num_envs,), True where termination should occur.
+    """
+    # 获取 action term 的 raw action，取第 3:6 列作为目标位置
+    action_term = env.action_manager.get_term(action_term_name)
+    target_pos = action_term.raw_actions[:, 3:6]  # shape: (num_envs, 3), world frame
+
+    target_norm = torch.norm(target_pos, dim=-1)
+    if target_norm < 1e-6:
+        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    # 获取当前 EE 位置
+    ee_entity = env.scene[ee_cfg.name]
+    # FrameTransformer 的 data.target_pos_w shape: (num_envs, num_frames, 3)
+    ee_pos = ee_entity.data.body_pos_w[:, 0, :]  # shape: (num_envs, 3)
+
+    # 计算欧氏距离
+    dist = torch.norm(target_pos - ee_pos, dim=-1)  # shape: (num_envs,)
+    return dist > distance_threshold
  
 
 def object_held_for_duration(
