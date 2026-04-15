@@ -148,6 +148,19 @@ class PreTrainedPickAction(ActionTerm):
 
         self._low_level_obs_manager = ObservationManager({"ll_policy": cfg.low_level_observations}, env)
         self._counter = 0
+
+        # ── 增量模式：缓存上一时刻的目标位姿（world 系） ──────────────────────
+        self._target_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
+        self._target_quat_w = torch.zeros(self.num_envs, 4, device=self.device)
+        self._target_quat_w[:, 0] = 1.0  # 初始化为单位四元数 (w=1)
+        self._target_initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+        # 直接用 find_bodies 查，不需要 SceneEntityCfg 和 resolve
+        self._ee_body_idx = self.robot.find_bodies(self.cfg.ee_body_name)[0][0]
+
+        self._delta_pos_w = torch.zeros_like(self._target_pos_w)
+        self._delta_yaw = torch.zeros(self.num_envs, 1, device=self.device)
+        self._delta_action = torch.zeros(self.num_envs, 4, device=self.device)  # (delta_pos_w, delta_yaw)
     """
     Properties.
     """
@@ -178,6 +191,20 @@ class PreTrainedPickAction(ActionTerm):
         scale = (hi - lo) / 2.0
         offset = (hi + lo) / 2.0
         return scale, offset
+    
+    def _reset_target_to_current_ee(self, env_ids: torch.Tensor | None = None):
+        """将目标位姿重置为当前 EE 实际位姿（world 系）。"""
+        # 取当前 EE body 的 world 位姿
+        ee_pos_w  = self.robot.data.body_pos_w[:, self._ee_body_idx, :]   # (N, 3)
+        ee_quat_w = self.robot.data.body_quat_w[:, self._ee_body_idx, :]  # (N, 4)
+        if env_ids is None:
+            self._target_pos_w[:]  = ee_pos_w
+            self._target_quat_w[:] = ee_quat_w
+            self._target_initialized[:] = True
+        else:
+            self._target_pos_w[env_ids]  = ee_pos_w[env_ids]
+            self._target_quat_w[env_ids] = ee_quat_w[env_ids]
+            self._target_initialized[env_ids] = True
     
     # def process_actions(self, actions: torch.Tensor):
     #     self._raw_actions[:] = actions
@@ -235,11 +262,62 @@ class PreTrainedPickAction(ActionTerm):
     #     self._raw_actions[:, 3:6]  = target_pos_w
     #     self._raw_actions[:, 6:10] = target_quat_w
 
+    # def process_actions(self, actions: torch.Tensor):
+    #     self._raw_actions[:] = actions
+    #     r = self.cfg.low_level_command_ranges
+
+    #     # ── 1. 底盘速度：tanh + scale/offset ──────────────────────────
+    #     for i, (lo, hi) in enumerate([
+    #         (r.lin_vel_x[0], r.lin_vel_x[1]),
+    #         (r.lin_vel_y[0], r.lin_vel_y[1]),
+    #         (r.ang_vel_z[0], r.ang_vel_z[1]),
+    #     ]):
+    #         scale, offset = self.range_to_scale_offset(lo, hi)
+    #         self._raw_actions[:, i] = torch.tanh(actions[:, i]) * scale + offset
+
+    #     # ── 2. 底盘线速度死区 ──────────────────────────────────────────
+    #     lin_vel_norm = torch.norm(self._raw_actions[:, 0:2], p=2, dim=-1, keepdim=True)
+    #     self._raw_actions[:, 0:2] = torch.where(
+    #         lin_vel_norm < 0.2,
+    #         torch.zeros_like(self._raw_actions[:, 0:2]),
+    #         self._raw_actions[:, 0:2]
+    #     )
+
+    #     # ── 3. EE 目标位置：直接使用 object 的 world 坐标 ─────────────
+    #     # 忽略 policy 输出的 actions[:, 3:6]，从 scene 中取物体位置
+    #     offset = torch.tensor([0.0, 0.0, 0.1], device=self.device)  # x, y, z 偏置（米）
+    #     object_pos_w = self._env.scene["object"].data.root_pos_w  # (N, 3)
+    #     self._raw_actions[:, 3:6] = object_pos_w + offset
+
+    #     # ── 4. 构造固定朝下 + yaw 的四元数 ────────────────────────────
+    #     yaw = actions[:, 6]
+    #     yaw = torch.tanh(yaw) * 0.5 * torch.pi  # [-0.5π, 0.5π]
+    #     zeros = torch.zeros_like(yaw)
+
+    #     # Rz(yaw)
+    #     quat_z = math_utils.quat_from_euler_xyz(zeros, zeros, yaw)
+    #     # Rx(pi) → 朝下
+    #     quat_down = math_utils.quat_from_euler_xyz(
+    #         torch.full_like(yaw, torch.pi),
+    #         zeros,
+    #         zeros,
+    #     )
+    #     # 最终姿态：Rz * Rx
+    #     quat = math_utils.quat_mul(quat_z, quat_down)
+    #     self._raw_actions[:, 6:10] = quat
+
+    #     # ── 5. 位置已是 world 系，只需将四元数也保持 world 系 ──────────
+    #     # EE 姿态：将 quat（当前以 base 系构造的偏航）转到 world 系
+    #     root_quat_w = self.robot.data.root_quat_w
+    #     # 仅旋转姿态：world_quat = root_quat_w * local_quat
+    #     target_quat_w = math_utils.quat_mul(root_quat_w, quat)
+    #     self._raw_actions[:, 6:10] = target_quat_w
+
     def process_actions(self, actions: torch.Tensor):
         self._raw_actions[:] = actions
         r = self.cfg.low_level_command_ranges
 
-        # ── 1. 底盘速度：tanh + scale/offset ──────────────────────────
+        # ── 1. 底盘速度：tanh + scale/offset（保持不变）─────────────────
         for i, (lo, hi) in enumerate([
             (r.lin_vel_x[0], r.lin_vel_x[1]),
             (r.lin_vel_y[0], r.lin_vel_y[1]),
@@ -248,7 +326,7 @@ class PreTrainedPickAction(ActionTerm):
             scale, offset = self.range_to_scale_offset(lo, hi)
             self._raw_actions[:, i] = torch.tanh(actions[:, i]) * scale + offset
 
-        # ── 2. 底盘线速度死区 ──────────────────────────────────────────
+        # ── 2. 底盘线速度死区（保持不变）────────────────────────────────
         lin_vel_norm = torch.norm(self._raw_actions[:, 0:2], p=2, dim=-1, keepdim=True)
         self._raw_actions[:, 0:2] = torch.where(
             lin_vel_norm < 0.2,
@@ -256,35 +334,64 @@ class PreTrainedPickAction(ActionTerm):
             self._raw_actions[:, 0:2]
         )
 
-        # ── 3. EE 目标位置：直接使用 object 的 world 坐标 ─────────────
-        # 忽略 policy 输出的 actions[:, 3:6]，从 scene 中取物体位置
-        offset = torch.tensor([0.0, 0.0, 0.1], device=self.device)  # x, y, z 偏置（米）
-        object_pos_w = self._env.scene["object"].data.root_pos_w  # (N, 3)
-        self._raw_actions[:, 3:6] = object_pos_w + offset
+        # ── 3. 未初始化的 env 先重置目标到当前 EE 位姿 ──────────────────
+        uninit_ids = (~self._target_initialized).nonzero(as_tuple=False).squeeze(-1)
+        if uninit_ids.numel() > 0:
+            self._reset_target_to_current_ee(uninit_ids)
 
-        # ── 4. 构造固定朝下 + yaw 的四元数 ────────────────────────────
-        yaw = actions[:, 6]
-        yaw = torch.tanh(yaw) * 0.5 * torch.pi  # [-0.5π, 0.5π]
-        zeros = torch.zeros_like(yaw)
+        # ── 4. 计算位置增量 Δpos（world 系，tanh 锁幅）──────────────────
+        # actions[:, 3:6] 被解释为 base 系下的位置增量方向
+        # 先用 tanh 压缩到 [-1,1]，再乘以最大步长（米/step）
+        delta_pos_max = self.cfg.delta_pos_max   # e.g. 0.05 m per high-level step
+        delta_pos_b = torch.tanh(self._raw_actions[:, 3:6]) * delta_pos_max  # (N, 3), base 系
+        print(f"Raw ee_pos commands before scaling(base): {self._raw_actions[:, 3:6]}")
+        print(f"Delta ee_pos commands after tanh and scaling(base): {delta_pos_b}")
 
-        # Rz(yaw)
-        quat_z = math_utils.quat_from_euler_xyz(zeros, zeros, yaw)
-        # Rx(pi) → 朝下
-        quat_down = math_utils.quat_from_euler_xyz(
-            torch.full_like(yaw, torch.pi),
-            zeros,
-            zeros,
-        )
-        # 最终姿态：Rz * Rx
-        quat = math_utils.quat_mul(quat_z, quat_down)
-        self._raw_actions[:, 6:10] = quat
+        # base → world：只旋转方向，不平移（增量是方向向量）
+        root_quat_w = self.robot.data.root_quat_w  # (N,4)
+        delta_pos_w = math_utils.quat_apply(root_quat_w, delta_pos_b)  # (N,3) world系增量
 
-        # ── 5. 位置已是 world 系，只需将四元数也保持 world 系 ──────────
-        # EE 姿态：将 quat（当前以 base 系构造的偏航）转到 world 系
-        root_quat_w = self.robot.data.root_quat_w
-        # 仅旋转姿态：world_quat = root_quat_w * local_quat
-        target_quat_w = math_utils.quat_mul(root_quat_w, quat)
-        self._raw_actions[:, 6:10] = target_quat_w
+        # combine_frame_transforms 会加 zeros_pos，结果即为旋转后的增量向量
+
+        # ── 5. 叠加位置增量，并 clamp 到工作空间（world 系 AABB）────────
+        new_pos_w = self._target_pos_w + delta_pos_w
+
+        # ⚠️ clamp 用 world 系绝对坐标，需在 Cfg 里单独配置
+        # new_pos_w[:, 0] = new_pos_w[:, 0].clamp(
+        #     self.cfg.ee_pos_world_x[0], self.cfg.ee_pos_world_x[1]
+        # )
+        # new_pos_w[:, 1] = new_pos_w[:, 1].clamp(
+        #     self.cfg.ee_pos_world_y[0], self.cfg.ee_pos_world_y[1]
+        # )
+        # new_pos_w[:, 2] = new_pos_w[:, 2].clamp(
+        #     self.cfg.ee_pos_world_z[0], self.cfg.ee_pos_world_z[1]
+        # )
+        self._target_pos_w[:] = new_pos_w
+
+
+        # ── 6. 计算姿态增量 Δyaw，叠加到当前目标四元数 ──────────────────
+        delta_yaw_max = self.cfg.delta_yaw_max  # e.g. 0.1 rad per high-level step
+        delta_yaw = torch.tanh(self._raw_actions[:, 6]) * delta_yaw_max  # (N,)
+
+        self._delta_pos_w = delta_pos_w.clone()
+        self._delta_yaw   = delta_yaw.clone()
+        self._delta_action = torch.cat([
+            delta_pos_w,
+            delta_yaw.unsqueeze(-1)
+        ], dim=-1)  # (N,4)
+        zeros = torch.zeros_like(delta_yaw)
+
+        # 构造增量旋转四元数（绕 world Z 轴）
+        delta_quat_z = math_utils.quat_from_euler_xyz(zeros, zeros, delta_yaw)  # (N, 4)
+
+        # 叠加到上一时刻目标四元数：q_new = delta_q * q_old
+        new_quat_w = math_utils.quat_mul(delta_quat_z, self._target_quat_w)
+        new_quat_w = torch.nn.functional.normalize(new_quat_w, p=2, dim=-1)
+        self._target_quat_w[:] = new_quat_w
+
+        # ── 7. 写入 _raw_actions（供 apply_actions 读取）────────────────
+        self._raw_actions[:, 3:6]  = self._target_pos_w
+        self._raw_actions[:, 6:10] = self._target_quat_w
 
         # 位置直接保留 step 3 写入的 world 坐标，无需再变换
         # ==================== DEBUG: 边界框转换到世界坐标 ====================
@@ -346,6 +453,13 @@ class PreTrainedPickAction(ActionTerm):
         # # =====================================================================
 
     def apply_actions(self):
+
+        # ── episode reset 时重置增量目标位姿 ────────────────────────────
+        if hasattr(self._env, "episode_length_buf"):
+            reset_ids = (self._env.episode_length_buf == 0).nonzero(as_tuple=False).squeeze(-1)
+            if reset_ids.numel() > 0:
+                self._target_initialized[reset_ids] = False  # 标记为未初始化，下一步重置
+
         
         if self._counter % self.cfg.low_level_decimation == 0:
             low_level_obs = self._low_level_obs_manager.compute_group("ll_policy")
@@ -494,6 +608,18 @@ class PreTrainedPickActionCfg(ActionTermCfg):
     """The command name in CommandManager that this action term outputs to. Should correspond to a command in CommandsCfg."""
     debug_vis: bool = False
     """Whether to visualize debug information. Defaults to False."""
+
+    delta_pos_max: float = 0.05
+    """每个高层 step EE 位置增量的最大幅度（米），tanh 后乘以此值。"""
+    
+    delta_yaw_max: float = 0.1
+    """每个高层 step EE yaw 增量的最大幅度（弧度），tanh 后乘以此值。"""
+
+    ee_body_name: str = "arm_link6"
+
+    ee_pos_world_x: tuple[float, float] = (0.0, 3.0)
+    ee_pos_world_y: tuple[float, float] = (-2.0, 2.0)
+    ee_pos_world_z: tuple[float, float] = (0.3, 1.5)  # ⚠️ 关键：z 不能低于地面
     @configclass
     class LowLevelCommandRanges:
         # base_velocity ranges，对应 CommandsCfg.base_velocity.ranges

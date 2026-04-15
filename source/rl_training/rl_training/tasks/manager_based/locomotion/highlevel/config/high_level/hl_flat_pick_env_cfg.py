@@ -236,6 +236,14 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         params={"action_name": "pre_trained_pick_action"},
     )
 
+    arm_posture_deviation = RewTerm(
+        func=mdp.joint_deviation_l1,
+        weight=-0.5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="arm_link[1-6]"),
+        },
+    )
+
     # =========================================================
     # 阶段二：末端执行器精确接近物体
     # =========================================================
@@ -273,6 +281,24 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         },
     )
 
+    delta_action_penalty_near_goal = RewTerm(
+        func=mdp.delta_action_l2_near_target,
+        weight=-2.0,
+        params={
+            "action_name": "pre_trained_pick_action",
+            "object_cfg": SceneEntityCfg("object"),
+            "distance_threshold": 0.2,
+        },
+    )
+
+    ee_velocity_penalty = RewTerm(
+        func=mdp.ee_velocity_l2,
+        weight=-0.5,
+        params={
+            "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
+        },
+    )
+
     # =========================================================
     # 阶段三：夹爪对准物体
     # =========================================================
@@ -295,7 +321,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 夹爪同步接触奖励：arm_link7/8 两指同时接触物体时给予奖励
     grasp_contact_symmetric = RewTerm(
         func=mdp.gripper_contact_symmetric_grasp,
-        weight=500.0,  
+        weight=50.0,  
         params={
             "threshold": 0.5,
             "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
@@ -310,7 +336,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 稀疏成功奖励：物体高度超过阈值即触发
     lift_object = RewTerm(
         func=mdp.object_is_lifted,
-        weight=2000.0,                         # 最高权重，作为最终目标信号
+        weight=300.0,                         # 最高权重，作为最终目标信号
         params={
             "minimal_height": 0.04,          # 离桌面 4cm 算抬起
             "object_cfg": SceneEntityCfg("object"),
@@ -336,6 +362,25 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
             "threshold": 5.0,
         },
     )
+
+    joint_pos_limit_penalty = RewTerm(
+        func=mdp.joint_pos_limits,
+        weight=-0.5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+        },
+    )
+
+    joint_vel_limit_penalty = RewTerm(
+        func=mdp.joint_vel_limits,
+        weight=-0.5,
+        params={
+            "soft_ratio": 0.9,
+            "asset_cfg": SceneEntityCfg("robot"),
+        },
+    )
+
+    
 
     # 关节速度惩罚：防止手臂抖动、过激运动
     # joint_vel_penalty = RewTerm(
@@ -397,7 +442,7 @@ class HLFlatPickEventCfg(HighLevelEventCfg):
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (0.2, 0.3), "y": (-0.1, 0.1),  "yaw": (-0.393, 0.393)},
+            "pose_range": {"x": (1.2, 1.3), "y": (-0.1, 0.1),  "yaw": (-0.393, 0.393)},
             "velocity_range": {
                 "x": (-0.0, 0.0),
                 "y": (-0.0, 0.0),

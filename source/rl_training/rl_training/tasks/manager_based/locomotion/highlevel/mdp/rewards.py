@@ -437,6 +437,85 @@ def gripper_state_stage_reward(
 
     return reward + penalty
 
+def delta_action_l2_near_target(
+    env,
+    action_name: str,
+    object_cfg,
+    distance_threshold: float = 0.2,
+):
+    """
+    Penalize delta action magnitude when EE is close to object.
+
+    Returns:
+        reward: (num_envs,)
+    """
+    object_asset = env.scene[object_cfg.name]
+    # ---------------------------
+    # 1. 获取 delta action
+    # ---------------------------
+    action_term = env.action_manager.get_term(action_name)
+    delta_action = action_term._delta_action  # (N, action_dim)
+
+    # L2 norm
+    action_l2 = torch.sum(delta_action ** 2, dim=-1)  # (N,)
+
+    # ---------------------------
+    # 2. 获取 EE 和 object 距离
+    # ---------------------------
+    object_pos_w = object_asset.data.root_pos_w[:, :3]  # (N, 3)
+
+    # 默认用 EE（arm_link6）
+    ee_pos = env.scene["robot"].data.body_pos_w[:, env.scene["robot"].data.body_names.index("arm_link6"), :]
+
+    dist = torch.norm(ee_pos - object_pos_w, dim=-1)  # (N,)
+
+    # ---------------------------
+    # 3. gating（只在接近时生效）
+    # ---------------------------
+    near_mask = (dist < distance_threshold).float()
+
+    # ---------------------------
+    # 4. reward
+    # ---------------------------
+    reward = action_l2 * near_mask
+
+    return reward
+
+def ee_velocity_l2(
+    env,
+    ee_frame_cfg,
+):
+    """
+    Penalize end-effector velocity magnitude.
+
+    Returns:
+        reward: (num_envs,)
+    """
+
+    robot = env.scene[ee_frame_cfg.name]
+
+    # ---------------------------
+    # 1. 找到 EE index
+    # ---------------------------
+    body_name = ee_frame_cfg.body_names[0]
+    body_id = robot.data.body_names.index(body_name)
+
+    # ---------------------------
+    # 2. 获取 EE 速度
+    # ---------------------------
+    # linear velocity (world frame)
+    ee_vel = robot.data.body_lin_vel_w[:, body_id, :]  # (N, 3)
+
+    # L2 norm
+    vel_l2 = torch.sum(ee_vel ** 2, dim=-1)  # (N,)
+
+    # ---------------------------
+    # 3. reward
+    # ---------------------------
+    reward = vel_l2
+
+    return reward
+
 def object_ee_symmetric_alignment(
     env: ManagerBasedRLEnv,
     std: float,
