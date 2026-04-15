@@ -238,7 +238,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     arm_posture_deviation = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.5,
+        weight=-0.05,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="arm_link[1-6]"),
         },

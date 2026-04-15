@@ -83,8 +83,7 @@ def action_target_too_far(
     target_pos = action_term.raw_actions[:, 3:6]  # shape: (num_envs, 3), world frame
 
     target_norm = torch.norm(target_pos, dim=-1)
-    if target_norm < 1e-6:
-        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    is_valid_target = target_norm > 1e-6  # 有效的目标位置（非零）
 
     # 获取当前 EE 位置
     ee_entity = env.scene[ee_cfg.name]
@@ -93,7 +92,7 @@ def action_target_too_far(
 
     # 计算欧氏距离
     dist = torch.norm(target_pos - ee_pos, dim=-1)  # shape: (num_envs,)
-    return dist > distance_threshold
+    return (dist > distance_threshold) & is_valid_target
  
 
 def object_held_for_duration(
