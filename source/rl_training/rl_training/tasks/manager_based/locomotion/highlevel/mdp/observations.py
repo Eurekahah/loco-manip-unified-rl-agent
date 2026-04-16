@@ -14,9 +14,11 @@ from isaaclab.utils.math import (
     quat_apply_inverse,
     yaw_quat,
     wrap_to_pi,
+    quat_inv,
+    quat_mul,
 )
 
-from .utils import robot_root_pos_w, robot_root_quat_w, object_root_pos_w
+from .utils import robot_root_pos_w, robot_root_quat_w, object_root_pos_w, object_root_quat_w
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -112,6 +114,47 @@ def object_position_in_robot_root_frame(
     # print(f"Relative position(root): {rel_pos_b}")
 
     return rel_pos_b  # (N, 3)
+
+def object_pose_in_robot_root_frame(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg,
+    use_heading_frame: bool = True,
+) -> torch.Tensor:
+    """
+    Relative pose of an object expressed in the robot's heading frame.
+    Returns shape (N, 7): [x, y, z, qw, qx, qy, qz] in robot heading frame.
+
+    Args:
+        robot_cfg:         SceneEntityCfg for the robot articulation.
+        object_cfg:        SceneEntityCfg for the target rigid object.
+        use_heading_frame: If True, express in yaw-only frame (recommended for
+                           navigation). If False, express in full body frame.
+    """
+    robot_pos_w  = robot_root_pos_w(env, robot_cfg)   # (N, 3)
+    robot_quat_w = robot_root_quat_w(env, robot_cfg)  # (N, 4) wxyz
+    object_pos_w = object_root_pos_w(env, object_cfg) # (N, 3)
+    object_quat_w = object_root_quat_w(env, object_cfg) # (N, 4) wxyz
+
+    # --- Relative position ---
+    rel_pos_w = object_pos_w - robot_pos_w  # (N, 3)
+
+    if use_heading_frame:
+        ref_quat = yaw_quat(robot_quat_w)  # (N, 4) 只保留yaw
+    else:
+        ref_quat = robot_quat_w            # (N, 4) 完整姿态
+
+    # 相对位置：旋转到参考帧下
+    rel_pos_b = quat_apply_inverse(ref_quat, rel_pos_w)  # (N, 3)
+
+    # --- Relative orientation ---
+    # q_rel = q_ref^{-1} * q_object
+    # isaaclab中 quat_mul 约定: wxyz
+    ref_quat_inv = quat_inv(ref_quat)                          # (N, 4)
+    rel_quat_b = quat_mul(ref_quat_inv, object_quat_w)        # (N, 4)
+
+    # --- Concatenate (N, 3+4=7) ---
+    return torch.cat([rel_pos_b, rel_quat_b], dim=-1)  # (N, 7)
 
 
 def object_heading_in_robot_root_frame(

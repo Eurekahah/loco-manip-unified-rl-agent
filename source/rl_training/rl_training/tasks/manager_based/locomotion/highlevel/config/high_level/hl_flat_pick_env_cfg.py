@@ -67,9 +67,9 @@ class PolicyCfg(HighLevelObservationsCfg.PolicyCfg):
 
 @configclass
 class CriticCfg(HighLevelObservationsCfg.CriticCfg):
-    # 目标物体相对机器人的位置
-    target_object_rel_pos = ObsTerm(
-        func=mdp.object_position_in_robot_root_frame,
+    # 目标物体相对机器人的位姿
+    target_object_rel_pose = ObsTerm(
+        func=mdp.object_pose_in_robot_root_frame,
         params={
             "object_cfg": SceneEntityCfg("object"),
             "robot_cfg":  SceneEntityCfg("robot"),
@@ -81,9 +81,9 @@ class CriticCfg(HighLevelObservationsCfg.CriticCfg):
 
 @configclass
 class TeacherCfg(HighLevelObservationsCfg.PolicyCfg):
-    # 目标物体相对机器人的位置
-    target_object_rel_pos = ObsTerm(
-        func=mdp.object_position_in_robot_root_frame,
+    # 目标物体相对机器人的位姿
+    target_object_rel_pose = ObsTerm(
+        func=mdp.object_pose_in_robot_root_frame,
         params={
             "object_cfg": SceneEntityCfg("object"),
             "robot_cfg":  SceneEntityCfg("robot"),
@@ -125,8 +125,8 @@ class HLFlatPickTeacherWithCameraObservationsCfg(HighLevelObservationsCfg):
                 "model_name":    "resnet18",
             },
         )
-        target_object_rel_pos = ObsTerm(
-            func=mdp.object_position_in_robot_root_frame,
+        target_object_rel_pose = ObsTerm(
+            func=mdp.object_pose_in_robot_root_frame,
             params={
                 "object_cfg": SceneEntityCfg("object"),
                 "robot_cfg":  SceneEntityCfg("robot"),
@@ -238,7 +238,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     arm_posture_deviation = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.05,
+        weight=-0.005,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="arm_link[1-6]"),
         },
@@ -329,15 +329,15 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         },
     )
 
-    delta_scale_reward = RewTerm(
-        func=mdp.reward_delta_scale,
-        weight=3.0,
-        params={
-            "action_name": "pre_trained_pick_action",
-            "object_cfg": SceneEntityCfg("object"),
-            "d_max": 0.5,  
-        }
-    )
+    # delta_scale_reward = RewTerm(
+    #     func=mdp.reward_delta_scale,
+    #     weight=3.0,
+    #     params={
+    #         "action_name": "pre_trained_pick_action",
+    #         "object_cfg": SceneEntityCfg("object"),
+    #         "d_max": 0.5,  
+    #     }
+    # )
     # =========================================================
     # 阶段四：抬起物体（稀疏高奖励）
     # =========================================================

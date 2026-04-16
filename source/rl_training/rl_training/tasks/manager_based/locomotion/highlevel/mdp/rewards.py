@@ -729,7 +729,7 @@ def gripper_contact_symmetric_grasp(
         gripper_term._processed_actions == gripper_term._close_command, dim=-1
     ).float() # [N,] bool
 
-    print(f"Gripper close command: {is_close_cmd}")
+    # print(f"Gripper close command: {is_close_cmd}")
     
     max_force1 = get_max_force(env, sensor_cfg_finger1)
     max_force2 = get_max_force(env, sensor_cfg_finger2)

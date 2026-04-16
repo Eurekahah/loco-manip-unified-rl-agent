@@ -40,3 +40,8 @@ def object_root_pos_w(env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg) -> tor
     """World-frame root position of any rigid object or articulation, shape (N, 3)."""
     asset = get_asset(env, object_cfg)
     return asset.data.root_pos_w  # (N, 3)
+
+def object_root_quat_w(env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg) -> torch.Tensor:
+    """World-frame root quaternion (w, x, y, z) of any rigid object or articulation, shape (N, 4)."""
+    asset = get_asset(env, object_cfg)
+    return asset.data.root_quat_w  # (N, 4)
