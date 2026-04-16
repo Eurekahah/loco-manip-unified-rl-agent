@@ -718,27 +718,33 @@ def gripper_contact_symmetric_grasp(
     threshold: float,
     sensor_cfg_finger1: SceneEntityCfg,
     sensor_cfg_finger2: SceneEntityCfg,
+    gripper_action_name: str = "gripper_action",  # 你cfg里的action term名称
 ) -> torch.Tensor:
-    """
-    对称双指接触奖励（合并 both_fingers_contact + contact_symmetry）：
-    1. 双指同时接触才给奖励（乘法耦合，消除单指靠墙局部最优）
-    2. 接触力越对称奖励越高（鼓励物体位于两指中间）
-    只有两指都接触且力对称时才给最高奖励
-    """
-    max_force1 = get_max_force(env, sensor_cfg_finger1)  # [N]
-    max_force2 = get_max_force(env, sensor_cfg_finger2)  # [N]
+    
+    # ---- 获取夹爪闭合状态 ----
+    # 方法：直接从action manager取binary action term
+    gripper_term = env.action_manager.get_term(gripper_action_name)
+    # _binary_encoded_actions: shape [N,1], 1.0=open命令, 0.0=close命令
+    is_close_cmd = torch.all(
+        gripper_term._processed_actions == gripper_term._close_command, dim=-1
+    ).float() # [N,] bool
 
-    # 1. 双指同时接触门控（乘法耦合）
+    print(f"Gripper close command: {is_close_cmd}")
+    
+    max_force1 = get_max_force(env, sensor_cfg_finger1)
+    max_force2 = get_max_force(env, sensor_cfg_finger2)
+    
     contact1 = (max_force1 > threshold).float()
     contact2 = (max_force2 > threshold).float()
-    gate = contact1 * contact2  # 任一未接触则奖励归零
-
-    # 2. 接触力对称性奖励：力差越小越好，归一化到 [0, 1]
+    gate = contact1 * contact2
+    
     asymmetry = (max_force1 - max_force2).abs()
     reward_symmetry = 1.0 - asymmetry / (max_force1 + max_force2 + 1e-6)
-
-    # 门控 × 对称性：双指同时接触 且 力对称才得高奖励
-    return gate * reward_symmetry
+    
+    # 额外门控：必须在发出close命令时接触才算有效
+    close_gate = is_close_cmd.float()
+    
+    return gate * reward_symmetry * close_gate
 
 def object_is_lifted(
     env: ManagerBasedRLEnv,

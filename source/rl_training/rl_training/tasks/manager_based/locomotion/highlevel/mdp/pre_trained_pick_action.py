@@ -321,6 +321,7 @@ class PreTrainedPickAction(ActionTerm):
         delta_scale = torch.sigmoid(actions[:, 10])  # [0,1] 之间的缩放因子
         # print(f"Delta scale from action: {delta_scale}")
 
+        self._raw_actions[:,10] = delta_scale  # 将 delta_scale 也放入 raw_actions，供 reward term 使用
         # ── 1. 底盘速度：tanh + scale/offset（保持不变）─────────────────
         for i, (lo, hi) in enumerate([
             (r.lin_vel_x[0], r.lin_vel_x[1]),
@@ -360,36 +361,33 @@ class PreTrainedPickAction(ActionTerm):
         # ── 5. 叠加位置增量，并 clamp 到工作空间（world 系 AABB）────────
         new_pos_w = self._target_pos_w + delta_pos_w
 
-        # ⚠️ clamp 用 world 系绝对坐标，需在 Cfg 里单独配置
-        # new_pos_w[:, 0] = new_pos_w[:, 0].clamp(
-        #     self.cfg.ee_pos_world_x[0], self.cfg.ee_pos_world_x[1]
-        # )
-        # new_pos_w[:, 1] = new_pos_w[:, 1].clamp(
-        #     self.cfg.ee_pos_world_y[0], self.cfg.ee_pos_world_y[1]
-        # )
-        # new_pos_w[:, 2] = new_pos_w[:, 2].clamp(
-        #     self.cfg.ee_pos_world_z[0], self.cfg.ee_pos_world_z[1]
-        # )
         self._target_pos_w[:] = new_pos_w
 
 
         # ── 6. 计算姿态增量 Δyaw，叠加到当前目标四元数 ──────────────────
-        delta_yaw_max = self.cfg.delta_yaw_max  # e.g. 0.1 rad per high-level step
-        delta_yaw = torch.tanh(self._raw_actions[:, 6]) * delta_yaw_max  # (N,)
+        delta_rot_max_rpy = torch.tensor(
+        [self.cfg.delta_roll_max, self.cfg.delta_pitch_max, self.cfg.delta_yaw_max],
+            device=actions.device
+        )  # e.g. 0.1 rad per high-level step
+        delta_rpy = torch.tanh(actions[:, 6:9]) * delta_rot_max_rpy.unsqueeze(0)  # (N, 3)
+        # (N,)
 
+        delta_roll  = delta_rpy[:, 0]
+        delta_pitch = delta_rpy[:, 1]
+        delta_yaw   = delta_rpy[:, 2]
         self._delta_pos_w = delta_pos_w.clone()
-        self._delta_yaw   = delta_yaw.clone()
+        self._delta_rpy    = delta_rpy.clone()
         self._delta_action = torch.cat([
             delta_pos_w,
-            delta_yaw.unsqueeze(-1)
-        ], dim=-1)  # (N,4)
+            delta_rpy, 
+        ], dim=-1)  # (N,6)
         zeros = torch.zeros_like(delta_yaw)
 
         # 构造增量旋转四元数（绕 world Z 轴）
-        delta_quat_z = math_utils.quat_from_euler_xyz(zeros, zeros, delta_yaw)  # (N, 4)
+        delta_quat = math_utils.quat_from_euler_xyz(delta_roll, delta_pitch, delta_yaw)  # (N, 4)
 
         # 叠加到上一时刻目标四元数：q_new = delta_q * q_old
-        new_quat_w = math_utils.quat_mul(delta_quat_z, self._target_quat_w)
+        new_quat_w = math_utils.quat_mul(delta_quat, self._target_quat_w)
         new_quat_w = torch.nn.functional.normalize(new_quat_w, p=2, dim=-1)
         self._target_quat_w[:] = new_quat_w
 
@@ -618,6 +616,10 @@ class PreTrainedPickActionCfg(ActionTermCfg):
     
     delta_yaw_max: float = 0.1
     """每个高层 step EE yaw 增量的最大幅度（弧度），tanh 后乘以此值。"""
+    delta_roll_max: float = 0.1
+    """每个高层 step EE roll 增量的最大幅度（弧度），tanh 后乘以此值。"""
+    delta_pitch_max: float = 0.1
+    """每个高层 step EE pitch 增量的最大幅度（弧度），tanh 后乘以此值。"""
 
     ee_body_name: str = "arm_link6"
 
