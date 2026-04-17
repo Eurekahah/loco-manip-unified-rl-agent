@@ -525,14 +525,21 @@ class HLFlatSideCameraSceneCfg(HighLevelSceneCfg):
         ),
     )
 
-# @configclass
-# class HLFlatPickCurriculumCfg:
-#     action_rate_0 = CurrTerm(
-#         func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -1e-3, "num_steps": 0}
-#     )
-#     action_rate_1 = CurrTerm(
-#         func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -1e-2, "num_steps": 4096 * 500}
-#     )
+def override_value(env, env_ids, data, value, num_steps):
+    if env.common_step_counter > num_steps:
+        return value
+    return mdp.modify_term_cfg.NO_CHANGE
+
+@configclass
+class HLFlatPickCurriculumCfg:
+    ee_pos_delta_max = CurrTerm(
+        func=mdp.modify_term_cfg, 
+        params={
+            "address": "actions.pre_trained_pick_action.delta_pos_max",  # note: `_manager.cfg` is omitted
+            "modify_fn": override_value,
+            "modify_params": {"value": 0.05, "num_steps": 10000},
+        }
+    )
 
 
 
@@ -544,6 +551,7 @@ class HLFlatPickEnvCfg(HighLevelFlatEnvCfg):
     terminations: HLFlatPickTerminationsCfg = HLFlatPickTerminationsCfg()
     commands: HLFlatPickCommandCfg = HLFlatPickCommandCfg()
     events: HLFlatPickEventCfg = HLFlatPickEventCfg()
+    curriculums: HLFlatPickCurriculumCfg = HLFlatPickCurriculumCfg()
     gripper_link_names = "arm_link[7-8]"
 
     def __post_init__(self):
