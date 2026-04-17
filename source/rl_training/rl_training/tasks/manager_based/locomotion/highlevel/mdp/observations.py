@@ -16,6 +16,7 @@ from isaaclab.utils.math import (
     wrap_to_pi,
     quat_inv,
     quat_mul,
+    quat_apply,
 )
 
 from .utils import robot_root_pos_w, robot_root_quat_w, object_root_pos_w, object_root_quat_w
@@ -155,6 +156,54 @@ def object_pose_in_robot_root_frame(
 
     # --- Concatenate (N, 3+4=7) ---
     return torch.cat([rel_pos_b, rel_quat_b], dim=-1)  # (N, 7)
+
+def object_pose_in_ee_frame(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg,
+    ee_link_name: str = "arm_link6",
+    ee_offset_z: float = 0.135,
+) -> torch.Tensor:
+    """
+    物体位姿相对于 EE frame 的表达。
+    EE frame = arm_link6 沿其自身 z 轴方向偏移 ee_offset_z 处的虚拟帧。
+
+    Returns shape (N, 7): [x, y, z, qw, qx, qy, qz] in EE frame.
+    """
+    robot: Articulation = env.scene[robot_cfg.name]
+
+    # ── 1. 获取 arm_link6 在世界系下的位姿 ──────────────────────────────
+    link_idx = robot.find_bodies(ee_link_name)[0][0]          # int 或 List[int]
+    # body_pos_w / body_quat_w shape: (N, num_bodies, 3/4)
+    link_pos_w  = robot.data.body_pos_w[:, link_idx, :]   # (N, 3)
+    link_quat_w = robot.data.body_quat_w[:, link_idx, :]  # (N, 4) wxyz
+
+    # ── 2. 计算虚拟 EE 位置：沿 link6 局部 z 轴偏移 0.135 m ────────────
+    # 局部偏移向量 [0, 0, offset_z]，广播到 (N, 3)
+    offset_local = link_pos_w.new_zeros(link_pos_w.shape)
+    offset_local[:, 2] = ee_offset_z                      # z 分量
+
+    # 将局部偏移旋转到世界系
+    offset_world = quat_apply(link_quat_w, offset_local)  # (N, 3)
+    ee_pos_w = link_pos_w + offset_world                  # (N, 3)
+
+    # EE frame 姿态与 link6 相同（只做平移 offset，不额外旋转）
+    ee_quat_w = link_quat_w                               # (N, 4)
+
+    # ── 3. 获取物体在世界系下的位姿 ────────────────────────────────────
+    obj_pos_w  = object_root_pos_w(env, object_cfg)       # (N, 3)
+    obj_quat_w = object_root_quat_w(env, object_cfg)      # (N, 4)
+
+    # ── 4. 计算物体相对于 EE frame 的位姿 ───────────────────────────────
+    # 相对位置
+    rel_pos_w = obj_pos_w - ee_pos_w                      # (N, 3)
+    rel_pos_ee = quat_apply_inverse(ee_quat_w, rel_pos_w) # (N, 3)
+
+    # 相对姿态: q_rel = q_ee^{-1} * q_obj
+    ee_quat_inv = quat_inv(ee_quat_w)                     # (N, 4)
+    rel_quat_ee = quat_mul(ee_quat_inv, obj_quat_w)       # (N, 4)
+
+    return torch.cat([rel_pos_ee, rel_quat_ee], dim=-1)   # (N, 7)
 
 
 def object_heading_in_robot_root_frame(

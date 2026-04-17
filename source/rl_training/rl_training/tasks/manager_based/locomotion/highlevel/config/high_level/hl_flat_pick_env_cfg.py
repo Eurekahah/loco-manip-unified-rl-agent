@@ -75,6 +75,15 @@ class CriticCfg(HighLevelObservationsCfg.CriticCfg):
             "robot_cfg":  SceneEntityCfg("robot"),
         },
     )
+    target_object_rel_pose_ee = ObsTerm(
+        func=mdp.object_pose_in_ee_frame,
+        params={
+            "object_cfg":   SceneEntityCfg("object"),
+            "robot_cfg":    SceneEntityCfg("robot"),
+            "ee_link_name": "arm_link6",   # 可按需改
+            "ee_offset_z":  0.135,
+        },
+    )
     def __post_init__(self):
         self.enable_corruption = False
         self.concatenate_terms = True
@@ -87,6 +96,15 @@ class TeacherCfg(HighLevelObservationsCfg.PolicyCfg):
         params={
             "object_cfg": SceneEntityCfg("object"),
             "robot_cfg":  SceneEntityCfg("robot"),
+        },
+    )
+    target_object_rel_pose_ee = ObsTerm(
+        func=mdp.object_pose_in_ee_frame,
+        params={
+            "object_cfg":   SceneEntityCfg("object"),
+            "robot_cfg":    SceneEntityCfg("robot"),
+            "ee_link_name": "arm_link6",   # 可按需改
+            "ee_offset_z":  0.135,
         },
     )
     def __post_init__(self):
@@ -250,7 +268,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     cmd_pos_to_object = RewTerm(
         func=mdp.cmd_pos_to_object_reward,
-        weight=2.0,
+        weight=4.0,
         params={
             "action_term_name": "pre_trained_pick_action",
             "object_cfg":       SceneEntityCfg("object"),
@@ -273,7 +291,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 核心密集奖励：arm_link6（EE）到物体距离，高斯核塑形
     reach_object_ee = RewTerm(
         func=mdp.object_ee_distance,
-        weight=3.0,                          # 权重高于底盘接近，引导手臂精细运动
+        weight=5.0,                          # 权重高于底盘接近，引导手臂精细运动
         params={
             "std": 0.3,                      # 高斯核宽度，越小精度要求越高
             "object_cfg": SceneEntityCfg("object"),
@@ -321,23 +339,26 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 夹爪同步接触奖励：arm_link7/8 两指同时接触物体时给予奖励
     grasp_contact_symmetric = RewTerm(
         func=mdp.gripper_contact_symmetric_grasp,
-        weight=50.0,  
+        weight=500.0,  
         params={
             "threshold": 0.5,
             "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
             "sensor_cfg_finger2": SceneEntityCfg("arm_link8_contact_forces", body_names="arm_link8"),
+            "ee_frame_cfg_finger1": SceneEntityCfg("robot", body_names="arm_link7"),
+            "ee_frame_cfg_finger2": SceneEntityCfg("robot", body_names="arm_link8"),
+
         },
     )
 
-    # delta_scale_reward = RewTerm(
-    #     func=mdp.reward_delta_scale,
-    #     weight=3.0,
-    #     params={
-    #         "action_name": "pre_trained_pick_action",
-    #         "object_cfg": SceneEntityCfg("object"),
-    #         "d_max": 0.5,  
-    #     }
-    # )
+    delta_scale_reward = RewTerm(
+        func=mdp.reward_delta_scale,
+        weight=3.0,
+        params={
+            "action_name": "pre_trained_pick_action",
+            "object_cfg": SceneEntityCfg("object"),
+            "d_max": 0.2,  
+        }
+    )
     # =========================================================
     # 阶段四：抬起物体（稀疏高奖励）
     # =========================================================
@@ -345,7 +366,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 稀疏成功奖励：物体高度超过阈值即触发
     lift_object = RewTerm(
         func=mdp.object_is_lifted,
-        weight=300.0,                         # 最高权重，作为最终目标信号
+        weight=3000.0,                         # 最高权重，作为最终目标信号
         params={
             "minimal_height": 0.04,          # 离桌面 4cm 算抬起
             "object_cfg": SceneEntityCfg("object"),
@@ -417,7 +438,7 @@ class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
         params={
             "action_term_name": "pre_trained_pick_action",
             "ee_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
-            "distance_threshold": 0.7,
+            "distance_threshold": 1.0,
         },
     )
     # hold_object = DoneTerm(

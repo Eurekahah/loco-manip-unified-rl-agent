@@ -153,6 +153,7 @@ class PreTrainedPickAction(ActionTerm):
         self._target_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
         self._target_quat_w = torch.zeros(self.num_envs, 4, device=self.device)
         self._target_quat_w[:, 0] = 1.0  # 初始化为单位四元数 (w=1)
+        self._target_yaw_w = torch.zeros(self.num_envs, device=self.device)
         self._target_initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         # 直接用 find_bodies 查，不需要 SceneEntityCfg 和 resolve
@@ -195,16 +196,21 @@ class PreTrainedPickAction(ActionTerm):
     
     def _reset_target_to_current_ee(self, env_ids: torch.Tensor | None = None):
         """将目标位姿重置为当前 EE 实际位姿（world 系）。"""
-        # 取当前 EE body 的 world 位姿
         ee_pos_w  = self.robot.data.body_pos_w[:, self._ee_body_idx, :]   # (N, 3)
         ee_quat_w = self.robot.data.body_quat_w[:, self._ee_body_idx, :]  # (N, 4)
+
+        # 从当前 EE 四元数提取 yaw
+        ee_roll, ee_pitch, ee_yaw = math_utils.euler_xyz_from_quat(ee_quat_w)  # 各 (N,)
+
         if env_ids is None:
             self._target_pos_w[:]  = ee_pos_w
             self._target_quat_w[:] = ee_quat_w
+            self._target_yaw_w[:]  = ee_yaw
             self._target_initialized[:] = True
         else:
             self._target_pos_w[env_ids]  = ee_pos_w[env_ids]
             self._target_quat_w[env_ids] = ee_quat_w[env_ids]
+            self._target_yaw_w[env_ids]  = ee_yaw[env_ids]
             self._target_initialized[env_ids] = True
     
     # def process_actions(self, actions: torch.Tensor):
@@ -395,6 +401,73 @@ class PreTrainedPickAction(ActionTerm):
         self._raw_actions[:, 3:6]  = self._target_pos_w
         self._raw_actions[:, 6:10] = self._target_quat_w
 
+
+    def process_actions(self, actions: torch.Tensor):
+        self._raw_actions[:] = actions
+        r = self.cfg.low_level_command_ranges
+
+        delta_scale = torch.sigmoid(actions[:, 10])  # [0,1]
+        self._raw_actions[:, 10] = delta_scale
+
+        # ── 1. 底盘速度：tanh + scale/offset ─────────────────────────────
+        for i, (lo, hi) in enumerate([
+            (r.lin_vel_x[0], r.lin_vel_x[1]),
+            (r.lin_vel_y[0], r.lin_vel_y[1]),
+            (r.ang_vel_z[0], r.ang_vel_z[1]),
+        ]):
+            scale, offset = self.range_to_scale_offset(lo, hi)
+            self._raw_actions[:, i] = torch.tanh(actions[:, i]) * scale + offset
+
+        # ── 2. 底盘线速度死区 ─────────────────────────────────────────────
+        lin_vel_norm = torch.norm(self._raw_actions[:, 0:2], p=2, dim=-1, keepdim=True)
+        self._raw_actions[:, 0:2] = torch.where(
+            lin_vel_norm < 0.2,
+            torch.zeros_like(self._raw_actions[:, 0:2]),
+            self._raw_actions[:, 0:2]
+        )
+
+        # ── 3. 未初始化的 env 先重置目标到当前 EE 位姿 ───────────────────
+        uninit_ids = (~self._target_initialized).nonzero(as_tuple=False).squeeze(-1)
+        if uninit_ids.numel() > 0:
+            self._reset_target_to_current_ee(uninit_ids)
+
+        # ── 4. 计算位置增量 Δpos（world 系，tanh 锁幅）───────────────────
+        delta_pos_max = self.cfg.delta_pos_max
+        delta_pos_b = torch.tanh(self._raw_actions[:, 3:6]) * delta_pos_max * delta_scale.unsqueeze(-1)
+
+        root_quat_w = self.robot.data.root_quat_w  # (N, 4)
+        delta_pos_w = math_utils.quat_apply(root_quat_w, delta_pos_b)
+
+        # ── 5. 叠加位置增量 ───────────────────────────────────────────────
+        self._target_pos_w[:] = self._target_pos_w + delta_pos_w
+
+        # ── 6. 姿态：固定朝下 + yaw 增量叠加 ─────────────────────────────
+        # actions[:, 6] 作为 yaw 增量（忽略 7、8）
+        delta_yaw = torch.tanh(actions[:, 6]) * self.cfg.delta_yaw_max  # (N,)
+        zeros = torch.zeros_like(delta_yaw)
+
+        # 累积 yaw：从上一帧目标 yaw 叠加增量
+        self._target_yaw_w = getattr(self, '_target_yaw_w', zeros.clone())
+        self._target_yaw_w = self._target_yaw_w + delta_yaw
+
+        # 构造最终姿态：Rz(accumulated_yaw) * Rx(π)（朝下）
+        quat_z = math_utils.quat_from_euler_xyz(zeros, zeros, self._target_yaw_w)  # world yaw
+        quat_down = math_utils.quat_from_euler_xyz(
+            torch.full_like(delta_yaw, torch.pi), zeros, zeros
+        )  # 朝下
+        new_quat_w = math_utils.quat_mul(quat_z, quat_down)
+        new_quat_w = torch.nn.functional.normalize(new_quat_w, p=2, dim=-1)
+        self._target_quat_w[:] = new_quat_w
+
+        # ── 7. 记录 delta 信息（供 reward term 使用）─────────────────────
+        delta_rpy = torch.stack([zeros, zeros, delta_yaw], dim=-1)  # (N, 3)，roll/pitch=0
+        self._delta_pos_w  = delta_pos_w.clone()
+        self._delta_rpy    = delta_rpy.clone()
+        self._delta_action = torch.cat([delta_pos_w, delta_rpy], dim=-1)  # (N, 6)
+
+        # ── 8. 写入 _raw_actions（供 apply_actions 读取）─────────────────
+        self._raw_actions[:, 3:6]  = self._target_pos_w
+        self._raw_actions[:, 6:10] = self._target_quat_w
         # 位置直接保留 step 3 写入的 world 坐标，无需再变换
         # ==================== DEBUG: 边界框转换到世界坐标 ====================
         # num_envs = root_pos_w.shape[0]
