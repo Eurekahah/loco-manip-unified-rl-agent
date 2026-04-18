@@ -61,6 +61,15 @@ class PolicyCfg(HighLevelObservationsCfg.PolicyCfg):
             "model_name":    "resnet18",
         },
     )
+    nav_camera_embedding = ObsTerm(
+        func=mdp.image_features,
+        params={
+            "sensor_cfg":    SceneEntityCfg("nav_camera"),
+            "data_type":     "rgb",
+            "model_zoo_cfg": None,
+            "model_name":    "resnet18",
+        },
+    )
     def __post_init__(self):
         self.enable_corruption = False
         self.concatenate_terms = True   # 拼成一个向量送入 MLP
@@ -457,7 +466,7 @@ class HLFlatPickCommandCfg(HighLevelCommandsCfg):
         asset_name="robot",
         body_name="arm_link6",
         resampling_time_range=(5.0, 5.0),
-        debug_vis=True,
+        debug_vis=False,
         sampled_height=0.6,  # 采样坐标系的固定高度
         arm_base_link_name="arm_base",  # 采样坐标系xy位置
         ranges=HeightInvariantEECommandCfg.Ranges(
@@ -558,7 +567,7 @@ class HLFlatPickEnvCfg(HighLevelFlatEnvCfg):
         # post init of parent
         super().__post_init__()
 
-        self.scene.nav_camera = None
+        # self.scene.nav_camera = None
         
         self.rewards.undesired_contacts.weight = -1.0
         self.rewards.undesired_contacts.params["sensor_cfg"].body_names = [f"^(?!.*{self.foot_link_name})(?!.*{self.gripper_link_names}).*"]
