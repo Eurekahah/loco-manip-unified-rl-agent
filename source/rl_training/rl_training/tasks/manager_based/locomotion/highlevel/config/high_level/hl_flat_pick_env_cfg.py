@@ -459,6 +459,16 @@ class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
     #     },
     # )
 
+@configclass
+class HLFlatPickTerminationsCfg_PLAY(HLFlatPickTerminationsCfg):
+    lift_object = DoneTerm(
+        func=mdp.object_held_for_duration,
+        params={
+            "object_cfg": SceneEntityCfg("object"),
+            "minimal_height": 0.04,
+            "hold_duration": 1.0,           # 持续举起 1 秒终止
+        },
+    )
 
 @configclass
 class HLFlatPickCommandCfg(HighLevelCommandsCfg):
@@ -583,8 +593,18 @@ class HLFlatPickTeacherEnvCfg(HLFlatPickEnvCfg):
         super().__post_init__()
 
         self.scene.arm_camera = None
+        self.scene.nav_camera = None
         self.scene.warehouse = None
         if self.__class__.__name__ == "HLFlatPickTeacherEnvCfg":
+            self.disable_zero_weight_rewards()
+
+@configclass
+class HLFlatPickTeacherEnvCfg_PLAY(HLFlatPickTeacherEnvCfg):
+    terminations: HLFlatPickTerminationsCfg_PLAY = HLFlatPickTerminationsCfg_PLAY()
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.__class__.__name__ == "HLFlatPickTeacherEnvCfg_PLAY":
             self.disable_zero_weight_rewards()
 
 @configclass
