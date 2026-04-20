@@ -555,21 +555,22 @@ class HLFlatSideCameraSceneCfg(HighLevelSceneCfg):
         ),
     )
 
-def override_value(env, env_ids, data, value, num_steps):
-    if env.common_step_counter > num_steps:
-        return value
-    return mdp.modify_term_cfg.NO_CHANGE
+# def override_value(env, env_ids, data, value, num_steps):
+#     print(f"Curriculum step: {env.common_step_counter}, overriding value to {value} for envs {env_ids}")
+#     if env.common_step_counter > num_steps:
+#         return value
+#     return mdp.modify_term_cfg.NO_CHANGE
 
-@configclass
-class HLFlatPickCurriculumCfg:
-    ee_pos_delta_max = CurrTerm(
-        func=mdp.modify_term_cfg, 
-        params={
-            "address": "actions.pre_trained_pick_action.delta_pos_max",  # note: `_manager.cfg` is omitted
-            "modify_fn": override_value,
-            "modify_params": {"value": 0.05, "num_steps": 10000},
-        }
-    )
+# @configclass
+# class HLFlatPickCurriculumCfg:
+#     ee_pos_delta_max = CurrTerm(
+#         func=mdp.modify_term_cfg, 
+#         params={
+#             "address": "actions.pre_trained_pick_action.delta_pos_max",  # note: `_manager.cfg` is omitted
+#             "modify_fn": override_value,
+#             "modify_params": {"value": 0.05, "num_steps": 10},
+#         }
+#     )
 
 
 
@@ -581,7 +582,7 @@ class HLFlatPickEnvCfg(HighLevelFlatEnvCfg):
     terminations: HLFlatPickTerminationsCfg = HLFlatPickTerminationsCfg()
     commands: HLFlatPickCommandCfg = HLFlatPickCommandCfg()
     events: HLFlatPickEventCfg = HLFlatPickEventCfg()
-    curriculums: HLFlatPickCurriculumCfg = HLFlatPickCurriculumCfg()
+    # curriculum: HLFlatPickCurriculumCfg = HLFlatPickCurriculumCfg()
     gripper_link_names = "arm_link[7-8]"
 
     def __post_init__(self):

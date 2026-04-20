@@ -206,6 +206,7 @@ class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
     commands: WBCCommandsCfg = WBCCommandsCfg()
     observations: WBCObservationsCfg = WBCObservationsCfg()
     rewards: WBCRewardsCfg = WBCRewardsCfg()
+    curriculum: WBCCurriculumCfg = WBCCurriculumCfg()
     def __post_init__(self):
         super().__post_init__()
         self.rewards.base_height_l2.weight = 0.0  # 关闭原有的高度奖励，改用新的 body_height_tracking

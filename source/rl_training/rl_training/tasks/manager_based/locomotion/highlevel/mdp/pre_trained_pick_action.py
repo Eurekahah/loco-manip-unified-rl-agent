@@ -320,86 +320,86 @@ class PreTrainedPickAction(ActionTerm):
     #     target_quat_w = math_utils.quat_mul(root_quat_w, quat)
     #     self._raw_actions[:, 6:10] = target_quat_w
 
-    def process_actions(self, actions: torch.Tensor):
-        self._raw_actions[:] = actions
-        r = self.cfg.low_level_command_ranges
+    # def process_actions(self, actions: torch.Tensor):
+    #     self._raw_actions[:] = actions
+    #     r = self.cfg.low_level_command_ranges
 
-        delta_scale = torch.sigmoid(actions[:, 10])  # [0,1] 之间的缩放因子
-        # print(f"Delta scale from action: {delta_scale}")
+    #     delta_scale = torch.sigmoid(actions[:, 10])  # [0,1] 之间的缩放因子
+    #     # print(f"Delta scale from action: {delta_scale}")
 
-        self._raw_actions[:,10] = delta_scale  # 将 delta_scale 也放入 raw_actions，供 reward term 使用
-        # ── 1. 底盘速度：tanh + scale/offset（保持不变）─────────────────
-        for i, (lo, hi) in enumerate([
-            (r.lin_vel_x[0], r.lin_vel_x[1]),
-            (r.lin_vel_y[0], r.lin_vel_y[1]),
-            (r.ang_vel_z[0], r.ang_vel_z[1]),
-        ]):
-            scale, offset = self.range_to_scale_offset(lo, hi)
-            self._raw_actions[:, i] = torch.tanh(actions[:, i]) * scale + offset
+    #     self._raw_actions[:,10] = delta_scale  # 将 delta_scale 也放入 raw_actions，供 reward term 使用
+    #     # ── 1. 底盘速度：tanh + scale/offset（保持不变）─────────────────
+    #     for i, (lo, hi) in enumerate([
+    #         (r.lin_vel_x[0], r.lin_vel_x[1]),
+    #         (r.lin_vel_y[0], r.lin_vel_y[1]),
+    #         (r.ang_vel_z[0], r.ang_vel_z[1]),
+    #     ]):
+    #         scale, offset = self.range_to_scale_offset(lo, hi)
+    #         self._raw_actions[:, i] = torch.tanh(actions[:, i]) * scale + offset
 
-        # ── 2. 底盘线速度死区（保持不变）────────────────────────────────
-        lin_vel_norm = torch.norm(self._raw_actions[:, 0:2], p=2, dim=-1, keepdim=True)
-        self._raw_actions[:, 0:2] = torch.where(
-            lin_vel_norm < 0.2,
-            torch.zeros_like(self._raw_actions[:, 0:2]),
-            self._raw_actions[:, 0:2]
-        )
+    #     # ── 2. 底盘线速度死区（保持不变）────────────────────────────────
+    #     lin_vel_norm = torch.norm(self._raw_actions[:, 0:2], p=2, dim=-1, keepdim=True)
+    #     self._raw_actions[:, 0:2] = torch.where(
+    #         lin_vel_norm < 0.2,
+    #         torch.zeros_like(self._raw_actions[:, 0:2]),
+    #         self._raw_actions[:, 0:2]
+    #     )
 
-        # ── 3. 未初始化的 env 先重置目标到当前 EE 位姿 ──────────────────
-        uninit_ids = (~self._target_initialized).nonzero(as_tuple=False).squeeze(-1)
-        if uninit_ids.numel() > 0:
-            self._reset_target_to_current_ee(uninit_ids)
+    #     # ── 3. 未初始化的 env 先重置目标到当前 EE 位姿 ──────────────────
+    #     uninit_ids = (~self._target_initialized).nonzero(as_tuple=False).squeeze(-1)
+    #     if uninit_ids.numel() > 0:
+    #         self._reset_target_to_current_ee(uninit_ids)
 
-        # ── 4. 计算位置增量 Δpos（world 系，tanh 锁幅）──────────────────
-        # actions[:, 3:6] 被解释为 base 系下的位置增量方向
-        # 先用 tanh 压缩到 [-1,1]，再乘以最大步长（米/step）
-        delta_pos_max = self.cfg.delta_pos_max   # e.g. 0.05 m per high-level step
-        delta_pos_b = torch.tanh(self._raw_actions[:, 3:6]) * delta_pos_max * delta_scale.unsqueeze(-1)  # (N, 3), base 系
-        # print(f"Raw ee_pos commands before scaling(base): {self._raw_actions[:, 3:6]}")
-        # print(f"Delta ee_pos commands after tanh and scaling(base): {delta_pos_b}")
+    #     # ── 4. 计算位置增量 Δpos（world 系，tanh 锁幅）──────────────────
+    #     # actions[:, 3:6] 被解释为 base 系下的位置增量方向
+    #     # 先用 tanh 压缩到 [-1,1]，再乘以最大步长（米/step）
+    #     delta_pos_max = self.cfg.delta_pos_max   # e.g. 0.05 m per high-level step
+    #     delta_pos_b = torch.tanh(self._raw_actions[:, 3:6]) * delta_pos_max * delta_scale.unsqueeze(-1)  # (N, 3), base 系
+    #     # print(f"Raw ee_pos commands before scaling(base): {self._raw_actions[:, 3:6]}")
+    #     # print(f"Delta ee_pos commands after tanh and scaling(base): {delta_pos_b}")
 
-        # base → world：只旋转方向，不平移（增量是方向向量）
-        root_quat_w = self.robot.data.root_quat_w  # (N,4)
-        delta_pos_w = math_utils.quat_apply(root_quat_w, delta_pos_b)  # (N,3) world系增量
+    #     # base → world：只旋转方向，不平移（增量是方向向量）
+    #     root_quat_w = self.robot.data.root_quat_w  # (N,4)
+    #     delta_pos_w = math_utils.quat_apply(root_quat_w, delta_pos_b)  # (N,3) world系增量
 
-        # combine_frame_transforms 会加 zeros_pos，结果即为旋转后的增量向量
+    #     # combine_frame_transforms 会加 zeros_pos，结果即为旋转后的增量向量
 
-        # ── 5. 叠加位置增量，并 clamp 到工作空间（world 系 AABB）────────
-        new_pos_w = self._target_pos_w + delta_pos_w
+    #     # ── 5. 叠加位置增量，并 clamp 到工作空间（world 系 AABB）────────
+    #     new_pos_w = self._target_pos_w + delta_pos_w
 
-        self._target_pos_w[:] = new_pos_w
+    #     self._target_pos_w[:] = new_pos_w
 
 
-        # ── 6. 计算姿态增量 Δyaw，叠加到当前目标四元数 ──────────────────
-        delta_rot_max_rpy = torch.tensor(
-        [self.cfg.delta_roll_max, self.cfg.delta_pitch_max, self.cfg.delta_yaw_max],
-            device=actions.device
-        )  # e.g. 0.1 rad per high-level step
-        delta_rpy = torch.tanh(actions[:, 6:9]) * delta_rot_max_rpy.unsqueeze(0)  # (N, 3)
-        # (N,)
+    #     # ── 6. 计算姿态增量 Δyaw，叠加到当前目标四元数 ──────────────────
+    #     delta_rot_max_rpy = torch.tensor(
+    #     [self.cfg.delta_roll_max, self.cfg.delta_pitch_max, self.cfg.delta_yaw_max],
+    #         device=actions.device
+    #     )  # e.g. 0.1 rad per high-level step
+    #     delta_rpy = torch.tanh(actions[:, 6:9]) * delta_rot_max_rpy.unsqueeze(0)  # (N, 3)
+    #     # (N,)
 
-        delta_roll  = delta_rpy[:, 0]
-        delta_pitch = delta_rpy[:, 1]
-        delta_yaw   = delta_rpy[:, 2]
-        self._delta_pos_w = delta_pos_w.clone()
-        self._delta_rpy    = delta_rpy.clone()
-        self._delta_action = torch.cat([
-            delta_pos_w,
-            delta_rpy, 
-        ], dim=-1)  # (N,6)
-        zeros = torch.zeros_like(delta_yaw)
+    #     delta_roll  = delta_rpy[:, 0]
+    #     delta_pitch = delta_rpy[:, 1]
+    #     delta_yaw   = delta_rpy[:, 2]
+    #     self._delta_pos_w = delta_pos_w.clone()
+    #     self._delta_rpy    = delta_rpy.clone()
+    #     self._delta_action = torch.cat([
+    #         delta_pos_w,
+    #         delta_rpy, 
+    #     ], dim=-1)  # (N,6)
+    #     zeros = torch.zeros_like(delta_yaw)
 
-        # 构造增量旋转四元数（绕 world Z 轴）
-        delta_quat = math_utils.quat_from_euler_xyz(delta_roll, delta_pitch, delta_yaw)  # (N, 4)
+    #     # 构造增量旋转四元数（绕 world Z 轴）
+    #     delta_quat = math_utils.quat_from_euler_xyz(delta_roll, delta_pitch, delta_yaw)  # (N, 4)
 
-        # 叠加到上一时刻目标四元数：q_new = delta_q * q_old
-        new_quat_w = math_utils.quat_mul(delta_quat, self._target_quat_w)
-        new_quat_w = torch.nn.functional.normalize(new_quat_w, p=2, dim=-1)
-        self._target_quat_w[:] = new_quat_w
+    #     # 叠加到上一时刻目标四元数：q_new = delta_q * q_old
+    #     new_quat_w = math_utils.quat_mul(delta_quat, self._target_quat_w)
+    #     new_quat_w = torch.nn.functional.normalize(new_quat_w, p=2, dim=-1)
+    #     self._target_quat_w[:] = new_quat_w
 
-        # ── 7. 写入 _raw_actions（供 apply_actions 读取）────────────────
-        self._raw_actions[:, 3:6]  = self._target_pos_w
-        self._raw_actions[:, 6:10] = self._target_quat_w
+    #     # ── 7. 写入 _raw_actions（供 apply_actions 读取）────────────────
+    #     self._raw_actions[:, 3:6]  = self._target_pos_w
+    #     self._raw_actions[:, 6:10] = self._target_quat_w
 
 
     def process_actions(self, actions: torch.Tensor):
@@ -433,6 +433,9 @@ class PreTrainedPickAction(ActionTerm):
 
         # ── 4. 计算位置增量 Δpos（world 系，tanh 锁幅）───────────────────
         delta_pos_max = self.cfg.delta_pos_max
+        
+        print(f"Delta pos max: {delta_pos_max}")
+        print(f"Delta scale: {delta_scale}")
         delta_pos_b = torch.tanh(self._raw_actions[:, 3:6]) * delta_pos_max * delta_scale.unsqueeze(-1)
 
         root_quat_w = self.robot.data.root_quat_w  # (N, 4)
