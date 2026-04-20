@@ -65,21 +65,55 @@ class HighLevelSceneCfg(MySceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(2.0, 0.0, 0.5145),
+            pos=(2.0, 0.0, 0.0),
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
     )
 
-    table = AssetBaseCfg = AssetBaseCfg(
+    table: AssetBaseCfg = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Table",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/ThorlabsTable/table_instanceable.usd",
+            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/props/SM_HeavyDutyPackingTable_C02_01/SM_HeavyDutyPackingTable_C02_01_physics.usd",
+            scale=(0.0025, 0.01, 0.0025)
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(2.0, 0.0, 0.5),
-            rot=(1.0, 0.0, 0.0, 0.0),
+            pos=(2.2, -0.7, 0.0),
+            rot=(0.707, 0.0, 0.0, 0.707),
         ),
     )
+    table2: AssetBaseCfg = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/Table2",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/props/SM_HeavyDutyPackingTable_C02_01/SM_HeavyDutyPackingTable_C02_01_physics.usd",
+            scale=(0.0025, 0.01, 0.005)
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(2.2, -0.1, 0.0),
+            rot=(0.707, 0.0, 0.0, 0.707),
+        ),
+    )
+    table3: AssetBaseCfg = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/Table3",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/props/SM_HeavyDutyPackingTable_C02_01/SM_HeavyDutyPackingTable_C02_01_physics.usd",
+            scale=(0.0025, 0.01, 0.007)
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(2.2, 0.5, 0.0),
+            rot=(0.707, 0.0, 0.0, 0.707),
+        ),
+    )
+
+    # table: AssetBaseCfg = AssetBaseCfg(
+    #     prim_path="{ENV_REGEX_NS}/Table",
+    #     spawn=sim_utils.UsdFileCfg(
+    #         usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/ThorlabsTable/table_instanceable.usd",
+    #     ),
+    #     init_state=AssetBaseCfg.InitialStateCfg(
+    #         pos=(2.5, 0.0, 0.5),
+    #         rot=(0.0, 0.0, 0.0, 1.0),
+    #     ),
+    # )
     
     # utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/ThorlabsTable/table_instanceable.usd")
     # ---------------------------------------------------------------
@@ -165,20 +199,53 @@ class EventCfg:
         },
     )
 
-    reset_object_position = EventTerm(
-        func=mdp.reset_root_state_uniform,
+    # reset_object_position = EventTerm(
+    #     func=mdp.reset_root_state_uniform,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("object"),
+    #         "pose_range": {
+    #             "x": (-0.1, 0.1),
+    #             "y": (-0.6, 0.6),
+    #             "z": (0.0, 0.0),
+    #             "roll": (0.0, 0.0),
+    #             "pitch": (0.0, 0.0),
+    #             "yaw": (-3.14, 3.14),
+    #         },
+    #         "velocity_range": {},
+    #     },
+    # )
+    reset_object_position_discontinuous = EventTerm(
+        func=mdp.reset_root_state_discontinuous,
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("object"),
-            "pose_range": {
-                "x": (-0.1, 0.1),
-                "y": (-0.1, 0.1),
-                "z": (0.0, 0.0),
-                "roll": (0.0, 0.0),
-                "pitch": (0.0, 0.0),
-                "yaw": (-3.14, 3.14),
-            },
-            "velocity_range": {},
+            "pose_ranges": [
+                {
+                    "x": (-0.1, 0.1),
+                    "y": (-0.9, -0.6),  # 第一个不连续区域
+                    "z": (0.2785, 0.2785),
+                    "roll": (0.0, 0.0),
+                    "pitch": (0.0, 0.0),
+                    "yaw": (-3.14, 3.14),
+                },
+                {
+                    "x": (-0.1, 0.1),
+                    "y": (-0.3, 0.05),   # 第二个不连续区域
+                    "z": (0.5270, 0.5270),
+                    "roll": (0.0, 0.0),
+                    "pitch": (0.0, 0.0),
+                    "yaw": (-3.14, 3.14),
+                },
+                {
+                    "x": (-0.1, 0.1),
+                    "y": (0.3, 0.6),   # 第三个不连续区域
+                    "z": (0.7258, 0.7258),
+                    "roll": (0.0, 0.0),
+                    "pitch": (0.0, 0.0),
+                    "yaw": (-3.14, 3.14),
+                },
+            ],
         },
     )
 

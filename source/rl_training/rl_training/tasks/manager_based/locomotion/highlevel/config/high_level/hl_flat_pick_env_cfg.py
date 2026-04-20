@@ -434,20 +434,20 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
 @configclass
 class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
-    object_dropped = DoneTerm(
-        func=mdp.object_dropped,
-        params={
-            "object_cfg": SceneEntityCfg("object"),
-            "height_threshold": 0.5,  # 物体世界位姿高度小于0.5m算掉落
-        },  
-    )
+    # object_dropped = DoneTerm(
+    #     func=mdp.object_dropped,
+    #     params={
+    #         "object_cfg": SceneEntityCfg("object"),
+    #         "height_threshold": 0.5,  # 物体世界位姿高度小于0.5m算掉落
+    #     },  
+    # )
 
     action_target_too_far = DoneTerm(
         func=mdp.action_target_too_far,
         params={
             "action_term_name": "pre_trained_pick_action",
             "ee_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
-            "distance_threshold": 1.0,
+            "distance_threshold": 1.5,
         },
     )
     # hold_object = DoneTerm(
@@ -476,7 +476,7 @@ class HLFlatPickCommandCfg(HighLevelCommandsCfg):
         asset_name="robot",
         body_name="arm_link6",
         resampling_time_range=(5.0, 5.0),
-        debug_vis=False,
+        debug_vis=True,
         sampled_height=0.6,  # 采样坐标系的固定高度
         arm_base_link_name="arm_base",  # 采样坐标系xy位置
         ranges=HeightInvariantEECommandCfg.Ranges(
@@ -500,7 +500,7 @@ class HLFlatPickEventCfg(HighLevelEventCfg):
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (1.2, 1.3), "y": (-0.1, 0.1),  "yaw": (-0.393, 0.393)},
+            "pose_range": {"x": (1.2, 1.3), "y": (-0.6, 0.6),  "yaw": (-0.393, 0.393)},
             "velocity_range": {
                 "x": (-0.0, 0.0),
                 "y": (-0.0, 0.0),
@@ -520,6 +520,17 @@ class HLFlatPickEventCfg(HighLevelEventCfg):
             "velocity_range": (0.0, 0.0), # 速度重置为 0
         },
     ) 
+
+    # reset_table_height = EventTerm(
+    #     func=mdp.reset_xform_z_only,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("table"),
+    #         "pose_range": {
+    #             "z": (-0.7, 0.0),  # 只写 z 就够了
+    #         },
+    #     },
+    # )
 
 @configclass
 class HLFlatSideCameraSceneCfg(HighLevelSceneCfg):
