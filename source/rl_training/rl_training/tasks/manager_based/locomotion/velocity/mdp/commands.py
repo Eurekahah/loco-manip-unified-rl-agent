@@ -607,20 +607,6 @@ class BodyPoseCommand(CommandTerm):
         self.command = torch.zeros(self.num_envs, 3, device=self.device)
 
     @property
-    def _mean(self) -> torch.Tensor:
-        return torch.tensor(
-            [self.cfg.height_mean, self.cfg.pitch_mean, self.cfg.roll_mean],
-            device=self.device,
-        )
-
-    @property
-    def _std(self) -> torch.Tensor:
-        return torch.tensor(
-            [self.cfg.height_std, self.cfg.pitch_std, self.cfg.roll_std],
-            device=self.device,
-        )
-
-    @property
     def _low(self) -> torch.Tensor:
         return torch.tensor(
             [self.cfg.height_range[0], self.cfg.pitch_range[0], self.cfg.roll_range[0]],
@@ -661,8 +647,9 @@ class BodyPoseCommand(CommandTerm):
             return
 
         # 先采无约束正态，再 clamp 到物理区间（即截断正态近似）
-        samples = torch.randn(n, 3, device=self.device) * self._std + self._mean
-        samples = torch.clamp(samples, self._low, self._high)
+        samples = (
+            torch.rand(n, 3, device=self.device) * (self._high - self._low) + self._low
+        )
         self._command[env_ids] = samples
 
     def _update_command(self):
@@ -777,21 +764,15 @@ class BodyPoseCommandCfg(CommandTermCfg):
 
     # ---- height（机身高度，单位 m）----
     # 正常站立高度约 0.55 m，蹲下约 0.35 m
-    height_mean: float = 0.55          # 正态分布均值 = 正常站立高度
-    height_std:  float = 0.05          # 小标准差：大多数时间保持站立
     height_range: tuple = (0.33, 0.65) # 截断区间 [最低蹲伏, 最高]
 
     # ---- pitch（前后俯仰，单位 rad）----
     # 正值 = 机头抬起，负值 = 俯身
-    pitch_mean:  float = 0.0
-    pitch_std:   float = 0.08          # ~5° 标准差，偶尔俯身
     pitch_range: tuple = (-0.35, 0.35) # ±20°
 
     # ---- roll（左右侧倾，单位 rad）----
-    roll_mean:   float = 0.0
-    roll_std:    float = 0.06          # ~3.5° 标准差，偶尔侧身
     roll_range:  tuple = (-0.25, 0.25) # ±14°
 
     # ---- 继承自 CommandTermCfg ----
-    resampling_time_range: tuple = (5.0, 10.0)  # 每 5~10 s 重采样一次
+    resampling_time_range: tuple = (10.0, 10.0)  # 每 5~10 s 重采样一次
     debug_vis: bool = False
