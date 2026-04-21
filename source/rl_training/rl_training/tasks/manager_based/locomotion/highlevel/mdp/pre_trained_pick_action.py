@@ -434,8 +434,6 @@ class PreTrainedPickAction(ActionTerm):
         # ── 4. 计算位置增量 Δpos（world 系，tanh 锁幅）───────────────────
         delta_pos_max = self.cfg.delta_pos_max
         
-        print(f"Delta pos max: {delta_pos_max}")
-        print(f"Delta scale: {delta_scale}")
         delta_pos_b = torch.tanh(self._raw_actions[:, 3:6]) * delta_pos_max * delta_scale.unsqueeze(-1)
 
         root_quat_w = self.robot.data.root_quat_w  # (N, 4)

@@ -767,43 +767,44 @@ def object_is_lifted(
 ) -> torch.Tensor:
     """
     物体被抬起的奖励。
-    
-    物体高于初始放置高度（spawn height）+ minimal_height 时给予奖励。
-    奖励为连续值：超出越多奖励越高（clamp 在 [0, 1] 内），
-    避免纯稀疏奖励带来的训练困难。
+
+    物体高于每次 reset 后记录的初始高度 + minimal_height 时给予奖励。
+    奖励为连续值：超出越多奖励越高（clamp 在 [0, 1] 内）。
 
     Args:
         env: RL 环境实例
-        minimal_height: 物体需要被抬起的最小高度（相对于初始高度），单位：米
+        minimal_height: 物体需要被抬起的最小高度（相对于 reset 后实际高度），单位：米
         object_cfg: 物体的 SceneEntityCfg
-
     Returns:
         shape (num_envs,) 的奖励张量，值域 [0, 1]
     """
     object_asset = env.scene[object_cfg.name]
-
-    # 当前物体 z 轴高度
     current_height = object_asset.data.root_pos_w[:, 2]  # (N,)
-    # print(f"Current object height: {current_height}")
 
-    # 初始高度（reset 时记录，存储在 extras 或直接用 default_root_state）
-    # IsaacLab 中 default_root_state 的第 2 列是初始 z
-    initial_height = object_asset.data.default_root_state[:, 2]  # (N,)
+    # ---------- 记录每次 reset 后的实际初始高度 ----------
+    # 用 env 上的自定义属性存储，key 加上 object 名称避免多物体冲突
+    cache_key = f"_lifted_init_height_{object_cfg.name}"
 
-    # 相对抬起高度
-    lifted_height = current_height - initial_height  # (N,)
-    # if (lifted_height > 0.04).sum() > 0:
-    #     print(f"Current height: {current_height}, Initial height: {initial_height}, Lifted height: {lifted_height}")
-    # 连续奖励：超过 minimal_height 才开始给分，线性增长后 clamp
-    # 你也可以换成纯 bool：(lifted_height > minimal_height).float()
-    # if lifted_height.sum() > 1e-4:
-    #     print(f"Current height: {current_height}, Initial height: {initial_height}, Lifted height: {lifted_height}")
+    if not hasattr(env, cache_key):
+        # 首次调用：用当前高度初始化（shape: (num_envs,)，存在 GPU 上）
+        setattr(env, cache_key, current_height.clone())
+
+    init_height: torch.Tensor = getattr(env, cache_key)
+
+    # env.episode_length_buf == 1 表示该 env 刚刚被 reset（第 1 步）
+    just_reset = env.episode_length_buf == 1  # (N,) bool
+    if just_reset.any():
+        init_height[just_reset] = current_height[just_reset].clone()
+    # ------------------------------------------------------
+
+    lifted_height = current_height - init_height  # (N,)
+    print(f"Current height: {current_height}, Initial height: {init_height}, Lifted height: {lifted_height}")
+
     reward = torch.clamp(
         (lifted_height - minimal_height) / minimal_height,
         min=0.0,
         max=1.0,
     )
-
     return reward
 
 def cmd_pos_to_object_reward(

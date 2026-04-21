@@ -103,14 +103,14 @@ def object_held_for_duration(
 ) -> torch.Tensor:
     """
     物体被持续举起超过 hold_duration 秒后触发终止。
-    
+
     内部维护一个每环境的计时器（存在 env 的自定义属性中），
-    每步当物体高于 initial_height + minimal_height 时累加 dt，
+    每步当物体高于 reset 后实际初始高度 + minimal_height 时累加 dt，
     否则清零；累计时间超过 hold_duration 则返回 True（触发终止）。
 
     Args:
         env: RL 环境实例
-        minimal_height: 判定"举起"的最小高度阈值（相对于初始高度），单位：米
+        minimal_height: 判定"举起"的最小高度阈值（相对于 reset 后实际初始高度），单位：米
         object_cfg: 物体的 SceneEntityCfg
         hold_duration: 需要持续举起的时间，单位：秒，默认 5.0s
     Returns:
@@ -119,32 +119,34 @@ def object_held_for_duration(
     object_asset = env.scene[object_cfg.name]
     device = env.device
 
-    # ---------- 计时器初始化（懒加载，只初始化一次）----------
-    _TIMER_KEY = "_hold_object_timer"
+    # ---------- 懒加载：计时器 + 实际初始高度 ----------
+    _TIMER_KEY  = f"_hold_object_timer_{object_cfg.name}"
+    _HEIGHT_KEY = f"_lifted_init_height_{object_cfg.name}"
+
     if not hasattr(env, _TIMER_KEY):
-        setattr(env, _TIMER_KEY, torch.zeros(env.num_envs, device=device))
-    hold_timer: torch.Tensor = getattr(env, _TIMER_KEY)
+        setattr(env, _TIMER_KEY,  torch.zeros(env.num_envs, device=device))
+    if not hasattr(env, _HEIGHT_KEY):
+        setattr(env, _HEIGHT_KEY, torch.zeros(env.num_envs, device=device))
+
+    hold_timer:  torch.Tensor = getattr(env, _TIMER_KEY)
+    init_height: torch.Tensor = getattr(env, _HEIGHT_KEY)
+
+    # ---------- reset 后第一步：更新实际初始高度并清零计时器 ----------
+    current_height = object_asset.data.root_pos_w[:, 2]  # (N,)
+
+    just_reset = env.episode_length_buf == 1              # (N,) bool
+    if just_reset.any():
+        init_height[just_reset] = current_height[just_reset].clone()
+        hold_timer[just_reset]  = 0.0
 
     # ---------- 判断当前是否处于"举起"状态 ----------
-    current_height = object_asset.data.root_pos_w[:, 2]          # (N,)
-    initial_height = object_asset.data.default_root_state[:, 2]  # (N,)
-    lifted_height  = current_height - initial_height              # (N,)
-    is_lifted = lifted_height > minimal_height                    # (N,) bool
+    lifted_height = current_height - init_height          # (N,)
+    is_lifted     = lifted_height > minimal_height        # (N,) bool
 
     # ---------- 更新计时器 ----------
-    dt = env.step_dt  # 单步时间，单位秒
+    dt = env.step_dt
     hold_timer += dt * is_lifted.float()   # 举起则累加
-    hold_timer *= is_lifted.float()        # 未举起则清零（等价于 where）
-
-    # ---------- reset 时清零对应环境的计时器 ----------
-    # env.termination_manager 会在 episode 结束后自动 reset 环境，
-    # 但计时器是自定义属性，需要手动响应 reset_buf
-    if hasattr(env, "reset_buf"):
-        reset_mask = env.reset_buf.bool()
-        hold_timer[reset_mask] = 0.0
-
-    # ---------- 写回（原地操作已修改，这步是防御性保证） ----------
-    setattr(env, _TIMER_KEY, hold_timer)
+    hold_timer *= is_lifted.float()        # 未举起则清零
 
     # ---------- 终止条件 ----------
     return hold_timer >= hold_duration
