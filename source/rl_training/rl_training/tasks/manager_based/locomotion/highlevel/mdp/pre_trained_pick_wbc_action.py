@@ -31,7 +31,7 @@ class PreTrainedPickWBCAction(ActionTerm):
 
     """
 
-    cfg: PreTrainedPickActionCfg
+    cfg: PreTrainedPickWBCActionCfg
     """The configuration of the action term."""
 
     leg_joint_names = [
@@ -65,7 +65,7 @@ class PreTrainedPickWBCAction(ActionTerm):
     ]
     joint_names = leg_joint_names + wheel_joint_names + arm_joint_names
 
-    def __init__(self, cfg: PreTrainedPickActionCfg, env: ManagerBasedRLEnv) -> None:
+    def __init__(self, cfg: PreTrainedPickWBCActionCfg, env: ManagerBasedRLEnv) -> None:
         super().__init__(cfg, env)
 
         self.robot: Articulation = env.scene[cfg.asset_name]
