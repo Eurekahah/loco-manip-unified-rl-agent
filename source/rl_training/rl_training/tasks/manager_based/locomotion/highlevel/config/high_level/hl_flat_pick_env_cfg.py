@@ -449,20 +449,20 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
 @configclass
 class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
-    # object_dropped = DoneTerm(
-    #     func=mdp.object_dropped,
-    #     params={
-    #         "object_cfg": SceneEntityCfg("object"),
-    #         "height_threshold": 0.5,  # 物体世界位姿高度小于0.5m算掉落
-    #     },  
-    # )
+    object_dropped = DoneTerm(
+        func=mdp.object_dropped,
+        params={
+            "object_cfg": SceneEntityCfg("object"),
+            "height_threshold": 0.2,  # 物体世界位姿高度小于0.2m算掉落
+        },  
+    )
 
     action_target_too_far = DoneTerm(
         func=mdp.action_target_too_far,
         params={
             "action_term_name": "pre_trained_pick_action",
             "ee_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
-            "distance_threshold": 1.5,
+            "distance_threshold": 2.5,
         },
     )
     # hold_object = DoneTerm(
@@ -515,7 +515,7 @@ class HLFlatPickEventCfg(HighLevelEventCfg):
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (1.2, 1.3), "y": (-0.6, 0.6),  "yaw": (-0.393, 0.393)},
+            "pose_range": {"x": (0.5, 0.6), "y": (-0.6, 0.6),  "yaw": (-0.393, 0.393)},
             "velocity_range": {
                 "x": (-0.0, 0.0),
                 "y": (-0.0, 0.0),
