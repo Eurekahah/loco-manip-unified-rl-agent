@@ -798,7 +798,7 @@ def object_is_lifted(
     # ------------------------------------------------------
 
     lifted_height = current_height - init_height  # (N,)
-    print(f"Current height: {current_height}, Initial height: {init_height}, Lifted height: {lifted_height}")
+    # print(f"Current height: {current_height}, Initial height: {init_height}, Lifted height: {lifted_height}")
 
     reward = torch.clamp(
         (lifted_height - minimal_height) / minimal_height,
