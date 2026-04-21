@@ -44,7 +44,7 @@ def reached_target(
 def object_dropped(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg,
-    height_threshold: float = 0.5,
+    height_threshold: float = 0.2,
 ) -> torch.Tensor:
     """
     Terminate (done=True) when the object is dropped, defined as the object's
