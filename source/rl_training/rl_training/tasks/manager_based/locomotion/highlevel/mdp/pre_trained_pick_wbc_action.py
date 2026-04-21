@@ -18,6 +18,9 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import check_file_path, read_file
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
 from isaaclab.managers import SceneEntityCfg
+from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.flat_env_wbc_cfg import WBCObservationsCfg
+
+
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -121,6 +124,12 @@ class PreTrainedPickWBCAction(ActionTerm):
                 self._raw_actions[reset_mask, :] = 0
             # 拼接两个 action term 的输出，供 low-level obs 使用
             return torch.cat([self.low_level_leg_actions, self.low_level_wheel_actions, self.low_level_ee_actions], dim=-1)
+        
+        # 🚨 强制覆盖（关键）
+        wbc_obs_cfg = WBCObservationsCfg()
+
+        # 如果你只需要 policy group：
+        cfg.low_level_observations = wbc_obs_cfg.policy
 
         cfg.low_level_observations.actions.func = lambda dummy_env: last_action()
         cfg.low_level_observations.actions.params = dict()
@@ -131,10 +140,10 @@ class PreTrainedPickWBCAction(ActionTerm):
         cfg.low_level_observations.ee_goal.func = lambda dummy_env: self._raw_actions[:, 3:10]
         cfg.low_level_observations.ee_goal.params = dict()
 
-        cfg.low_level_observations.body_pose.func = (
+        cfg.low_level_observations.body_pose_cmd.func = (
             lambda dummy_env: self._raw_actions[:, 11:14]
         )
-        cfg.low_level_observations.body_pose.params = dict()
+        cfg.low_level_observations.body_pose_cmd.params = dict()
 
         cfg.low_level_observations.joint_pos.func = mdp.joint_pos_rel_without_wheel
         cfg.low_level_observations.joint_pos.params["wheel_asset_cfg"] = SceneEntityCfg(

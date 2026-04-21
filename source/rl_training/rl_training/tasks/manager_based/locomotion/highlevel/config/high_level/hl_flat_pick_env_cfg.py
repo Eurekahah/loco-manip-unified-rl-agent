@@ -627,7 +627,7 @@ class HLFlatPickTeacherEnvCfg(HLFlatPickEnvCfg):
 
 @configclass
 class HLFlatPickWBCTeacherEnvCfg(HLFlatPickTeacherEnvCfg):
-    actions: HLFlatPickActionsCfg = HLFlatPickActionsCfg()
+    actions: HLFlatPickWBCActionsCfg = HLFlatPickWBCActionsCfg()
     def __post_init__(self):
         super().__post_init__()
 
