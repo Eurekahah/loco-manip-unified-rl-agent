@@ -33,7 +33,8 @@ _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
 class HLFlatPickActionsCfg(HighLevelActionsCfg):
     pre_trained_pick_action: mdp.PreTrainedPickActionCfg = mdp.PreTrainedPickActionCfg(
         asset_name="robot",
-        policy_path=f"logs/rsl_rl/deeprobotics_m20_flat/2026-03-18_18-06-34/exported/policy.pt",
+        # policy_path=f"logs/rsl_rl/deeprobotics_m20_flat/2026-03-18_18-06-34/exported/policy.pt",
+        policy_path=f"logs/rsl_rl/deeprobotics_m20_flat/2026-04-21_00-02-23/exported/policy.pt",
         low_level_decimation=4,
         low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
         low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,
