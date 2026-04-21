@@ -473,6 +473,7 @@ class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
     #         "hold_duration": 5.0,           # 持续举起 5 秒终止
     #     },
     # )
+    pass
 
 @configclass
 class HLFlatPickTerminationsCfg_PLAY(HLFlatPickTerminationsCfg):
