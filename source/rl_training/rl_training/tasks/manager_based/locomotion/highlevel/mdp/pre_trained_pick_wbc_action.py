@@ -168,7 +168,7 @@ class PreTrainedPickWBCAction(ActionTerm):
         self._target_quat_w = torch.zeros(self.num_envs, 4, device=self.device)
         self._target_quat_w[:, 0] = 1.0  # 初始化为单位四元数 (w=1)
         self._target_yaw_w = torch.zeros(self.num_envs, device=self.device)
-        # ── __init__ 末尾，在 _target_yaw_w 初始化之后添加 ──────────────────────
+        self._target_pitch_w = torch.zeros(self.num_envs, device=self.device)
 
         # body_pose 增量模式：缓存上一时刻的目标 body pose（height, pitch, roll）
         self._target_body_height = torch.full(
@@ -233,6 +233,7 @@ class PreTrainedPickWBCAction(ActionTerm):
             self._target_pos_w[:]  = ee_pos_w
             self._target_quat_w[:] = ee_quat_w
             self._target_yaw_w[:]  = ee_yaw
+            self._target_pitch_w[:] = ee_pitch
             self._target_initialized[:] = True
 
             self._target_body_height[:] = root_height
@@ -243,6 +244,7 @@ class PreTrainedPickWBCAction(ActionTerm):
             self._target_pos_w[env_ids]  = ee_pos_w[env_ids]
             self._target_quat_w[env_ids] = ee_quat_w[env_ids]
             self._target_yaw_w[env_ids]  = ee_yaw[env_ids]
+            self._target_pitch_w[env_ids] = ee_pitch[env_ids]
             self._target_initialized[env_ids] = True
 
             self._target_body_height[env_ids] = root_height[env_ids]
@@ -328,26 +330,36 @@ class PreTrainedPickWBCAction(ActionTerm):
         # ── 5. 叠加位置增量 ───────────────────────────────────────────────
         self._target_pos_w[:] = self._target_pos_w + delta_pos_w
 
-        # ── 6. 姿态：固定朝下 + yaw 增量叠加 ─────────────────────────────
-        # actions[:, 6] 作为 yaw 增量（忽略 7、8）
+        # ── 6. 姿态：朝下 + yaw/pitch 增量叠加 ─────────────────────────────
+        # actions[:, 6] 作为 yaw 增量
+        # actions[:, 7] → pitch 增量（0=朝下, π/2=朝前）
         delta_yaw = torch.tanh(actions[:, 6]) * self.cfg.delta_yaw_max  # (N,)
+        delta_pitch = torch.tanh(actions[:, 7]) * self.cfg.delta_pitch_max  # (N,)
         zeros = torch.zeros_like(delta_yaw)
 
         # 累积 yaw：从上一帧目标 yaw 叠加增量
         self._target_yaw_w = getattr(self, '_target_yaw_w', zeros.clone())
         self._target_yaw_w = self._target_yaw_w + delta_yaw
 
+        # ── 累积 pitch，clamp 到 [pitch_min, pitch_max] ─────────────────────
+        self._target_pitch_w = getattr(self, '_target_pitch_w', zeros.clone())
+        self._target_pitch_w = torch.clamp(
+            self._target_pitch_w + delta_pitch,
+            r.ee_pitch[0], r.ee_pitch[1]
+        )
+
         # 构造最终姿态：Rz(accumulated_yaw) * Rx(π)（朝下）
         quat_z = math_utils.quat_from_euler_xyz(zeros, zeros, self._target_yaw_w)  # world yaw
+        quat_x = math_utils.quat_from_euler_xyz(self._target_pitch_w, zeros, zeros)
         quat_down = math_utils.quat_from_euler_xyz(
             torch.full_like(delta_yaw, torch.pi), zeros, zeros
         )  # 朝下
-        new_quat_w = math_utils.quat_mul(quat_z, quat_down)
+        new_quat_w = math_utils.quat_mul(quat_z, math_utils.quat_mul(quat_x, quat_down))
         new_quat_w = torch.nn.functional.normalize(new_quat_w, p=2, dim=-1)
         self._target_quat_w[:] = new_quat_w
 
         # ── 7. 记录 delta 信息（供 reward term 使用）─────────────────────
-        delta_rpy = torch.stack([zeros, zeros, delta_yaw], dim=-1)  # (N, 3)，roll/pitch=0
+        delta_rpy = torch.stack([zeros, delta_pitch, delta_yaw], dim=-1)  # (N, 3)，roll/pitch=0
         self._delta_pos_w  = delta_pos_w.clone()
         self._delta_rpy    = delta_rpy.clone()
         self._delta_action = torch.cat([delta_pos_w, delta_rpy], dim=-1)  # (N, 6)
@@ -552,6 +564,7 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
         ee_quat_x: tuple[float, float] = (-1.0, 1.0)
         ee_quat_y: tuple[float, float] = (-1.0, 1.0)
         ee_quat_z: tuple[float, float] = (-1.0, 1.0)
+        ee_pitch: tuple[float, float] = (-torch.pi/2, 0.0 )  # 限制在朝下到朝前
         # target_height: 机器狗期望站立高度（米），参考低层训练时的正常高度
         target_height: tuple[float, float] = (0.33, 0.6)
         # target_pitch: 机身期望俯仰角（弧度），正值抬头

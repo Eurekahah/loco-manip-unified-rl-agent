@@ -363,7 +363,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 夹爪同步接触奖励：arm_link7/8 两指同时接触物体时给予奖励
     grasp_contact_symmetric = RewTerm(
         func=mdp.gripper_contact_symmetric_grasp,
-        weight=100.0,  
+        weight=500.0,  
         params={
             "threshold": 0.5,
             "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
@@ -390,7 +390,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 稀疏成功奖励：物体高度超过阈值即触发
     lift_object = RewTerm(
         func=mdp.object_is_lifted,
-        weight=1000.0,                         # 最高权重，作为最终目标信号
+        weight=3000.0,                         # 最高权重，作为最终目标信号
         params={
             "minimal_height": 0.04,          # 离桌面 4cm 算抬起
             "object_cfg": SceneEntityCfg("object"),
@@ -411,7 +411,8 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
             "sensor_cfg": SceneEntityCfg(
                 "arm_contact_forces",
                 body_names=["arm_link1", "arm_link2", "arm_link3",
-                            "arm_link4", "arm_link5", "arm_link6"],
+                            "arm_link4", "arm_link5", "arm_link6",
+                            "camera_link"],
             ),
             "threshold": 1.0,
         },
@@ -464,6 +465,21 @@ class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
             "ee_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
             "distance_threshold": 2.5,
         },
+    )
+
+    illegal_body_contact = DoneTerm(
+        func=mdp.illegal_contact,
+        params={"sensor_cfg": 
+                SceneEntityCfg("contact_forces", 
+                               body_names=["base_link","(f|h)(l|r)_(hip(x|y)|knee)"]), "threshold": 10.0},
+    )
+
+    illegal_arm_contact = DoneTerm(
+        func=mdp.illegal_contact,
+        params={"sensor_cfg":
+                SceneEntityCfg("arm_contact_forces",
+                                 body_names=["arm_link[1-6]",
+                                             "camera_link"]), "threshold": 10.0},
     )
     # hold_object = DoneTerm(
     #     func=mdp.object_held_for_duration,  # 替换为新函数
