@@ -296,21 +296,21 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         params={
             "action_term_name": "pre_trained_pick_action",
             "object_cfg":       SceneEntityCfg("object"),
-            "pos_sigma":        0.3,   # 单位：米，30cm内奖励显著上升
+            "pos_sigma":        0.7,   # 单位：米，70cm内奖励显著上升
             "use_shaped":       True,
         },
     )
 
-    # cmd_pos_to_object_fine_grained = RewTerm(
-    #     func=mdp.cmd_pos_to_object_reward,
-    #     weight=4.0,
-    #     params={
-    #         "action_term_name": "pre_trained_pick_action",
-    #         "object_cfg":       SceneEntityCfg("object"),
-    #         "pos_sigma":        0.05,   # 单位：米，5cm内奖励显著上升
-    #         "use_shaped":       False,
-    #     },
-    # )
+    cmd_pos_to_object_fine_grained = RewTerm(
+        func=mdp.cmd_pos_to_object_reward,
+        weight=4.0,
+        params={
+            "action_term_name": "pre_trained_pick_action",
+            "object_cfg":       SceneEntityCfg("object"),
+            "pos_sigma":        0.2,   # 单位：米，20cm内奖励显著上升
+            "use_shaped":       False,
+        },
+    )
 
     # 核心密集奖励：arm_link6（EE）到物体距离，高斯核塑形
     reach_object_ee = RewTerm(
@@ -363,7 +363,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 夹爪同步接触奖励：arm_link7/8 两指同时接触物体时给予奖励
     grasp_contact_symmetric = RewTerm(
         func=mdp.gripper_contact_symmetric_grasp,
-        weight=500.0,  
+        weight=100.0,  
         params={
             "threshold": 0.5,
             "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
@@ -390,7 +390,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 稀疏成功奖励：物体高度超过阈值即触发
     lift_object = RewTerm(
         func=mdp.object_is_lifted,
-        weight=3000.0,                         # 最高权重，作为最终目标信号
+        weight=1000.0,                         # 最高权重，作为最终目标信号
         params={
             "minimal_height": 0.04,          # 离桌面 4cm 算抬起
             "object_cfg": SceneEntityCfg("object"),
@@ -413,7 +413,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
                 body_names=["arm_link1", "arm_link2", "arm_link3",
                             "arm_link4", "arm_link5", "arm_link6"],
             ),
-            "threshold": 5.0,
+            "threshold": 1.0,
         },
     )
 
