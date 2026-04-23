@@ -404,15 +404,24 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
 
     # 手臂主体非预期碰撞（排除夹爪，夹爪需要接触物体）
-    undesired_contacts = RewTerm(
+    undesired_arm_contacts = RewTerm(
         func=mdp.undesired_contacts,
         weight=-1.0,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "arm_contact_forces",
-                body_names=["arm_link1", "arm_link2", "arm_link3",
-                            "arm_link4", "arm_link5", "arm_link6",
-                            "camera_link"],
+                body_names=["arm_link[1-6]", "camera_link"],
+            ),
+            "threshold": 1.0,
+        },
+    )
+    undesired_body_contacts = RewTerm(
+        func=mdp.undesired_contacts,
+        weight=-1.0,
+        params={
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces",
+                body_names=["base_link","(f|h)(l|r)_(hip(x|y)|knee)"],
             ),
             "threshold": 1.0,
         },
@@ -467,20 +476,7 @@ class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
         },
     )
 
-    illegal_body_contact = DoneTerm(
-        func=mdp.illegal_contact,
-        params={"sensor_cfg": 
-                SceneEntityCfg("contact_forces", 
-                               body_names=["base_link","(f|h)(l|r)_(hip(x|y)|knee)"]), "threshold": 10.0},
-    )
-
-    illegal_arm_contact = DoneTerm(
-        func=mdp.illegal_contact,
-        params={"sensor_cfg":
-                SceneEntityCfg("arm_contact_forces",
-                                 body_names=["arm_link[1-6]",
-                                             "camera_link"]), "threshold": 10.0},
-    )
+    
     # hold_object = DoneTerm(
     #     func=mdp.object_held_for_duration,  # 替换为新函数
     #     params={
@@ -620,10 +616,6 @@ class HLFlatPickEnvCfg(HighLevelFlatEnvCfg):
         # post init of parent
         super().__post_init__()
 
-        # self.scene.nav_camera = None
-        
-        self.rewards.undesired_contacts.weight = -1.0
-        self.rewards.undesired_contacts.params["sensor_cfg"].body_names = [f"^(?!.*{self.foot_link_name})(?!.*{self.gripper_link_names}).*"]
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "HLFlatPickEnvCfg":
             self.disable_zero_weight_rewards()
