@@ -85,7 +85,7 @@ class HighLevelSceneCfg(MySceneCfg):
         prim_path="{ENV_REGEX_NS}/Table2",
         spawn=sim_utils.UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/props/SM_HeavyDutyPackingTable_C02_01/SM_HeavyDutyPackingTable_C02_01_physics.usd",
-            scale=(0.0025, 0.01, 0.005)
+            scale=(0.0025, 0.01, 0.0045)
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
             pos=(2.2, -0.1, 0.0),
@@ -96,7 +96,7 @@ class HighLevelSceneCfg(MySceneCfg):
         prim_path="{ENV_REGEX_NS}/Table3",
         spawn=sim_utils.UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/props/SM_HeavyDutyPackingTable_C02_01/SM_HeavyDutyPackingTable_C02_01_physics.usd",
-            scale=(0.0025, 0.01, 0.007)
+            scale=(0.0025, 0.01, 0.006)
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
             pos=(2.2, 0.5, 0.0),
@@ -232,7 +232,7 @@ class EventCfg:
                 {
                     "x": (-0.1, 0.1),
                     "y": (-0.3, 0.05),   # 第二个不连续区域
-                    "z": (0.5270, 0.5270),
+                    "z": (0.4773, 0.4773),
                     "roll": (0.0, 0.0),
                     "pitch": (0.0, 0.0),
                     "yaw": (-3.14, 3.14),
@@ -240,7 +240,7 @@ class EventCfg:
                 {
                     "x": (-0.1, 0.1),
                     "y": (0.3, 0.6),   # 第三个不连续区域
-                    "z": (0.7258, 0.7258),
+                    "z": (0.6264, 0.6264),
                     "roll": (0.0, 0.0),
                     "pitch": (0.0, 0.0),
                     "yaw": (-3.14, 3.14),

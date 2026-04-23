@@ -159,7 +159,7 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
         },
         joint_vel={".*": 0.0},
     ),
-    soft_joint_pos_limit_factor=1.0,
+    soft_joint_pos_limit_factor=0.9,
     actuators={
         "joint": DelayedPDActuatorCfg(
             joint_names_expr=[".*hipx_joint", ".*hipy_joint", ".*knee_joint"],

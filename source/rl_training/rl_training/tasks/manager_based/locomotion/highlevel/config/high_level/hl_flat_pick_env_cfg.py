@@ -228,7 +228,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 整体接近：机器人基座靠近物体
     approach_object = RewTerm(
         func=mdp.distance_to_target_reward_shift,
-        weight=1.5,                          # 略降权重，让位给 EE 精确接近
+        weight=2.0,                          # 略降权重，让位给 EE 精确接近
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
@@ -363,7 +363,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 夹爪同步接触奖励：arm_link7/8 两指同时接触物体时给予奖励
     grasp_contact_symmetric = RewTerm(
         func=mdp.gripper_contact_symmetric_grasp,
-        weight=500.0,  
+        weight=20.0,  
         params={
             "threshold": 0.5,
             "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
@@ -390,7 +390,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 稀疏成功奖励：物体高度超过阈值即触发
     lift_object = RewTerm(
         func=mdp.object_is_lifted,
-        weight=3000.0,                         # 最高权重，作为最终目标信号
+        weight=30.0,                         # 最高权重，作为最终目标信号
         params={
             "minimal_height": 0.04,          # 离桌面 4cm 算抬起
             "object_cfg": SceneEntityCfg("object"),
@@ -472,7 +472,7 @@ class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
         params={
             "action_term_name": "pre_trained_pick_action",
             "ee_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
-            "distance_threshold": 2.5,
+            "distance_threshold": 1.0,
         },
     )
 
@@ -527,7 +527,7 @@ class HLFlatPickEventCfg(HighLevelEventCfg):
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (0.5, 0.6), "y": (-0.6, 0.6),  "yaw": (-0.393, 0.393)},
+            "pose_range": {"x": (0.9, 1.0), "y": (-0.6, 0.6),  "yaw": (-0.393, 0.393)},
             "velocity_range": {
                 "x": (-0.0, 0.0),
                 "y": (-0.0, 0.0),

@@ -269,12 +269,12 @@ class PreTrainedPickWBCAction(ActionTerm):
             self._raw_actions[:, i] = torch.tanh(actions[:, i]) * scale + offset
 
         # ── 2. 底盘线速度死区 ─────────────────────────────────────────────
-        lin_vel_norm = torch.norm(self._raw_actions[:, 0:2], p=2, dim=-1, keepdim=True)
-        self._raw_actions[:, 0:2] = torch.where(
-            lin_vel_norm < 0.2,
-            torch.zeros_like(self._raw_actions[:, 0:2]),
-            self._raw_actions[:, 0:2]
-        )
+        # lin_vel_norm = torch.norm(self._raw_actions[:, 0:2], p=2, dim=-1, keepdim=True)
+        # self._raw_actions[:, 0:2] = torch.where(
+        #     lin_vel_norm < 0.2,
+        #     torch.zeros_like(self._raw_actions[:, 0:2]),
+        #     self._raw_actions[:, 0:2]
+        # )
 
         # 模型输出绝对目标
         # for idx, (lo, hi) in zip(
@@ -318,7 +318,6 @@ class PreTrainedPickWBCAction(ActionTerm):
         self._raw_actions[:, 11] = self._target_body_height
         self._raw_actions[:, 12] = self._target_body_pitch
         self._raw_actions[:, 13] = self._target_body_roll
-
         # ── 4. 计算位置增量 Δpos（world 系，tanh 锁幅）───────────────────
         delta_pos_max = self.cfg.delta_pos_max
         
@@ -351,9 +350,10 @@ class PreTrainedPickWBCAction(ActionTerm):
         # 构造最终姿态：Rz(accumulated_yaw) * Rx(π)（朝下）
         quat_z = math_utils.quat_from_euler_xyz(zeros, zeros, self._target_yaw_w)  # world yaw
         quat_x = math_utils.quat_from_euler_xyz(self._target_pitch_w, zeros, zeros)
+        # 朝下（Rx(π)）再向前倾 45°（Rx(-π/4)），合并为 Rx(π - π/4) = Rx(3π/4)
         quat_down = math_utils.quat_from_euler_xyz(
-            torch.full_like(delta_yaw, torch.pi), zeros, zeros
-        )  # 朝下
+            torch.full_like(delta_yaw, torch.pi - torch.pi / 4), zeros, zeros
+        )  # 朝下偏前 45°
         new_quat_w = math_utils.quat_mul(quat_z, math_utils.quat_mul(quat_x, quat_down))
         new_quat_w = torch.nn.functional.normalize(new_quat_w, p=2, dim=-1)
         self._target_quat_w[:] = new_quat_w
@@ -528,7 +528,7 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
     debug_vis: bool = False
     """Whether to visualize debug information. Defaults to False."""
 
-    delta_pos_max: float = 0.3
+    delta_pos_max: float = 0.1
     """每个高层 step EE 位置增量的最大幅度（米），tanh 后乘以此值。"""
     
     delta_yaw_max: float = 0.1
