@@ -348,7 +348,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 夹爪朝向对准：arm_link7/8 两指到物体的距离之和最小化
     gripper_alignment_symmetric = RewTerm(
         func=mdp.object_ee_symmetric_alignment,
-        weight=20.0,
+        weight=10.0,
         params={
             "std": 0.05,
             "min_finger_dist": 0.04,   # 新增，根据夹爪实际尺寸设置
@@ -368,9 +368,13 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
             "threshold": 0.5,
             "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
             "sensor_cfg_finger2": SceneEntityCfg("arm_link8_contact_forces", body_names="arm_link8"),
+            "object_cfg": SceneEntityCfg("object"),
             "ee_frame_cfg_finger1": SceneEntityCfg("robot", body_names="arm_link7"),
             "ee_frame_cfg_finger2": SceneEntityCfg("robot", body_names="arm_link8"),
-
+            "gripper_action_name": "gripper_action",
+            "min_finger_dist": 0.02,
+            "cmd_proximity_gate": 0.1,  # 新增：只有当 cmd_pos 距离物体小于10cm时，接触奖励才生效
+            "action_term_name": "pre_trained_pick_action",  # 用于取 cmd_pos
         },
     )
 

@@ -720,8 +720,11 @@ def gripper_contact_symmetric_grasp(
     sensor_cfg_finger2: SceneEntityCfg,
     ee_frame_cfg_finger1: SceneEntityCfg,  # 新增：用于获取夹爪位置
     ee_frame_cfg_finger2: SceneEntityCfg,  # 新增：用于获取夹爪位置
+    object_cfg: SceneEntityCfg,
     min_finger_dist: float = 0.02,          # 新增：夹爪最小张开距离（米）
     gripper_action_name: str = "gripper_action",
+    cmd_proximity_gate: float = 0.1,          # cmd_pos 到物体距离阈值
+    action_term_name: str = "pre_trained_pick_action",  # 用于取 cmd_pos
 ) -> torch.Tensor:
     
     # ---- 获取夹爪闭合状态 ----
@@ -757,8 +760,15 @@ def gripper_contact_symmetric_grasp(
     finger_span = torch.norm(pos1 - pos2, dim=-1)        # [N]
     gate_open = (finger_span > min_finger_dist).float()  # [N,]
 
+    # ----cmd_pos 到物体距离门控 ----
+    action_term = env.action_manager.get_term(action_term_name)
+    cmd_pos_w = action_term.raw_actions[:, 3:6]                        # [N, 3]
+    obj_pos_w = env.scene[object_cfg.name].data.root_pos_w             # [N, 3]  ← 需在参数里加 object_cfg
+    cmd_dist  = torch.norm(cmd_pos_w - obj_pos_w, dim=-1)              # [N,]
+    gate_close_cmd  = (cmd_dist < cmd_proximity_gate).float()                # [N,]
+
     # ---- 综合门控 ----
-    return gate_contact * reward_symmetry * is_close_cmd * gate_open
+    return gate_contact * reward_symmetry * is_close_cmd * gate_open * gate_close_cmd
 
 def object_is_lifted(
     env: ManagerBasedRLEnv,
