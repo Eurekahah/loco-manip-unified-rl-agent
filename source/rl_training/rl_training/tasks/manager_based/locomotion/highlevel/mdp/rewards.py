@@ -774,6 +774,8 @@ def object_is_lifted(
     env: ManagerBasedRLEnv,
     minimal_height: float,
     object_cfg: SceneEntityCfg,
+    cmd_proximity_gate: float = 0.2,          # cmd_pos 到物体距离阈值
+    action_term_name: str = "pre_trained_pick_action",  # 用于取 cmd_pos
 ) -> torch.Tensor:
     """
     物体被抬起的奖励。
@@ -810,11 +812,18 @@ def object_is_lifted(
     lifted_height = current_height - init_height  # (N,)
     # print(f"Current height: {current_height}, Initial height: {init_height}, Lifted height: {lifted_height}")
 
+    # ----cmd_pos 到物体距离门控 ----
+    action_term = env.action_manager.get_term(action_term_name)
+    cmd_pos_w = action_term.raw_actions[:, 3:6]                        # [N, 3]
+    obj_pos_w = env.scene[object_cfg.name].data.root_pos_w             # [N, 3]  ← 需在参数里加 object_cfg
+    cmd_dist  = torch.norm(cmd_pos_w - obj_pos_w, dim=-1)              # [N,]
+    gate_close_cmd  = (cmd_dist < cmd_proximity_gate).float()                # [N,]
+
     reward = torch.clamp(
         (lifted_height - minimal_height) / minimal_height,
         min=0.0,
         max=1.0,
-    )
+    ) * gate_close_cmd
     return reward
 
 def cmd_pos_to_object_reward(

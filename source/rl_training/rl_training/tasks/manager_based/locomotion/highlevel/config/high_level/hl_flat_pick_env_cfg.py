@@ -363,7 +363,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 夹爪同步接触奖励：arm_link7/8 两指同时接触物体时给予奖励
     grasp_contact_symmetric = RewTerm(
         func=mdp.gripper_contact_symmetric_grasp,
-        weight=20.0,  
+        weight=500.0,  
         params={
             "threshold": 0.5,
             "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
@@ -394,10 +394,12 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 稀疏成功奖励：物体高度超过阈值即触发
     lift_object = RewTerm(
         func=mdp.object_is_lifted,
-        weight=30.0,                         # 最高权重，作为最终目标信号
+        weight=1000.0,                         # 最高权重，作为最终目标信号
         params={
             "minimal_height": 0.04,          # 离桌面 4cm 算抬起
             "object_cfg": SceneEntityCfg("object"),
+            "cmd_proximity_gate": 0.2,  # 新增：只有当 cmd_pos 距离物体小于20cm时，抓取奖励才生效
+            "action_term_name": "pre_trained_pick_action",  # 用于取 cmd_pos
         },
     )
 
