@@ -224,10 +224,9 @@ class PreTrainedPickWBCAction(ActionTerm):
         ee_roll, ee_pitch, ee_yaw = math_utils.euler_xyz_from_quat(ee_quat_w)
 
         # 读取当前机身实际 pose 用于重置
-        root_quat_w = self.robot.data.root_quat_w                         # (N, 4)
-        root_roll, root_pitch, _ = math_utils.euler_xyz_from_quat(root_quat_w)
-        # height：用 root z 减去默认脚底高度，或直接用 root_pos z 作为近似
-        root_height = self.robot.data.root_pos_w[:, 2]                    # (N,)
+        default_height = 0.55
+        default_pitch  = 0.0
+        default_roll   = 0.0 
 
         if env_ids is None:
             self._target_pos_w[:]  = ee_pos_w
@@ -236,9 +235,9 @@ class PreTrainedPickWBCAction(ActionTerm):
             self._target_pitch_w[:] = ee_pitch
             self._target_initialized[:] = True
 
-            self._target_body_height[:] = root_height
-            self._target_body_pitch[:]  = root_pitch
-            self._target_body_roll[:]   = root_roll
+            self._target_body_height[:] = default_height
+            self._target_body_pitch[:]  = default_pitch
+            self._target_body_roll[:]   = default_roll
             self._body_pose_initialized[:] = True
         else:
             self._target_pos_w[env_ids]  = ee_pos_w[env_ids]
@@ -247,9 +246,9 @@ class PreTrainedPickWBCAction(ActionTerm):
             self._target_pitch_w[env_ids] = ee_pitch[env_ids]
             self._target_initialized[env_ids] = True
 
-            self._target_body_height[env_ids] = root_height[env_ids]
-            self._target_body_pitch[env_ids]  = root_pitch[env_ids]
-            self._target_body_roll[env_ids]   = root_roll[env_ids]
+            self._target_body_height[env_ids] = default_height
+            self._target_body_pitch[env_ids]  = default_pitch
+            self._target_body_roll[env_ids]   = default_roll
             self._body_pose_initialized[env_ids] = True
 
     def process_actions(self, actions: torch.Tensor):
@@ -293,10 +292,14 @@ class PreTrainedPickWBCAction(ActionTerm):
         uninit_ids = (~self._target_initialized).nonzero(as_tuple=False).squeeze(-1)
         if uninit_ids.numel() > 0:
             self._reset_target_to_current_ee(uninit_ids)
+        frozen_mask = delta_scale < 0.1  # (N,) bool
 
-        delta_height = torch.tanh(actions[:, 11]) * self.cfg.delta_body_height_max   # (N,)
-        delta_pitch  = torch.tanh(actions[:, 12]) * self.cfg.delta_body_pitch_max    # (N,)
-        delta_roll   = torch.tanh(actions[:, 13]) * self.cfg.delta_body_roll_max     # (N,)
+        delta_height = torch.where(frozen_mask, torch.zeros_like(delta_scale),
+            torch.tanh(actions[:, 11]) * self.cfg.delta_body_height_max * delta_scale)  # (N,)
+        delta_pitch  = torch.where(frozen_mask, torch.zeros_like(delta_scale),
+            torch.tanh(actions[:, 12]) * self.cfg.delta_body_pitch_max  * delta_scale)  # (N,)
+        delta_roll   = torch.where(frozen_mask, torch.zeros_like(delta_scale),
+            torch.tanh(actions[:, 13]) * self.cfg.delta_body_roll_max   * delta_scale)  # (N,)
 
         # 累积到目标上，并 clamp 到合法范围
         self._target_body_height = torch.clamp(

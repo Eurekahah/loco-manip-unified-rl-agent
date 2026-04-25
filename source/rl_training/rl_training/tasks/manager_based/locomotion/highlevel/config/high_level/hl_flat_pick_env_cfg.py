@@ -239,7 +239,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 底盘朝向物体
     heading_to_object = RewTerm(
         func=mdp.heading_to_target_reward,
-        weight=1.0,
+        weight=1.5,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
@@ -482,6 +482,14 @@ class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
         },
     )
 
+    lift_object = DoneTerm(
+        func=mdp.object_held_for_duration,
+        params={
+            "object_cfg": SceneEntityCfg("object"),
+            "minimal_height": 0.04,
+            "hold_duration": 3.0,           # 持续举起 3 秒终止
+        },
+    )
     
     # hold_object = DoneTerm(
     #     func=mdp.object_held_for_duration,  # 替换为新函数
@@ -621,7 +629,7 @@ class HLFlatPickEnvCfg(HighLevelFlatEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
-
+        self.terminations.base_contact = None
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "HLFlatPickEnvCfg":
             self.disable_zero_weight_rewards()
