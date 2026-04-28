@@ -81,7 +81,7 @@ class PreTrainedPickWBCAction(ActionTerm):
         self.policy = torch.jit.load(file_bytes).to(env.device).eval()
 
         self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)     # [vx, vy, wz,  Δx, Δy, Δz,  Δr, Δp, Δy,      Δbody_height, Δbody_pitch, Δbody_roll]
-        self._ll_command = torch.zeros(self.num_envs, self.action_dim - 1, device=self.device)  # [vx, vy, wz,  x, y, z,     qw, qx, qy, qz,  body_height, body_pitch, body_roll]
+        self._ll_command = torch.zeros(self.num_envs, self.action_dim + 1, device=self.device)  # [vx, vy, wz,  x, y, z,     qw, qx, qy, qz,  body_height, body_pitch, body_roll]
 
         # 分别初始化三个 low level action term
         self._joint_pos_action_term: ActionTerm = cfg.low_level_leg_actions.class_type(
@@ -174,7 +174,6 @@ class PreTrainedPickWBCAction(ActionTerm):
         )
         self._target_body_pitch = torch.zeros(self.num_envs, device=self.device)
         self._target_body_roll  = torch.zeros(self.num_envs, device=self.device)
-        self._body_pose_initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._target_initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         # 直接用 find_bodies 查，不需要 SceneEntityCfg 和 resolve
@@ -197,6 +196,10 @@ class PreTrainedPickWBCAction(ActionTerm):
     @property
     def processed_actions(self) -> torch.Tensor:
         return self.raw_actions
+    
+    @property
+    def ll_command(self) -> torch.Tensor:
+        return self._ll_command
 
     """
     Operations.
@@ -278,7 +281,11 @@ class PreTrainedPickWBCAction(ActionTerm):
          # ── 5. 叠加 EE 姿态rpy增量 ───────────────────────────────────────────────
         delta_ee_orn_rpy_b = torch.tanh(self._raw_actions[:, 6:9]) * self.cfg.delta_ee_orn_max
         self._target_ee_orn_rpy_b = self._target_ee_orn_rpy_b + delta_ee_orn_rpy_b
-        ee_quat_b = math_utils.quat_from_euler_xyz(self._target_ee_orn_rpy_b)
+        ee_quat_b = math_utils.quat_from_euler_xyz(
+            self._target_ee_orn_rpy_b[:, 0],  # roll
+            self._target_ee_orn_rpy_b[:, 1],  # pitch
+            self._target_ee_orn_rpy_b[:, 2],  # yaw
+        )
         self._ll_command[:, 6:10] = math_utils.quat_mul(root_quat_w, ee_quat_b)
         # 此处要不要对姿态的欧拉角范围进行clamp
         # 如何输出为四元数，输出到_raw_action?还是
