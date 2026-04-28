@@ -227,62 +227,54 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     # 整体接近：机器人基座靠近物体
     approach_object = RewTerm(
-        func=mdp.distance_to_target_reward_shift,
-        weight=2.0,                          # 略降权重，让位给 EE 精确接近
+        func=mdp.distance_to_target_reward_shift_progress,
+        weight=1.0,                          # 略降权重，让位给 EE 精确接近
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
-            "lam": 2.0,                        # λ 越大，收敛越快（建议 3.0–5.0）
+            "sensitivity": 20.0,
+            "penalty_scale": 0.5,   # 后退时额外惩罚，可选
         },
     )
 
     # 底盘朝向物体
     heading_to_object = RewTerm(
-        func=mdp.heading_to_target_reward,
+        func=mdp.heading_to_target_reward_progress,
         weight=1.5,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
-            "std": 0.3,                        # 角度奖励的σ，单位：弧度，约17度
+            "sensitivity": 30.0,
+            "penalty_scale":  0.2,
+            "near_dist_gate": 0.5,
         },
     )
 
-    # 靠近后减速，稳定底盘（沿用原逻辑）
-    # slow_near_target = RewTerm(
-    #     func=mdp.slow_down_near_target_reward,
-    #     weight=0.01,
-    #     params={
-    #         "robot_cfg": SceneEntityCfg("robot"),
-    #         "target_cfg": SceneEntityCfg("object"),
-    #         "distance_threshold": 1.0,
-    #         "vel_max": 0.5,
-    #         "penalty_scale": 1.0,
-    #     },
-    # )
-
     forward_velocity_penalty = RewTerm(
         func=mdp.forward_velocity_penalty,
-        weight=-0.5,
+        weight=-0.05,
         params={"action_name": "pre_trained_pick_action"},
         )
 
     lateral_velocity_penalty = RewTerm(
         func=mdp.lateral_velocity_penalty,
-        weight=-0.5,
+        weight=-0.05,
         params={"action_name": "pre_trained_pick_action"},
     )
 
     angular_velocity_penalty = RewTerm(
         func=mdp.angular_velocity_penalty,
-        weight=-0.2,
+        weight=-0.02,
         params={"action_name": "pre_trained_pick_action"},
     )
-
-    arm_posture_deviation = RewTerm(
-        func=mdp.joint_deviation_l1,
-        weight=-0.005,
+    base_vel_cmd_action_l1_near_object = RewTerm(
+        func=mdp.base_vel_cmd_action_l1_near_object,
+        weight=-1.0,
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="arm_link[1-6]"),
+            "action_term_name": "pre_trained_pick_action",
+            "robot_cfg":        SceneEntityCfg("robot"),
+            "object_cfg":       SceneEntityCfg("object"),
+            "distance_threshold": 0.8,
         },
     )
 
@@ -291,55 +283,36 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # =========================================================
 
     cmd_pos_to_object = RewTerm(
-        func=mdp.cmd_pos_to_object_reward,
-        weight=4.0,
+        func=mdp.cmd_pos_to_object_reward_progress,
+        weight=2.0,
         params={
             "action_term_name": "pre_trained_pick_action",
             "object_cfg":       SceneEntityCfg("object"),
-            "pos_sigma":        0.7,   # 单位：米，70cm内奖励显著上升
-            "use_shaped":       True,
+            "sensitivity": 20.0,
+            "penalty_scale":    0.5,
         },
     )
-
-    cmd_pos_to_object_fine_grained = RewTerm(
-        func=mdp.cmd_pos_to_object_reward,
-        weight=4.0,
+    ee_delta_pose_l1_near_object = RewTerm(
+        func=mdp.ee_delta_pose_l1_near_object,
+        weight=-1.0,
         params={
             "action_term_name": "pre_trained_pick_action",
             "object_cfg":       SceneEntityCfg("object"),
-            "pos_sigma":        0.2,   # 单位：米，20cm内奖励显著上升
-            "use_shaped":       False,
+            "ee_frame_cfg":     SceneEntityCfg("robot", body_names="arm_link6"),
+            "distance_threshold":    0.2,
         },
     )
 
     # 核心密集奖励：arm_link6（EE）到物体距离，高斯核塑形
-    reach_object_ee = RewTerm(
-        func=mdp.object_ee_distance,
-        weight=5.0,                          # 权重高于底盘接近，引导手臂精细运动
-        params={
-            "std": 0.3,                      # 高斯核宽度，越小精度要求越高
-            "object_cfg": SceneEntityCfg("object"),
-            "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
-        },
-    )
-
-    delta_action_penalty_near_goal = RewTerm(
-        func=mdp.delta_action_l2_near_target,
-        weight=-2.0,
-        params={
-            "action_name": "pre_trained_pick_action",
-            "object_cfg": SceneEntityCfg("object"),
-            "distance_threshold": 0.2,
-        },
-    )
-
-    ee_velocity_penalty = RewTerm(
-        func=mdp.ee_velocity_l2,
-        weight=-0.5,
-        params={
-            "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
-        },
-    )
+    # reach_object_ee = RewTerm(
+    #     func=mdp.object_ee_distance,
+    #     weight=5.0,                          # 权重高于底盘接近，引导手臂精细运动
+    #     params={
+    #         "std": 0.3,                      # 高斯核宽度，越小精度要求越高
+    #         "object_cfg": SceneEntityCfg("object"),
+    #         "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
+    #     },
+    # )
 
     # =========================================================
     # 阶段三：夹爪对准物体
@@ -347,23 +320,35 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     # 夹爪朝向对准：arm_link7/8 两指到物体的距离之和最小化
     gripper_alignment_symmetric = RewTerm(
-        func=mdp.object_ee_symmetric_alignment,
-        weight=10.0,
+        func=mdp.object_ee_symmetric_alignment_progress,
+        weight=3.0,
         params={
-            "std": 0.05,
-            "min_finger_dist": 0.04,   # 新增，根据夹爪实际尺寸设置
-                                    # 物体直径约多少就设多少，例如物体直径4cm
-            "object_cfg": SceneEntityCfg("object"),
-            "ee_frame_cfg_finger1": SceneEntityCfg("robot", body_names="arm_link7"),
-            "ee_frame_cfg_finger2": SceneEntityCfg("robot", body_names="arm_link8"),
+            "min_finger_dist":       0.04,
+            "object_cfg":            SceneEntityCfg("object"),
+            "ee_frame_cfg_finger1":  SceneEntityCfg("robot", body_names="arm_link7"),
+            "ee_frame_cfg_finger2":  SceneEntityCfg("robot", body_names="arm_link8"),
+            "sensitivity":           50.0,
+            "penalty_scale":         0.0,
+            "cmd_proximity_gate":    0.3,
+            "action_term_name":      "pre_trained_pick_action",  # 用于取 cmd_pos
+        },
+    )
+
+    ee_orientation_to_object = RewTerm(
+        func=mdp.ee_orientation_to_object_progress,
+        weight=1.0,
+        params={
+            "object_cfg":   SceneEntityCfg("object"),
+            "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
+            "action_term_name":      "pre_trained_pick_action", 
         },
     )
 
 
     # 夹爪同步接触奖励：arm_link7/8 两指同时接触物体时给予奖励
     grasp_contact_symmetric = RewTerm(
-        func=mdp.gripper_contact_symmetric_grasp,
-        weight=500.0,  
+        func=mdp.gripper_contact_symmetric_grasp_progress,
+        weight=5.0,  
         params={
             "threshold": 0.5,
             "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
@@ -373,34 +358,30 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
             "ee_frame_cfg_finger2": SceneEntityCfg("robot", body_names="arm_link8"),
             "gripper_action_name": "gripper_action",
             "min_finger_dist": 0.02,
-            "cmd_proximity_gate": 0.1,  # 新增：只有当 cmd_pos 距离物体小于10cm时，接触奖励才生效
+            "cmd_proximity_gate": 0.2,  # 新增：只有当 cmd_pos 距离物体小于20cm时，接触奖励才生效
             "action_term_name": "pre_trained_pick_action",  # 用于取 cmd_pos
+            "sensitivity": 10,
         },
     )
 
-    delta_scale_reward = RewTerm(
-        func=mdp.reward_delta_scale,
-        weight=3.0,
-        params={
-            "action_name": "pre_trained_pick_action",
-            "object_cfg": SceneEntityCfg("object"),
-            "d_max": 0.2,  
-        }
-    )
     # =========================================================
-    # 阶段四：抬起物体（稀疏高奖励）
+    # 阶段四：抬起物体
     # =========================================================
-
-    # 稀疏成功奖励：物体高度超过阈值即触发
     lift_object = RewTerm(
-        func=mdp.object_is_lifted,
-        weight=1000.0,                         # 最高权重，作为最终目标信号
+        func=mdp.object_is_lifted_progress,
+        weight=10.0,                         # 最高权重，作为最终目标信号
         params={
-            "minimal_height": 0.04,          # 离桌面 4cm 算抬起
             "object_cfg": SceneEntityCfg("object"),
             "cmd_proximity_gate": 0.2,  # 新增：只有当 cmd_pos 距离物体小于20cm时，抓取奖励才生效
             "action_term_name": "pre_trained_pick_action",  # 用于取 cmd_pos
+            "sensitivity": 100
         },
+    )
+
+    pickup_success = RewTerm(
+        func=mdp.is_terminated_term,   # 配合 TerminationCfg 使用
+        weight=10.0,
+        params={"term_keys": "pick_success"},
     )
 
 
@@ -412,7 +393,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 手臂主体非预期碰撞（排除夹爪，夹爪需要接触物体）
     undesired_arm_contacts = RewTerm(
         func=mdp.undesired_contacts,
-        weight=-1.0,
+        weight=-0.01,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "arm_contact_forces",
@@ -423,7 +404,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     )
     undesired_body_contacts = RewTerm(
         func=mdp.undesired_contacts,
-        weight=-1.0,
+        weight=-0.01,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "contact_forces",
@@ -482,23 +463,15 @@ class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
         },
     )
 
-    lift_object = DoneTerm(
+    pick_success = DoneTerm(
         func=mdp.object_held_for_duration,
         params={
             "object_cfg": SceneEntityCfg("object"),
             "minimal_height": 0.04,
-            "hold_duration": 3.0,           # 持续举起 3 秒终止
+            "hold_duration": 1.0,           # 持续举起 1 秒终止
         },
     )
     
-    # hold_object = DoneTerm(
-    #     func=mdp.object_held_for_duration,  # 替换为新函数
-    #     params={
-    #         "object_cfg": SceneEntityCfg("object"),
-    #         "minimal_height": 0.04,
-    #         "hold_duration": 5.0,           # 持续举起 5 秒终止
-    #     },
-    # )
 
 @configclass
 class HLFlatPickTerminationsCfg_PLAY(HLFlatPickTerminationsCfg):

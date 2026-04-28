@@ -80,7 +80,7 @@ def action_target_too_far(
     """
     # 获取 action term 的 raw action，取第 3:6 列作为目标位置
     action_term = env.action_manager.get_term(action_term_name)
-    target_pos = action_term.raw_actions[:, 3:6]  # shape: (num_envs, 3), world frame
+    target_pos = action_term.ll_command[:, 3:6]  # shape: (num_envs, 3), world frame
 
     target_norm = torch.norm(target_pos, dim=-1)
     is_valid_target = target_norm > 1e-6  # 有效的目标位置（非零）

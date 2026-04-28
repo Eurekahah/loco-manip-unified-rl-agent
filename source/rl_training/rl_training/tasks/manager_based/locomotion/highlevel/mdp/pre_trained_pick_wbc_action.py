@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import torch
+import math
 from dataclasses import MISSING
 from typing import TYPE_CHECKING
 
@@ -79,7 +80,8 @@ class PreTrainedPickWBCAction(ActionTerm):
         file_bytes = read_file(cfg.policy_path)
         self.policy = torch.jit.load(file_bytes).to(env.device).eval()
 
-        self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+        self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)     # [vx, vy, wz,  Δx, Δy, Δz,  Δr, Δp, Δy,      Δbody_height, Δbody_pitch, Δbody_roll]
+        self._ll_command = torch.zeros(self.num_envs, self.action_dim - 1, device=self.device)  # [vx, vy, wz,  x, y, z,     qw, qx, qy, qz,  body_height, body_pitch, body_roll]
 
         # 分别初始化三个 low level action term
         self._joint_pos_action_term: ActionTerm = cfg.low_level_leg_actions.class_type(
@@ -121,7 +123,6 @@ class PreTrainedPickWBCAction(ActionTerm):
                 self.low_level_leg_actions[reset_mask, :] = 0
                 self.low_level_wheel_actions[reset_mask, :] = 0
                 self.low_level_ee_actions[reset_mask, :] = 0
-                self._raw_actions[reset_mask, :] = 0
             # 拼接两个 action term 的输出，供 low-level obs 使用
             return torch.cat([self.low_level_leg_actions, self.low_level_wheel_actions, self.low_level_ee_actions], dim=-1)
         
@@ -134,14 +135,14 @@ class PreTrainedPickWBCAction(ActionTerm):
         cfg.low_level_observations.actions.func = lambda dummy_env: last_action()
         cfg.low_level_observations.actions.params = dict()
 
-        cfg.low_level_observations.velocity_commands.func = lambda dummy_env: self._raw_actions[:, :3]
+        cfg.low_level_observations.velocity_commands.func = lambda dummy_env: self._ll_command[:, :3]
         cfg.low_level_observations.velocity_commands.params = dict()
 
-        cfg.low_level_observations.ee_goal.func = lambda dummy_env: self._raw_actions[:, 3:10]
+        cfg.low_level_observations.ee_goal.func = lambda dummy_env: self._ll_command[:, 3:10]
         cfg.low_level_observations.ee_goal.params = dict()
 
         cfg.low_level_observations.body_pose_cmd.func = (
-            lambda dummy_env: self._raw_actions[:, 11:14]
+            lambda dummy_env: self._ll_command[:, 10:13]
         )
         cfg.low_level_observations.body_pose_cmd.params = dict()
 
@@ -164,15 +165,12 @@ class PreTrainedPickWBCAction(ActionTerm):
         self._counter = 0
 
         # ── 增量模式：缓存上一时刻的目标位姿（world 系） ──────────────────────
-        self._target_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
-        self._target_quat_w = torch.zeros(self.num_envs, 4, device=self.device)
-        self._target_quat_w[:, 0] = 1.0  # 初始化为单位四元数 (w=1)
-        self._target_yaw_w = torch.zeros(self.num_envs, device=self.device)
-        self._target_pitch_w = torch.zeros(self.num_envs, device=self.device)
+        self._target_ee_pos_b = torch.zeros(self.num_envs, 3, device=self.device)
+        self._target_ee_orn_rpy_b = torch.zeros(self.num_envs, 3, device=self.device)
 
         # body_pose 增量模式：缓存上一时刻的目标 body pose（height, pitch, roll）
         self._target_body_height = torch.full(
-            (self.num_envs,), 0.50, device=self.device  # 初始值取0.5m
+            (self.num_envs,), 0.55, device=self.device  # 初始值取0.55m
         )
         self._target_body_pitch = torch.zeros(self.num_envs, device=self.device)
         self._target_body_roll  = torch.zeros(self.num_envs, device=self.device)
@@ -181,17 +179,13 @@ class PreTrainedPickWBCAction(ActionTerm):
 
         # 直接用 find_bodies 查，不需要 SceneEntityCfg 和 resolve
         self._ee_body_idx = self.robot.find_bodies(self.cfg.ee_body_name)[0][0]
-
-        self._delta_pos_w = torch.zeros_like(self._target_pos_w)
-        self._delta_yaw = torch.zeros(self.num_envs, 1, device=self.device)
-        self._delta_action = torch.zeros(self.num_envs, 4, device=self.device)  # (delta_pos_w, delta_yaw)
     """
     Properties.
     """
 
     @property
     def action_dim(self) -> int:
-        return 14   # base_velocity(3) + ee_pose(7): [vx, vy, wz, x, y, z, qw, qx, qy, qz, delta_scale, target_height, target_pitch, target_roll]
+        return 12   # base_velocity(3) + ee_pose(7) + delta_scale(1)+: [vx, vy, wz, x, y, z, r, p, y, body_height, body_pitch, body_roll]
         # return 10   # base_velocity(3) + ee_pose(7): [vx, vy, wz, x, y, z, qw, qx, qy, qz]
                     # 此处根据low-level policy的输入维度进行设置。当前设置为10维，包含3维的底盘速度和7维的末端执行器位姿（位置+四元数）。
         # return 7    # base_velocity(3) + ee_pos(3) + yaw(1)
@@ -207,9 +201,6 @@ class PreTrainedPickWBCAction(ActionTerm):
     """
     Operations.
     """
-    def tanh_scale(self, x, lo, hi):
-        # 将无界输入映射到 [lo, hi]，全程可微
-        return lo + (hi - lo) * (torch.tanh(x) * 0.5 + 0.5)
     
     def range_to_scale_offset(self, lo: float, hi: float):
         """将 [lo, hi] 范围转换为 scale 和 offset"""
@@ -223,40 +214,39 @@ class PreTrainedPickWBCAction(ActionTerm):
         ee_quat_w = self.robot.data.body_quat_w[:, self._ee_body_idx, :]  # (N, 4)
         ee_roll, ee_pitch, ee_yaw = math_utils.euler_xyz_from_quat(ee_quat_w)
 
+        # 转到 body 系
+        root_quat_w = self.robot.data.root_quat_w
+        root_quat_inv = math_utils.quat_conjugate(root_quat_w)
+        ee_quat_b = math_utils.quat_mul(root_quat_inv, ee_quat_w)
+        ee_roll_b, ee_pitch_b, ee_yaw_b = math_utils.euler_xyz_from_quat(ee_quat_b)
+        ee_pos_b = math_utils.quat_apply(root_quat_inv, ee_pos_w - self.robot.data.root_pos_w)
+
         # 读取当前机身实际 pose 用于重置
         default_height = 0.55
         default_pitch  = 0.0
         default_roll   = 0.0 
 
         if env_ids is None:
-            self._target_pos_w[:]  = ee_pos_w
-            self._target_quat_w[:] = ee_quat_w
-            self._target_yaw_w[:]  = ee_yaw
-            self._target_pitch_w[:] = ee_pitch
             self._target_initialized[:] = True
 
+            self._target_ee_orn_rpy_b[:] = torch.stack([ee_roll_b, ee_pitch_b, ee_yaw_b], dim=-1)
+            self._target_ee_pos_b[:] = ee_pos_b 
             self._target_body_height[:] = default_height
             self._target_body_pitch[:]  = default_pitch
             self._target_body_roll[:]   = default_roll
-            self._body_pose_initialized[:] = True
         else:
-            self._target_pos_w[env_ids]  = ee_pos_w[env_ids]
-            self._target_quat_w[env_ids] = ee_quat_w[env_ids]
-            self._target_yaw_w[env_ids]  = ee_yaw[env_ids]
-            self._target_pitch_w[env_ids] = ee_pitch[env_ids]
             self._target_initialized[env_ids] = True
 
+            self._target_ee_orn_rpy_b[env_ids] = torch.stack(
+                [ee_roll_b[env_ids], ee_pitch_b[env_ids], ee_yaw_b[env_ids]], dim=-1)
+            self._target_ee_pos_b[env_ids] = ee_pos_b[env_ids]
             self._target_body_height[env_ids] = default_height
             self._target_body_pitch[env_ids]  = default_pitch
             self._target_body_roll[env_ids]   = default_roll
-            self._body_pose_initialized[env_ids] = True
 
     def process_actions(self, actions: torch.Tensor):
         self._raw_actions[:] = actions
         r = self.cfg.low_level_command_ranges
-
-        delta_scale = torch.sigmoid(actions[:, 10])  # [0,1]
-        self._raw_actions[:, 10] = delta_scale
 
         # ── 1. 底盘速度：tanh + scale/offset ─────────────────────────────
         for i, (lo, hi) in enumerate([
@@ -265,41 +255,38 @@ class PreTrainedPickWBCAction(ActionTerm):
             (r.ang_vel_z[0], r.ang_vel_z[1]),
         ]):
             scale, offset = self.range_to_scale_offset(lo, hi)
-            self._raw_actions[:, i] = torch.tanh(actions[:, i]) * scale + offset
-
-        # ── 2. 底盘线速度死区 ─────────────────────────────────────────────
-        # lin_vel_norm = torch.norm(self._raw_actions[:, 0:2], p=2, dim=-1, keepdim=True)
-        # self._raw_actions[:, 0:2] = torch.where(
-        #     lin_vel_norm < 0.2,
-        #     torch.zeros_like(self._raw_actions[:, 0:2]),
-        #     self._raw_actions[:, 0:2]
-        # )
-
-        # 模型输出绝对目标
-        # for idx, (lo, hi) in zip(
-        #     [11, 12, 13],
-        #     [
-        #         (r.target_height[0], r.target_height[1]),
-        #         (r.target_pitch[0],  r.target_pitch[1]),
-        #         (r.target_roll[0],   r.target_roll[1]),
-        #     ],
-        # ):
-        #     scale, offset = self.range_to_scale_offset(lo, hi)
-        #     self._raw_actions[:, idx] = torch.tanh(actions[:, idx]) * scale + offset
-
+            self._ll_command[:, i] = torch.tanh(actions[:, i]) * scale + offset
 
         # ── 3. 未初始化的 env 先重置目标到当前 EE 位姿 ───────────────────
         uninit_ids = (~self._target_initialized).nonzero(as_tuple=False).squeeze(-1)
         if uninit_ids.numel() > 0:
             self._reset_target_to_current_ee(uninit_ids)
-        frozen_mask = delta_scale < 0.1  # (N,) bool
+        
+        # ── 4. 计算EE位置增量 Δpos（body系，tanh 锁幅, 最终输出world系）───────────────────
+        delta_ee_pos_b = torch.tanh(self._raw_actions[:, 3:6]) * self.cfg.delta_ee_pos_max
+        self._target_ee_pos_b = self._target_ee_pos_b + delta_ee_pos_b
+        self._target_ee_pos_b[:, 0] = torch.clamp(self._target_ee_pos_b[:, 0], r.ee_pos_x[0], r.ee_pos_x[1])
+        self._target_ee_pos_b[:, 1] = torch.clamp(self._target_ee_pos_b[:, 1], r.ee_pos_y[0], r.ee_pos_y[1])
+        self._target_ee_pos_b[:, 2] = torch.clamp(self._target_ee_pos_b[:, 2], r.ee_pos_z[0], r.ee_pos_z[1])
+        
+        
+        root_quat_w = self.robot.data.root_quat_w  # (N, 4)
+        root_pos_w  = self.robot.data.root_pos_w
+        target_pos_w = math_utils.quat_apply(root_quat_w, self._target_ee_pos_b) + root_pos_w
+        self._ll_command[:, 3:6] = target_pos_w
 
-        delta_height = torch.where(frozen_mask, torch.zeros_like(delta_scale),
-            torch.tanh(actions[:, 11]) * self.cfg.delta_body_height_max * delta_scale)  # (N,)
-        delta_pitch  = torch.where(frozen_mask, torch.zeros_like(delta_scale),
-            torch.tanh(actions[:, 12]) * self.cfg.delta_body_pitch_max  * delta_scale)  # (N,)
-        delta_roll   = torch.where(frozen_mask, torch.zeros_like(delta_scale),
-            torch.tanh(actions[:, 13]) * self.cfg.delta_body_roll_max   * delta_scale)  # (N,)
+         # ── 5. 叠加 EE 姿态rpy增量 ───────────────────────────────────────────────
+        delta_ee_orn_rpy_b = torch.tanh(self._raw_actions[:, 6:9]) * self.cfg.delta_ee_orn_max
+        self._target_ee_orn_rpy_b = self._target_ee_orn_rpy_b + delta_ee_orn_rpy_b
+        ee_quat_b = math_utils.quat_from_euler_xyz(self._target_ee_orn_rpy_b)
+        self._ll_command[:, 6:10] = math_utils.quat_mul(root_quat_w, ee_quat_b)
+        # 此处要不要对姿态的欧拉角范围进行clamp
+        # 如何输出为四元数，输出到_raw_action?还是
+
+        # -- 6. 叠加机体姿态height， pitch，roll增量
+        delta_height = torch.tanh(actions[:, 9]) * self.cfg.delta_body_height_max  # (N,)
+        delta_pitch  = torch.tanh(actions[:, 10]) * self.cfg.delta_body_pitch_max   # (N,)
+        delta_roll   = torch.tanh(actions[:, 11]) * self.cfg.delta_body_roll_max  # (N,)
 
         # 累积到目标上，并 clamp 到合法范围
         self._target_body_height = torch.clamp(
@@ -318,59 +305,9 @@ class PreTrainedPickWBCAction(ActionTerm):
             self.cfg.low_level_command_ranges.target_roll[1],
         )
 
-        self._raw_actions[:, 11] = self._target_body_height
-        self._raw_actions[:, 12] = self._target_body_pitch
-        self._raw_actions[:, 13] = self._target_body_roll
-        # ── 4. 计算位置增量 Δpos（world 系，tanh 锁幅）───────────────────
-        delta_pos_max = self.cfg.delta_pos_max
-        
-        delta_pos_b = torch.tanh(self._raw_actions[:, 3:6]) * delta_pos_max * delta_scale.unsqueeze(-1)
-
-        root_quat_w = self.robot.data.root_quat_w  # (N, 4)
-        delta_pos_w = math_utils.quat_apply(root_quat_w, delta_pos_b)
-
-        # ── 5. 叠加位置增量 ───────────────────────────────────────────────
-        self._target_pos_w[:] = self._target_pos_w + delta_pos_w
-
-        # ── 6. 姿态：朝下 + yaw/pitch 增量叠加 ─────────────────────────────
-        # actions[:, 6] 作为 yaw 增量
-        # actions[:, 7] → pitch 增量（0=朝下, π/2=朝前）
-        delta_yaw = torch.tanh(actions[:, 6]) * self.cfg.delta_yaw_max  # (N,)
-        delta_pitch = torch.tanh(actions[:, 7]) * self.cfg.delta_pitch_max  # (N,)
-        zeros = torch.zeros_like(delta_yaw)
-
-        # 累积 yaw：从上一帧目标 yaw 叠加增量
-        self._target_yaw_w = getattr(self, '_target_yaw_w', zeros.clone())
-        self._target_yaw_w = self._target_yaw_w + delta_yaw
-
-        # ── 累积 pitch，clamp 到 [pitch_min, pitch_max] ─────────────────────
-        self._target_pitch_w = getattr(self, '_target_pitch_w', zeros.clone())
-        self._target_pitch_w = torch.clamp(
-            self._target_pitch_w + delta_pitch,
-            r.ee_pitch[0], r.ee_pitch[1]
-        )
-
-        # 构造最终姿态：Rz(accumulated_yaw) * Rx(π)（朝下）
-        quat_z = math_utils.quat_from_euler_xyz(zeros, zeros, self._target_yaw_w)  # world yaw
-        quat_x = math_utils.quat_from_euler_xyz(self._target_pitch_w, zeros, zeros)
-        # 朝下（Rx(π)）再向前倾 45°（Rx(-π/4)），合并为 Rx(π - π/4) = Rx(3π/4)
-        quat_down = math_utils.quat_from_euler_xyz(
-            torch.full_like(delta_yaw, torch.pi - torch.pi / 4), zeros, zeros
-        )  # 朝下偏前 45°
-        new_quat_w = math_utils.quat_mul(quat_z, math_utils.quat_mul(quat_x, quat_down))
-        new_quat_w = torch.nn.functional.normalize(new_quat_w, p=2, dim=-1)
-        self._target_quat_w[:] = new_quat_w
-
-        # ── 7. 记录 delta 信息（供 reward term 使用）─────────────────────
-        delta_rpy = torch.stack([zeros, delta_pitch, delta_yaw], dim=-1)  # (N, 3)，roll/pitch=0
-        self._delta_pos_w  = delta_pos_w.clone()
-        self._delta_rpy    = delta_rpy.clone()
-        self._delta_action = torch.cat([delta_pos_w, delta_rpy], dim=-1)  # (N, 6)
-
-        # ── 8. 写入 _raw_actions（供 apply_actions 读取）─────────────────
-        self._raw_actions[:, 3:6]  = self._target_pos_w
-        self._raw_actions[:, 6:10] = self._target_quat_w
-        # 位置直接保留 step 3 写入的 world 坐标，无需再变换
+        self._ll_command[:, 10] = self._target_body_height
+        self._ll_command[:, 11] = self._target_body_pitch
+        self._ll_command[:, 12] = self._target_body_roll
         
 
     def apply_actions(self):
@@ -380,7 +317,6 @@ class PreTrainedPickWBCAction(ActionTerm):
             reset_ids = (self._env.episode_length_buf == 0).nonzero(as_tuple=False).squeeze(-1)
             if reset_ids.numel() > 0:
                 self._target_initialized[reset_ids] = False  # 标记为未初始化，下一步重置
-                self._body_pose_initialized[reset_ids] = False
 
         
         if self._counter % self.cfg.low_level_decimation == 0:
@@ -392,15 +328,8 @@ class PreTrainedPickWBCAction(ActionTerm):
             self.low_level_wheel_actions[:] = policy_output[:, self._joint_pos_dim:self._joint_pos_dim + self._wheel_vel_dim]
             self.low_level_ee_actions[:] = policy_output[:, self._joint_pos_dim + self._wheel_vel_dim:self._joint_pos_dim + self._wheel_vel_dim + self._ee_ik_dim]
             # 在 apply_actions 里写入 command 之前
-            # target_pos  = self._raw_actions[:, 3:6]    # (num_envs, 3)
-            # target_quat = self._raw_actions[:, 6:10]   # (num_envs, 4)  qw, qx, qy, qz
 
-            # # 归一化，防止非单位四元数导致坐标轴歪斜
-            # target_quat = torch.nn.functional.normalize(target_quat, p=2, dim=-1)
-
-            # self._ee_command_term.pose_command_w[:, 0:3] = target_pos
-            # self._ee_command_term.pose_command_w[:, 3:7] = target_quat
-            self._ee_command_term.pose_command_w[:] = self._raw_actions[:, 3:10] # 更新 CommandManager 中的 ee_pose 命令，供 IK controller 使用
+            self._ee_command_term.pose_command_w[:] = self._ll_command[:, 3:10] # 更新 CommandManager 中的 ee_pose 命令，供 IK controller 使用
 
             self._joint_pos_action_term.process_actions(self.low_level_leg_actions)
             self._wheel_vel_action_term.process_actions(self.low_level_wheel_actions)
@@ -457,7 +386,7 @@ class PreTrainedPickWBCAction(ActionTerm):
         base_pos_w[:, 2] += 0.5
 
         vel_des_arrow_scale, vel_des_arrow_quat = self._resolve_xy_velocity_to_arrow(
-            self.raw_actions[:, :2]
+            self.ll_command[:, :2]
         )
         vel_arrow_scale, vel_arrow_quat = self._resolve_xy_velocity_to_arrow(
             self.robot.data.root_lin_vel_b[:, :2]
@@ -466,9 +395,8 @@ class PreTrainedPickWBCAction(ActionTerm):
         self.base_vel_visualizer.visualize(base_pos_w, vel_arrow_quat, vel_arrow_scale)
 
         # ── ee_pose 目标可视化 ✅ ──────────────────────────────────────
-        # raw_actions[:, 3:10] = [x, y, z, qw, qx, qy, qz]
-        ee_goal_pos  = self.raw_actions[:, 3:6]   # (N, 3)
-        ee_goal_quat = self.raw_actions[:, 6:10]  # (N, 4) wxyz
+        ee_goal_pos  = self.ll_command[:, 3:6]   # (N, 3)
+        ee_goal_quat = self.ll_command[:, 6:10]  # (N, 4) wxyz
 
         # 四元数全零时（reset后还没收到命令）跳过可视化，避免除零
         valid_mask = torch.norm(ee_goal_quat, dim=-1) > 0.1
@@ -531,14 +459,17 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
     debug_vis: bool = False
     """Whether to visualize debug information. Defaults to False."""
 
-    delta_pos_max: float = 0.1
+    delta_ee_pos_max: float = 0.02
     """每个高层 step EE 位置增量的最大幅度（米），tanh 后乘以此值。"""
     
-    delta_yaw_max: float = 0.1
+    delta_ee_orn_max: float = 0.06
+    """每个高层 step EE 欧拉角姿态增量的最大幅度（rad），tanh 后乘以此值。"""
+
+    delta_yaw_max: float = 0.06
     """每个高层 step EE yaw 增量的最大幅度（弧度），tanh 后乘以此值。"""
-    delta_roll_max: float = 0.1
+    delta_roll_max: float = 0.06
     """每个高层 step EE roll 增量的最大幅度（弧度），tanh 后乘以此值。"""
-    delta_pitch_max: float = 0.1
+    delta_pitch_max: float = 0.06
     """每个高层 step EE pitch 增量的最大幅度（弧度），tanh 后乘以此值。"""
 
     delta_body_height_max: float = 0.02
@@ -554,20 +485,16 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
     @configclass
     class LowLevelCommandRanges:
         # base_velocity ranges，对应 CommandsCfg.base_velocity.ranges
-        lin_vel_x: tuple[float, float] = (-1.0, 1.0)
-        lin_vel_y: tuple[float, float] = (-0.5, 0.5)
+        lin_vel_x: tuple[float, float] = (0.0, 0.9)
+        lin_vel_y: tuple[float, float] = (0.0, 0.0)
         ang_vel_z: tuple[float, float] = (-1.0, 1.0)
         # ee_pose ranges，对应 CommandsCfg.ee_pose 的 command 输出空间
         # command 输出是世界坐标系下的 [x, y, z, qw, qx, qy, qz]
         # 四元数各分量天然在 [-1, 1]，位置范围根据实际场景设置
         ee_pos_x: tuple[float, float] = (0.3, 0.8)
         ee_pos_y: tuple[float, float] = (-0.4, 0.4)
-        ee_pos_z: tuple[float, float] = (-0.1, 0.2)
-        ee_quat_w: tuple[float, float] = (-1.0, 1.0)
-        ee_quat_x: tuple[float, float] = (-1.0, 1.0)
-        ee_quat_y: tuple[float, float] = (-1.0, 1.0)
-        ee_quat_z: tuple[float, float] = (-1.0, 1.0)
-        ee_pitch: tuple[float, float] = (-torch.pi/2, 0.0 )  # 限制在朝下到朝前
+        ee_pos_z: tuple[float, float] = (-0.6, 0.6)
+        ee_pitch: tuple[float, float] = (-math.pi/2, 0.0 )  # 限制在朝下到朝前
         # target_height: 机器狗期望站立高度（米），参考低层训练时的正常高度
         target_height: tuple[float, float] = (0.33, 0.6)
         # target_pitch: 机身期望俯仰角（弧度），正值抬头

@@ -148,8 +148,8 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             ".*wheel_joint": 0.0,
             # 机械臂旋转关节
             "arm_joint1": 0.0,       # limit: [-2.618, 2.618]  ✓ 安全
-            "arm_joint2": 0.0,       # limit: [0, 3.14]        ⚠️ 边界改为0.1
-            "arm_joint3": 0.0,      # limit: [-2.697, 0]      ⚠️ 边界改为-0.1
+            "arm_joint2": 2.0,       # limit: [0, 3.14]        ⚠️ 边界改为0.1
+            "arm_joint3": -1.0,      # limit: [-2.697, 0]      ⚠️ 边界改为-0.1
             "arm_joint4": 0.0,       # limit: [-1.832, 1.832]  ✓ 安全
             "arm_joint5": 0.0,       # limit: [-1.22, 1.22]    ✓ 安全
             "arm_joint6": 0.0,       # limit: [-3.14, 3.14]    ✓ 安全
@@ -198,7 +198,7 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             joint_names_expr=["arm_joint[1-6]"],
             effort_limit_sim=100.0,       # 力矩限制（仿真）
             velocity_limit_sim=3.0,     # rad/s
-            stiffness=400.0, # 20
+            stiffness=4000.0, # 20
             damping=80.0, # 0.1
             friction=0.01,
             armature=0.01,
