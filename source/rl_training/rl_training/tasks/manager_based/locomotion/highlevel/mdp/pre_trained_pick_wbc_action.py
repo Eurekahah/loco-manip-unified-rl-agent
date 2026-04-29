@@ -479,13 +479,13 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
     delta_pitch_max: float = 0.06
     """每个高层 step EE pitch 增量的最大幅度（弧度），tanh 后乘以此值。"""
 
-    delta_body_height_max: float = 0.02
+    delta_body_height_max: float = 0.05
     """每个高层 step body height 增量的最大幅度（米），tanh 后乘以此值。"""
 
-    delta_body_pitch_max: float = 0.02
+    delta_body_pitch_max: float = 0.05
     """每个高层 step body pitch 增量的最大幅度（弧度），tanh 后乘以此值。"""
 
-    delta_body_roll_max: float = 0.02
+    delta_body_roll_max: float = 0.05
     """每个高层 step body roll 增量的最大幅度（弧度），tanh 后乘以此值。"""
 
     ee_body_name: str = "arm_link6"

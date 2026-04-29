@@ -455,14 +455,14 @@ class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
     #     },  
     # )
 
-    action_target_too_far = DoneTerm(
-        func=mdp.action_target_too_far,
-        params={
-            "action_term_name": "pre_trained_pick_action",
-            "ee_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
-            "distance_threshold": 1.0,
-        },
-    )
+    # action_target_too_far = DoneTerm(
+    #     func=mdp.action_target_too_far,
+    #     params={
+    #         "action_term_name": "pre_trained_pick_action",
+    #         "ee_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
+    #         "distance_threshold": 1.0,
+    #     },
+    # )
 
     pick_success = DoneTerm(
         func=mdp.object_held_for_duration,
