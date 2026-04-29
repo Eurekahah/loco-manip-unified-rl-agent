@@ -121,6 +121,12 @@ class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
         self.rewards.feet_air_time.weight = 2.0
         self.rewards.feet_air_time.params["threshold"] = 0.5
         self.rewards.feet_air_time.params["sensor_cfg"].body_names = [self.foot_link_name]
+        # self.commands.base_velocity.ranges.lin_vel_x = (0.0, 0.0)
+        # self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
+        # self.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
+        # self.commands.body_pose.height_range = (0.45, 0.45)
+        # self.commands.body_pose.pitch_range = (0.2, 0.2)
+        # self.commands.body_pose.roll_range = (0.0, 0.0)
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "FlatEnvWBCConfig":
             self.disable_zero_weight_rewards()

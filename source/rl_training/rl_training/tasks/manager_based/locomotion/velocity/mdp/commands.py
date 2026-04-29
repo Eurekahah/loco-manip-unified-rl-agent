@@ -34,7 +34,7 @@ class UniformThresholdVelocityCommand(mdp.UniformVelocityCommand):
         super()._resample_command(env_ids)
         # set small commands to zero
         # 小线速度指令设置为0
-        self.vel_command_b[env_ids, :2] *= (torch.norm(self.vel_command_b[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
+        self.vel_command_b[env_ids, :2] *= (torch.norm(self.vel_command_b[env_ids, :2], dim=1) > 0.0).unsqueeze(1)
 
 
 @configclass
@@ -703,7 +703,7 @@ class BodyPoseCommand(CommandTerm):
                 self._tilted_disc_visualizer = VisualizationMarkers(tilted_cfg)
             self._tilted_disc_visualizer.set_visibility(True)
 
-            # ② 水平参考圆片（红色）：始终水平，仅表示高度
+            # ② 水平参考圆片（蓝色）：始终水平，仅表示高度
             if not hasattr(self, "_ref_disc_visualizer"):
                 ref_cfg: VisualizationMarkersCfg = BLUE_ARROW_X_MARKER_CFG.replace(
                     prim_path="/Visuals/BodyPoseCommand/body_pose_disc_ref",
@@ -724,6 +724,7 @@ class BodyPoseCommand(CommandTerm):
         # 获取机器人基座在世界坐标系下的 XY 位置
         root_state = self._env.scene["robot"].data.root_state_w  # (N, 13)
         base_xy = root_state[:, :2]  # (N, 2)
+        base_quat = root_state[:, 3:7]       # (N, 4) w, x, y, z
 
         target_h = self._command[:, 0]  # (N,)
         target_p = self._command[:, 1]  # (N,)  pitch
@@ -746,13 +747,26 @@ class BodyPoseCommand(CommandTerm):
         disc_scale[:, 1] = 10.0   # 直径 Y
         disc_scale[:, 2] = 1.0    # 直径 Z
 
-        # ---------- ① 倾斜圆片（绿色）：叠加 pitch / roll ----------
-        q_tilt = math_utils.quat_from_euler_xyz(target_r, target_p, zeros)  # (N, 4)
-        tilted_quat = math_utils.quat_mul(q_tilt, q_base)
+        # ---------- ① 倾斜圆片（绿色）：叠加机器人完整姿态 + 本体命令 ----------
+        # 1. 从基座四元数提取欧拉角，得到每个机器人的偏航角 yaw
+        roll, pitch, yaw = math_utils.euler_xyz_from_quat(base_quat)  # 每个 (N,)
+        # 注意：返回的 roll/pitch 是机器人当前的实际倾斜，但我们不需要它们，只需要 yaw
+
+        # 2. 机器人偏航的旋转四元数 (绕世界 Z 轴旋转，将本体命令转到世界)
+        q_yaw = math_utils.quat_from_euler_xyz(zeros, zeros, yaw)   # (N, 4)
+
+        # 3. 本体命令的四元数 (roll, pitch, yaw=0)
+        q_body_cmd = math_utils.quat_from_euler_xyz(target_r, target_p, zeros)  # (N, 4)
+
+        # 4. 组合：先本体命令，再旋转到世界坐标系 -> q_world = q_yaw * q_body_cmd
+        q_target_world = math_utils.quat_mul(q_yaw, q_body_cmd)      # (N, 4)
+
+        # 5. 最终圆片旋转：先变成水平 (q_base)，再转到目标世界姿态
+        tilted_quat = math_utils.quat_mul(q_target_world, q_base)    # (N, 4)
 
         self._tilted_disc_visualizer.visualize(disc_pos, tilted_quat, disc_scale)
 
-        # ---------- ② 水平参考圆片（红色）：始终保持 q_base，不叠加任何倾斜 ----------
+        # ---------- ② 水平参考圆片（蓝色）：始终保持水平，仅反映高度 ----------
         self._ref_disc_visualizer.visualize(disc_pos, q_base, disc_scale)
 
 

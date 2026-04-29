@@ -483,8 +483,8 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
             self.disable_zero_weight_rewards()
 
         # ------------------------------Terminations------------------------------
-        self.terminations.illegal_contact.params["sensor_cfg"].body_names = [self.base_link_name]
-        # self.terminations.illegal_contact = None
+        # self.terminations.illegal_contact.params["sensor_cfg"].body_names = [self.base_link_name]
+        self.terminations.illegal_contact = None
         self.terminations.bad_orientation_2 = None
 
         # ------------------------------Curriculums------------------------------
