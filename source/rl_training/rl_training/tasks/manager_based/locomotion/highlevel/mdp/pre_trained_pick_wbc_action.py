@@ -260,6 +260,12 @@ class PreTrainedPickWBCAction(ActionTerm):
             scale, offset = self.range_to_scale_offset(lo, hi)
             self._ll_command[:, i] = torch.tanh(actions[:, i]) * scale + offset
 
+        lin_vel_norm = torch.norm(self._ll_command[:, 0:2], p=2, dim=-1, keepdim=True)
+        self._ll_command[:, 0:2] = torch.where(
+            lin_vel_norm < 0.2,
+            torch.zeros_like(self._ll_command[:, 0:2]),
+            self._ll_command[:, 0:2]
+        )
         # ── 3. 未初始化的 env 先重置目标到当前 EE 位姿 ───────────────────
         uninit_ids = (~self._target_initialized).nonzero(as_tuple=False).squeeze(-1)
         if uninit_ids.numel() > 0:
