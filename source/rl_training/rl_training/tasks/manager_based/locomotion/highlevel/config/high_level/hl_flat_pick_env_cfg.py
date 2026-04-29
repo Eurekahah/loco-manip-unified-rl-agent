@@ -267,16 +267,16 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         weight=-0.02,
         params={"action_name": "pre_trained_pick_action"},
     )
-    base_vel_cmd_action_l1_near_object = RewTerm(
-        func=mdp.base_vel_cmd_action_l1_near_object,
-        weight=-1.0,
-        params={
-            "action_term_name": "pre_trained_pick_action",
-            "robot_cfg":        SceneEntityCfg("robot"),
-            "object_cfg":       SceneEntityCfg("object"),
-            "distance_threshold": 0.8,
-        },
-    )
+    # base_vel_cmd_action_l1_near_object = RewTerm(
+    #     func=mdp.base_vel_cmd_action_l1_near_object,
+    #     weight=-1.0,
+    #     params={
+    #         "action_term_name": "pre_trained_pick_action",
+    #         "robot_cfg":        SceneEntityCfg("robot"),
+    #         "object_cfg":       SceneEntityCfg("object"),
+    #         "distance_threshold": 0.8,
+    #     },
+    # )
 
     # =========================================================
     # 阶段二：末端执行器精确接近物体

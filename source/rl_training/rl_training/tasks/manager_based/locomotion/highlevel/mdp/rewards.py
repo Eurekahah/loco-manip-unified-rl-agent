@@ -1209,7 +1209,7 @@ def ee_orientation_to_object_progress(
     cmd_proximity_gate: float = 0.2,
 ) -> torch.Tensor:
     """
-    步进版 EE x轴方向对准物体奖励。
+    步进版 EE z轴方向对准物体奖励。
     只奖励余弦相似度相比历史最高值的进步，并使用 tanh 压缩。
     """
     robot_asset = env.scene[ee_frame_cfg.name]
@@ -1225,10 +1225,10 @@ def ee_orientation_to_object_progress(
 
     obj_pos_w = object_asset.data.root_pos_w[:, :3]                              # (N,3)
 
-    # ---------- EE x轴世界方向 ----------
-    x_axis_local = torch.zeros(env.num_envs, 3, device=env.device)
-    x_axis_local[:, 0] = 1.0                                                    # 局部 [1,0,0]
-    ee_x_dir_world = quat_apply(ee_quat_w, x_axis_local)                        # (N,3)
+    # ---------- EE z轴世界方向 ----------
+    z_axis_local = torch.zeros(env.num_envs, 3, device=env.device)
+    z_axis_local[:, 2] = 1.0                                                    # 局部 [0,0,1]
+    ee_z_dir_world = quat_apply(ee_quat_w, z_axis_local)                        # (N,3)
 
     # ---------- 指向物体的方向 ----------
     obj_dir = obj_pos_w - ee_pos_w                                               # (N,3)
@@ -1240,7 +1240,7 @@ def ee_orientation_to_object_progress(
     if far_mask.any():
         obj_dir_unit = obj_dir[far_mask] / obj_dist[far_mask].unsqueeze(-1)
         cos_sim[far_mask] = F.cosine_similarity(
-            ee_x_dir_world[far_mask], obj_dir_unit, dim=-1
+            ee_z_dir_world[far_mask], obj_dir_unit, dim=-1
         )  # ∈ [-1, 1]
 
     # ---------- 步进奖励缓存 ----------
