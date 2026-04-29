@@ -65,44 +65,44 @@ class HighLevelSceneCfg(MySceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(2.0, 0.0, 0.0),
+            pos=(2.0, 0.0, 0.03),
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
     )
 
-    table: AssetBaseCfg = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Table",
-        spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/props/SM_HeavyDutyPackingTable_C02_01/SM_HeavyDutyPackingTable_C02_01_physics.usd",
-            scale=(0.0025, 0.01, 0.0025)
-        ),
-        init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(2.2, -0.7, 0.0),
-            rot=(0.707, 0.0, 0.0, 0.707),
-        ),
-    )
-    table2: AssetBaseCfg = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Table2",
-        spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/props/SM_HeavyDutyPackingTable_C02_01/SM_HeavyDutyPackingTable_C02_01_physics.usd",
-            scale=(0.0025, 0.01, 0.0045)
-        ),
-        init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(2.2, -0.1, 0.0),
-            rot=(0.707, 0.0, 0.0, 0.707),
-        ),
-    )
-    table3: AssetBaseCfg = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Table3",
-        spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/props/SM_HeavyDutyPackingTable_C02_01/SM_HeavyDutyPackingTable_C02_01_physics.usd",
-            scale=(0.0025, 0.01, 0.006)
-        ),
-        init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(2.2, 0.5, 0.0),
-            rot=(0.707, 0.0, 0.0, 0.707),
-        ),
-    )
+    # table: AssetBaseCfg = AssetBaseCfg(
+    #     prim_path="{ENV_REGEX_NS}/Table",
+    #     spawn=sim_utils.UsdFileCfg(
+    #         usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/props/SM_HeavyDutyPackingTable_C02_01/SM_HeavyDutyPackingTable_C02_01_physics.usd",
+    #         scale=(0.0025, 0.01, 0.0025)
+    #     ),
+    #     init_state=AssetBaseCfg.InitialStateCfg(
+    #         pos=(2.2, -0.7, 0.0),
+    #         rot=(0.707, 0.0, 0.0, 0.707),
+    #     ),
+    # )
+    # table2: AssetBaseCfg = AssetBaseCfg(
+    #     prim_path="{ENV_REGEX_NS}/Table2",
+    #     spawn=sim_utils.UsdFileCfg(
+    #         usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/props/SM_HeavyDutyPackingTable_C02_01/SM_HeavyDutyPackingTable_C02_01_physics.usd",
+    #         scale=(0.0025, 0.01, 0.0045)
+    #     ),
+    #     init_state=AssetBaseCfg.InitialStateCfg(
+    #         pos=(2.2, -0.1, 0.0),
+    #         rot=(0.707, 0.0, 0.0, 0.707),
+    #     ),
+    # )
+    # table3: AssetBaseCfg = AssetBaseCfg(
+    #     prim_path="{ENV_REGEX_NS}/Table3",
+    #     spawn=sim_utils.UsdFileCfg(
+    #         usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/PackingTable/props/SM_HeavyDutyPackingTable_C02_01/SM_HeavyDutyPackingTable_C02_01_physics.usd",
+    #         scale=(0.0025, 0.01, 0.006)
+    #     ),
+    #     init_state=AssetBaseCfg.InitialStateCfg(
+    #         pos=(2.2, 0.5, 0.0),
+    #         rot=(0.707, 0.0, 0.0, 0.707),
+    #     ),
+    # )
 
     # table: AssetBaseCfg = AssetBaseCfg(
     #     prim_path="{ENV_REGEX_NS}/Table",
@@ -221,26 +221,34 @@ class EventCfg:
         params={
             "asset_cfg": SceneEntityCfg("object"),
             "pose_ranges": [
-                {
-                    "x": (-0.1, 0.1),
-                    "y": (-0.9, -0.6),  # 第一个不连续区域
-                    "z": (0.2785, 0.2785),
-                    "roll": (0.0, 0.0),
-                    "pitch": (0.0, 0.0),
-                    "yaw": (-3.14, 3.14),
-                },
+                # {
+                #     "x": (-0.1, 0.1),
+                #     "y": (-0.9, -0.6),  # 第一个不连续区域
+                #     "z": (0.2785, 0.2785),
+                #     "roll": (0.0, 0.0),
+                #     "pitch": (0.0, 0.0),
+                #     "yaw": (-3.14, 3.14),
+                # },
+                # {
+                #     "x": (-0.1, 0.1),
+                #     "y": (-0.3, 0.05),   # 第二个不连续区域
+                #     "z": (0.4773, 0.4773),
+                #     "roll": (0.0, 0.0),
+                #     "pitch": (0.0, 0.0),
+                #     "yaw": (-3.14, 3.14),
+                # },
+                # {
+                #     "x": (-0.1, 0.1),
+                #     "y": (0.3, 0.6),   # 第三个不连续区域
+                #     "z": (0.6264, 0.6264),
+                #     "roll": (0.0, 0.0),
+                #     "pitch": (0.0, 0.0),
+                #     "yaw": (-3.14, 3.14),
+                # },
                 {
                     "x": (-0.1, 0.1),
                     "y": (-0.3, 0.05),   # 第二个不连续区域
-                    "z": (0.4773, 0.4773),
-                    "roll": (0.0, 0.0),
-                    "pitch": (0.0, 0.0),
-                    "yaw": (-3.14, 3.14),
-                },
-                {
-                    "x": (-0.1, 0.1),
-                    "y": (0.3, 0.6),   # 第三个不连续区域
-                    "z": (0.6264, 0.6264),
+                    "z": (0.0, 0.0),
                     "roll": (0.0, 0.0),
                     "pitch": (0.0, 0.0),
                     "yaw": (-3.14, 3.14),

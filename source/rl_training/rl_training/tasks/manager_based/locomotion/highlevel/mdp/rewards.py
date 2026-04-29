@@ -836,36 +836,47 @@ def distance_to_target_reward_shift_progress(
     target_cfg: SceneEntityCfg,
     sensitivity: float = 20.0,
     penalty_scale: float = 0.0,
-    stop_reward_dist: float = 0.73,   # 到达此距离后不再给接近奖励
+    stop_reward_dist: float = 0.73,    # 最优抓取距离（甜甜圈半径）
+    overshoot_penalty_scale: float = 1.0,  # 太近时的惩罚强度
 ) -> torch.Tensor:
     """
-    势能塑形版底盘接近奖励。
-    - dist > stop_reward_dist：只有 dist_t < min_dist_so_far 时给正奖励（进步量）
-    - dist <= stop_reward_dist：已到达抓取距离，停止给接近奖励（返回 0）
-    - penalty_scale > 0 时对后退额外惩罚（全程有效，或也可门控）
+    势能塑形版底盘接近奖励，带过近惩罚：
+    - dist > stop_reward_dist：进步奖励（tanh 塑形）
+    - dist ≈ stop_reward_dist：零（最优位置）
+    - dist < stop_reward_dist：惩罚（太近不利于抓取）
     """
     robot_pos_w  = robot_root_pos_w(env, robot_cfg)
     target_pos_w = object_root_pos_w(env, target_cfg)
 
     diff = target_pos_w[:, :2] - robot_pos_w[:, :2]
-    dist = torch.norm(diff, dim=-1).clamp(min=1e-3)   # (N,)
+    dist = torch.norm(diff, dim=-1).clamp(min=1e-3)
 
+    # -------- 区域一：dist > stop_reward_dist，进步奖励 --------
     key = f"_min_chassis_dist_{target_cfg.name}"
     min_dist = _get_or_init_min(env, key, dist)
 
-    progress   = (min_dist - dist).clamp(min=0.0)     # (N,) ≥ 0
-    regression = (dist - min_dist).clamp(min=0.0)     # (N,) ≥ 0
+    progress   = (min_dist - dist).clamp(min=0.0)
+    regression = (dist - min_dist).clamp(min=0.0)
 
-    # 更新历史最近距离
-    env.extras[key] = torch.minimum(min_dist, dist)
+    # 只在还未到达最优距离时更新历史最近（防止过冲后继续"记录"更近的错误距离）
+    not_overshot = (dist >= stop_reward_dist)
+    env.extras[key] = torch.where(
+        not_overshot,
+        torch.minimum(min_dist, dist),
+        min_dist   # 已过近，冻结历史最近，不再更新
+    )
 
-    # 门控：已到达抓取距离则不再给接近奖励
-    far_gate = (dist > stop_reward_dist).float()       # (N,) 未到达=1，已到达=0
+    far_gate = (dist > stop_reward_dist).float()
+    approach_reward = far_gate * (
+        torch.tanh(sensitivity * progress)
+        - penalty_scale * torch.tanh(sensitivity * regression)
+    )
 
-    reward = far_gate * torch.tanh(sensitivity * progress) \
-           - penalty_scale * torch.tanh(sensitivity * regression)
+    # -------- 区域二：dist < stop_reward_dist，过近惩罚 --------
+    overshoot = (stop_reward_dist - dist).clamp(min=0.0)   # 超出量，>0 才生效
+    overshoot_penalty = overshoot_penalty_scale * torch.tanh(sensitivity * overshoot)
 
-    return reward
+    return approach_reward - overshoot_penalty
 
 
 

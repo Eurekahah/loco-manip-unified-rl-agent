@@ -447,13 +447,13 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
 @configclass
 class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
-    object_dropped = DoneTerm(
-        func=mdp.object_dropped,
-        params={
-            "object_cfg": SceneEntityCfg("object"),
-            "height_threshold": 0.2,  # 物体世界位姿高度小于0.2m算掉落
-        },  
-    )
+    # object_dropped = DoneTerm(
+    #     func=mdp.object_dropped,
+    #     params={
+    #         "object_cfg": SceneEntityCfg("object"),
+    #         "height_threshold": 0.2,  # 物体世界位姿高度小于0.2m算掉落
+    #     },  
+    # )
 
     action_target_too_far = DoneTerm(
         func=mdp.action_target_too_far,
