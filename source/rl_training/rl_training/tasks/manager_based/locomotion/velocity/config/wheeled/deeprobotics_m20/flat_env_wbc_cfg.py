@@ -76,7 +76,7 @@ class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
     # ---- 机身高度跟踪 ----
     body_height_tracking = RewTerm(
         func=mdp.body_height_tracking,          # 或 mdp.body_height_tracking
-        weight=1.5,
+        weight=2.5,
         params={
             "command_name": "body_pose",
             "std": 0.04,                    # 误差容忍度（m），越小越严格
@@ -87,7 +87,7 @@ class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
     # ---- 机身 pitch 跟踪 ----
     body_pitch_tracking = RewTerm(
         func=mdp.body_pitch_tracking,
-        weight=1.5,
+        weight=2.5,
         params={
             "command_name": "body_pose",
             "std": 0.05,                     # 误差容忍度（rad），约 5.7°
@@ -98,7 +98,7 @@ class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
     # ---- 机身 roll 跟踪 ----
     body_roll_tracking = RewTerm(
         func=mdp.body_roll_tracking,
-        weight=0.8,
+        weight=2.5,
         params={
             "command_name": "body_pose",
             "std": 0.04,
@@ -116,7 +116,11 @@ class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.rewards.base_height_l2.weight = 0.0  # 关闭原有的高度奖励，改用新的 body_height_tracking
-        self.rewards.lin_vel_z_l2.weight = -0.5      # 降低底盘 z 轴速度惩罚
+        self.rewards.lin_vel_z_l2.weight = 0.0      # 降低底盘 z 轴速度惩罚
+        self.rewards.ang_vel_xy_l2.weight = 0.0     # 关闭水平面角速度惩罚
+        self.rewards.feet_air_time.weight = 2.0
+        self.rewards.feet_air_time.params["threshold"] = 0.5
+        self.rewards.feet_air_time.params["sensor_cfg"].body_names = [self.foot_link_name]
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "FlatEnvWBCConfig":
             self.disable_zero_weight_rewards()
