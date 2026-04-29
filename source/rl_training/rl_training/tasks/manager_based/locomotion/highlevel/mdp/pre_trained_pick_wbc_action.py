@@ -466,7 +466,7 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
     debug_vis: bool = False
     """Whether to visualize debug information. Defaults to False."""
 
-    delta_ee_pos_max: float = 0.02
+    delta_ee_pos_max: float = 0.05
     """每个高层 step EE 位置增量的最大幅度（米），tanh 后乘以此值。"""
     
     delta_ee_orn_max: float = 0.06

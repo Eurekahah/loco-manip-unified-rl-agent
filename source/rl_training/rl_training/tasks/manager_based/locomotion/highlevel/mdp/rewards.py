@@ -519,11 +519,30 @@ def object_ee_symmetric_alignment(
     # print(f"gate_open: {gate_open}")
     return reward_proximity * reward_symmetry * gate_open
 
-def forward_velocity_penalty(env: ManagerBasedRLEnv, action_name: str = "pre_trained_nav_action") -> torch.Tensor:
-    """惩罚前向速度命令 v_x（ll_command[:, 0]）"""
+def forward_velocity_penalty(
+    env: ManagerBasedRLEnv,
+    action_name: str = "pre_trained_pick_action",
+    target_cfg: SceneEntityCfg = None,
+    cmd_proximity_gate: float = 0.8,    # cmd_pos 距离目标小于此值时才惩罚速度
+    stop_penalty_dist: float = 0.5,     # 底盘已到位时也不再惩罚（可选，与接近奖励对齐）
+) -> torch.Tensor:
+    """
+    前向速度惩罚，带双重门控：
+    1. cmd_pos 门控：HL 下发的目标点离 object 足够近时，说明机器人正在做精细接近，才惩罚速度
+    2. 到位门控（可选）：底盘已到达抓取距离后，速度惩罚归零（机器人应切换抓取，不再导航）
+    """
     action_term = env.action_manager.get_term(action_name)
-    vx = action_term.ll_command[:, 0]  # v_x
-    return vx.pow(2)
+    vx = action_term.ll_command[:, 0]              # v_x 前向速度指令
+
+    # ---- 门控 1：cmd_pos 距离门控 ----
+    gate_cmd = torch.ones_like(vx)                 # 默认全惩罚（无 target_cfg 时退化）
+    if target_cfg is not None:
+        object_pos_w = object_root_pos_w(env, target_cfg)
+        cmd_pos_w    = action_term.ll_command[:, 3:6]          # HL 下发的目标位置
+        cmd_dist     = torch.norm(cmd_pos_w - object_pos_w, dim=-1)
+        gate_cmd     = (cmd_dist < cmd_proximity_gate).float() # 接近目标点时 = 1
+
+    return gate_cmd * vx.pow(2)
 
 def lateral_velocity_penalty(env: ManagerBasedRLEnv, action_name: str = "pre_trained_nav_action") -> torch.Tensor:
     """惩罚侧向速度命令 v_y（ll_command[:, 1]）"""
@@ -816,12 +835,14 @@ def distance_to_target_reward_shift_progress(
     robot_cfg: SceneEntityCfg,
     target_cfg: SceneEntityCfg,
     sensitivity: float = 20.0,
-    penalty_scale: float = 0.0,   # >0 则对后退额外惩罚
+    penalty_scale: float = 0.0,
+    stop_reward_dist: float = 0.73,   # 到达此距离后不再给接近奖励
 ) -> torch.Tensor:
     """
     势能塑形版底盘接近奖励。
-    只有 dist_t < min_dist_so_far 时给正奖励（进步量），
-    原地不动 = 0，后退 = 0（或 penalty_scale>0 时为负）。
+    - dist > stop_reward_dist：只有 dist_t < min_dist_so_far 时给正奖励（进步量）
+    - dist <= stop_reward_dist：已到达抓取距离，停止给接近奖励（返回 0）
+    - penalty_scale > 0 时对后退额外惩罚（全程有效，或也可门控）
     """
     robot_pos_w  = robot_root_pos_w(env, robot_cfg)
     target_pos_w = object_root_pos_w(env, target_cfg)
@@ -832,15 +853,22 @@ def distance_to_target_reward_shift_progress(
     key = f"_min_chassis_dist_{target_cfg.name}"
     min_dist = _get_or_init_min(env, key, dist)
 
-    progress = (min_dist - dist).clamp(min=0.0)       # (N,)  ≥ 0
-    regression = (dist - min_dist).clamp(min=0.0)     # (N,)  ≥ 0
+    progress   = (min_dist - dist).clamp(min=0.0)     # (N,) ≥ 0
+    regression = (dist - min_dist).clamp(min=0.0)     # (N,) ≥ 0
 
-    # 更新历史最近
+    # 更新历史最近距离
     env.extras[key] = torch.minimum(min_dist, dist)
 
-    reward = torch.tanh(sensitivity * progress) \
+    # 门控：已到达抓取距离则不再给接近奖励
+    far_gate = (dist > stop_reward_dist).float()       # (N,) 未到达=1，已到达=0
+
+    reward = far_gate * torch.tanh(sensitivity * progress) \
            - penalty_scale * torch.tanh(sensitivity * regression)
+
     return reward
+
+
+
 
 
 def heading_to_target_reward_progress(

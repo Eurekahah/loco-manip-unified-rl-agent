@@ -234,6 +234,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
             "target_cfg": SceneEntityCfg("object"),
             "sensitivity": 20.0,
             "penalty_scale": 0.5,   # 后退时额外惩罚，可选
+            "stop_reward_dist" : 0.73,
         },
     )
 
@@ -294,7 +295,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     )
     ee_delta_pose_l1_near_object = RewTerm(
         func=mdp.ee_delta_pose_l1_near_object,
-        weight=-1.0,
+        weight=-0.1,
         params={
             "action_term_name": "pre_trained_pick_action",
             "object_cfg":       SceneEntityCfg("object"),
