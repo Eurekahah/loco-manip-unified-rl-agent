@@ -444,7 +444,7 @@ class TerminationsCfg:
     )
     bad_orientation = DoneTerm(
         func=mdp.bad_orientation,
-        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.8},
+        params={"asset_cfg": SceneEntityCfg("robot"), "limit_angle": 0.8},
     )
 
 # @configclass

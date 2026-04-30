@@ -285,7 +285,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     cmd_pos_to_object = RewTerm(
         func=mdp.cmd_pos_to_object_reward_progress,
-        weight=2.0,
+        weight=3.0,
         params={
             "action_term_name": "pre_trained_pick_action",
             "object_cfg":       SceneEntityCfg("object"),
@@ -322,7 +322,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 夹爪朝向对准：arm_link7/8 两指到物体的距离之和最小化
     gripper_alignment_symmetric = RewTerm(
         func=mdp.object_ee_symmetric_alignment_progress,
-        weight=3.0,
+        weight=4.0,
         params={
             "min_finger_dist":       0.04,
             "object_cfg":            SceneEntityCfg("object"),
