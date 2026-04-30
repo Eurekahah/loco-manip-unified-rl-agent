@@ -440,7 +440,11 @@ class TerminationsCfg:
     )
     root_height_below_minimum = DoneTerm(
         func=mdp.root_height_below_minimum,
-        params={"asset_cfg": SceneEntityCfg("robot"),"minimum_height": 0.3},
+        params={"asset_cfg": SceneEntityCfg("robot"),"minimum_height": 0.2},
+    )
+    bad_orientation = DoneTerm(
+        func=mdp.bad_orientation,
+        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.8},
     )
 
 # @configclass

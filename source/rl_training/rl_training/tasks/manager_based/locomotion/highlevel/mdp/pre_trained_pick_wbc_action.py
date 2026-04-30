@@ -111,7 +111,7 @@ class PreTrainedPickWBCAction(ActionTerm):
         )
 
         self._joint_pos_action_term.scale = {".*_hipx_joint": 0.125, '^(?!.*_hipx_joint)(?!.*arm_joint).*': 0.25}
-        self._wheel_vel_action_term.scale = 20.0
+        self._wheel_vel_action_term.scale = 5.0
         self._joint_pos_action_term.clip = {".*": (-100.0, 100.0)}
         self._wheel_vel_action_term.clip = {".*": (-100.0, 100.0)}
         self._joint_pos_action_term.joint_names = self.leg_joint_names 
@@ -260,12 +260,12 @@ class PreTrainedPickWBCAction(ActionTerm):
             scale, offset = self.range_to_scale_offset(lo, hi)
             self._ll_command[:, i] = torch.tanh(actions[:, i]) * scale + offset
 
-        lin_vel_norm = torch.norm(self._ll_command[:, 0:2], p=2, dim=-1, keepdim=True)
-        self._ll_command[:, 0:2] = torch.where(
-            lin_vel_norm < 0.2,
-            torch.zeros_like(self._ll_command[:, 0:2]),
-            self._ll_command[:, 0:2]
-        )
+        # lin_vel_norm = torch.norm(self._ll_command[:, 0:2], p=2, dim=-1, keepdim=True)
+        # self._ll_command[:, 0:2] = torch.where(
+        #     lin_vel_norm < 0.2,
+        #     torch.zeros_like(self._ll_command[:, 0:2]),
+        #     self._ll_command[:, 0:2]
+        # )
         # ── 3. 未初始化的 env 先重置目标到当前 EE 位姿 ───────────────────
         uninit_ids = (~self._target_initialized).nonzero(as_tuple=False).squeeze(-1)
         if uninit_ids.numel() > 0:
@@ -498,7 +498,7 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
     @configclass
     class LowLevelCommandRanges:
         # base_velocity ranges，对应 CommandsCfg.base_velocity.ranges
-        lin_vel_x: tuple[float, float] = (0.0, 0.9)
+        lin_vel_x: tuple[float, float] = (0.25, 0.9)
         lin_vel_y: tuple[float, float] = (0.0, 0.0)
         ang_vel_z: tuple[float, float] = (-1.0, 1.0)
         # ee_pose ranges，对应 CommandsCfg.ee_pose 的 command 输出空间
