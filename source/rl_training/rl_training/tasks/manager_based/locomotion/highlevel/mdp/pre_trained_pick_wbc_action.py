@@ -148,7 +148,7 @@ class PreTrainedPickWBCAction(ActionTerm):
 
         cfg.low_level_observations.joint_pos.func = mdp.joint_pos_rel_without_wheel
         cfg.low_level_observations.joint_pos.params["wheel_asset_cfg"] = SceneEntityCfg(
-            "robot", joint_names=self.wheel_joint_names
+            "robot", joint_names=self.wheel_joint_names,preserve_order=False
         )
         # cfg.low_level_observations.base_lin_vel.scale = 2.0
         cfg.low_level_observations.base_ang_vel.scale = 0.25
@@ -158,9 +158,11 @@ class PreTrainedPickWBCAction(ActionTerm):
         cfg.low_level_observations.height_scan = None
         cfg.low_level_observations.joint_pos.params["asset_cfg"].joint_names = self.joint_names
         cfg.low_level_observations.joint_vel.params["asset_cfg"].joint_names = self.joint_names
+        cfg.low_level_observations.joint_vel.params["asset_cfg"].preserve_order = True
         # 在 __init__ 末尾添加，提前缓存引用避免每步查找
         self._ee_command_term = env.command_manager.get_term(cfg.ee_command_name)
 
+        cfg.low_level_observations.enable_corruption = False
         self._low_level_obs_manager = ObservationManager({"ll_policy": cfg.low_level_observations}, env)
         self._counter = 0
 
@@ -293,8 +295,6 @@ class PreTrainedPickWBCAction(ActionTerm):
             self._target_ee_orn_rpy_b[:, 2],  # yaw
         )
         self._ll_command[:, 6:10] = math_utils.quat_mul(root_quat_w, ee_quat_b)
-        # 此处要不要对姿态的欧拉角范围进行clamp
-        # 如何输出为四元数，输出到_raw_action?还是
 
         # -- 6. 叠加机体姿态height， pitch，roll增量
         delta_height = torch.tanh(actions[:, 9]) * self.cfg.delta_body_height_max  # (N,)
@@ -498,7 +498,7 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
     @configclass
     class LowLevelCommandRanges:
         # base_velocity ranges，对应 CommandsCfg.base_velocity.ranges
-        lin_vel_x: tuple[float, float] = (0.25, 0.9)
+        lin_vel_x: tuple[float, float] = (0.0, 0.9)
         lin_vel_y: tuple[float, float] = (0.0, 0.0)
         ang_vel_z: tuple[float, float] = (-1.0, 1.0)
         # ee_pose ranges，对应 CommandsCfg.ee_pose 的 command 输出空间
