@@ -489,7 +489,7 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
     delta_body_height_max: float = 0.05
     """每个高层 step body height 增量的最大幅度（米），tanh 后乘以此值。"""
 
-    delta_body_pitch_max: float = 0.05
+    delta_body_pitch_max: float = 0.1
     """每个高层 step body pitch 增量的最大幅度（弧度），tanh 后乘以此值。"""
 
     delta_body_roll_max: float = 0.05
@@ -505,15 +505,15 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
         # ee_pose ranges，对应 CommandsCfg.ee_pose 的 command 输出空间
         # command 输出是世界坐标系下的 [x, y, z, qw, qx, qy, qz]
         # 四元数各分量天然在 [-1, 1]，位置范围根据实际场景设置
-        ee_pos_x: tuple[float, float] = (0.3, 0.8)
+        ee_pos_x: tuple[float, float] = (0.4, 0.8)  # (0.3, 0.8) 
         ee_pos_y: tuple[float, float] = (-0.4, 0.4)
         ee_pos_z: tuple[float, float] = (-0.6, 0.6)
         ee_pitch: tuple[float, float] = (-math.pi/2, 0.0 )  # 限制在朝下到朝前
         # target_height: 机器狗期望站立高度（米），参考低层训练时的正常高度
         target_height: tuple[float, float] = (0.33, 0.6)
         # target_pitch: 机身期望俯仰角（弧度），正值抬头
-        target_pitch: tuple[float, float] = (-0.35, 0.35)
+        target_pitch: tuple[float, float] = (0.0, 0.35)  # (-0.35, 0.35)
         # target_roll: 机身期望侧倾角（弧度），正值右倾
-        target_roll: tuple[float, float] = (-0.25, 0.25)
+        target_roll: tuple[float, float] = (-0.05, 0.05) # (-0.25, 0.25)
 
     low_level_command_ranges: LowLevelCommandRanges = LowLevelCommandRanges()

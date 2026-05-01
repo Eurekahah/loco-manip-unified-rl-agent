@@ -329,7 +329,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
             "ee_frame_cfg_finger1":  SceneEntityCfg("robot", body_names="arm_link7"),
             "ee_frame_cfg_finger2":  SceneEntityCfg("robot", body_names="arm_link8"),
             "sensitivity":           50.0,
-            "penalty_scale":         0.0,
+            "penalty_scale":         0.5,
             "cmd_proximity_gate":    0.3,
             "action_term_name":      "pre_trained_pick_action",  # 用于取 cmd_pos
         },
@@ -515,7 +515,7 @@ class HLFlatPickEventCfg(HighLevelEventCfg):
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (0.9, 1.0), "y": (-0.6, 0.6),  "yaw": (-0.393, 0.393)},
+            "pose_range": {"x": (1.1, 1.2), "y": (-0.6, 0.6),  "yaw": (-0.393, 0.393)},
             "velocity_range": {
                 "x": (-0.0, 0.0),
                 "y": (-0.0, 0.0),
