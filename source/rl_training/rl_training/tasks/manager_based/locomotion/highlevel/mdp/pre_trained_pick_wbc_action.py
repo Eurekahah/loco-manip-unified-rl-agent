@@ -284,6 +284,7 @@ class PreTrainedPickWBCAction(ActionTerm):
         root_quat_w = self.robot.data.root_quat_w  # (N, 4)
         root_pos_w  = self.robot.data.root_pos_w
         target_pos_w = math_utils.quat_apply(root_quat_w, self._target_ee_pos_b) + root_pos_w
+        target_pos_w[:, 2] = torch.clamp(target_pos_w[:, 2], min=0.0)  # 再次 clamp 确保世界坐标系下 z 不低于地面
         self._ll_command[:, 3:6] = target_pos_w
 
          # ── 5. 叠加 EE 姿态rpy增量 ───────────────────────────────────────────────
