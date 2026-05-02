@@ -226,28 +226,48 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # =========================================================
 
     # 整体接近：机器人基座靠近物体
+    # approach_object = RewTerm(
+    #     func=mdp.distance_to_target_reward_shift_progress,
+    #     weight=1.0,                          # 略降权重，让位给 EE 精确接近
+    #     params={
+    #         "robot_cfg": SceneEntityCfg("robot"),
+    #         "target_cfg": SceneEntityCfg("object"),
+    #         "sensitivity": 20.0,
+    #         "penalty_scale": 0.5,   # 后退时额外惩罚，可选
+    #         "stop_reward_dist" : 0.73,
+    #     },
+    # )
     approach_object = RewTerm(
-        func=mdp.distance_to_target_reward_shift_progress,
-        weight=1.0,                          # 略降权重，让位给 EE 精确接近
+        func=mdp.distance_to_target_reward_shift,
+        weight=0.1,                          # 略降权重，让位给 EE 精确接近
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
-            "sensitivity": 20.0,
-            "penalty_scale": 0.5,   # 后退时额外惩罚，可选
-            "stop_reward_dist" : 0.73,
+            "target_dist": 0.73,   # 期望的接近距离，越小要求越精确
+            "sharpness": 10.0,         # 越大，峰越窄越尖锐
         },
     )
 
     # 底盘朝向物体
+    # heading_to_object = RewTerm(
+    #     func=mdp.heading_to_target_reward_progress,
+    #     weight=1.5,
+    #     params={
+    #         "robot_cfg": SceneEntityCfg("robot"),
+    #         "target_cfg": SceneEntityCfg("object"),
+    #         "sensitivity": 30.0,
+    #         "penalty_scale":  0.2,
+    #         "near_dist_gate": 0.5,
+    #     },
+    # )
+
     heading_to_object = RewTerm(
-        func=mdp.heading_to_target_reward_progress,
-        weight=1.5,
+        func=mdp.heading_to_target_reward,
+        weight=0.5,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
-            "sensitivity": 30.0,
-            "penalty_scale":  0.2,
-            "near_dist_gate": 0.5,
+            "std": 0.1,
         },
     )
 

@@ -77,14 +77,18 @@ def distance_to_target_reward_shift(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     target_cfg: SceneEntityCfg,
-    lam: float = 2.0,   # λ 越大，收敛越快（建议 3.0–5.0）
+    target_dist: float = 0.73,   # 最优距离（m）
+    sharpness: float = 10.0,     # 越大，峰越窄越尖锐
 ) -> torch.Tensor:
     robot_pos_w  = robot_root_pos_w(env, robot_cfg)
     target_pos_w = object_root_pos_w(env, target_cfg)
     diff = target_pos_w[:, :2] - robot_pos_w[:, :2]
-    dist = torch.norm(diff, dim=-1).clamp(min=1e-3)   # 防除零
-    reward = 1.0 - torch.exp(-lam / dist)              # ∈ (0, 1)
-    return reward
+    dist = torch.norm(diff, dim=-1).clamp(min=1e-3)
+    
+    delta_dist = torch.abs(dist - target_dist)
+    reward = torch.tanh(-sharpness * delta_dist) + 1  # ∈ (0, 2]，峰值在 dist=0.73m 时为 2
+    
+    return reward / 2.0  # 归一化到 (0, 1]
 
 # def distance_to_target_reward(env, robot_cfg, target_cfg, std=1.0):
 #     robot_pos_w  = robot_root_pos_w(env, robot_cfg)
