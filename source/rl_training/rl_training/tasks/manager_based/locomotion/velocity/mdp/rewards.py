@@ -182,6 +182,43 @@ def joint_pos_penalty(
     # reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
     return reward
 
+def joint_pos_penalty_wbc(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    pose_command_name: str,           # 新增
+    asset_cfg: SceneEntityCfg,
+    stand_still_scale: float,
+    velocity_threshold: float,
+    command_threshold: float,
+    pose_command_threshold: float = 0.05,
+    default_height: float = 0.513,
+) -> torch.Tensor:
+    asset: Articulation = env.scene[asset_cfg.name]
+
+    vel_cmd  = env.command_manager.get_command(command_name)
+    pose_cmd = env.command_manager.get_command(pose_command_name)
+
+    cmd_norm  = torch.linalg.norm(vel_cmd, dim=1)
+    body_vel  = torch.linalg.norm(asset.data.root_lin_vel_b[:, :2], dim=1)
+
+    default_pose = vel_cmd.new_tensor([default_height, 0.0, 0.0])
+    pose_is_default = torch.linalg.norm(pose_cmd - default_pose, dim=1) < pose_command_threshold
+
+    running_reward = torch.linalg.norm(
+        asset.data.joint_pos[:, asset_cfg.joint_ids]
+        - asset.data.default_joint_pos[:, asset_cfg.joint_ids],
+        dim=1,
+    )
+
+    # 只有速度小 且 姿态也是默认值，才用大scale
+    is_truly_still = (
+        (cmd_norm < command_threshold)
+        & (body_vel < velocity_threshold)
+        & pose_is_default
+    )
+
+    reward = torch.where(is_truly_still, stand_still_scale * running_reward, running_reward)
+    return reward
 
 def wheel_vel_penalty(
     env: ManagerBasedRLEnv,
@@ -752,6 +789,7 @@ def base_height_l2(
     # Compute the L2 squared penalty
     reward = torch.square(asset.data.root_pos_w[:, 2] - adjusted_target_height)
     # reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
+    print("base_height", asset.data.root_link_pos_w[:, 2])
     return reward
 
 

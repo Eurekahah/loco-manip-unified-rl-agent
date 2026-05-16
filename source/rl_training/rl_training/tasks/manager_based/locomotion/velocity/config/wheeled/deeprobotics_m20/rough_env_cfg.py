@@ -293,15 +293,15 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
     hipx_joint_names = [
         "fl_hipx_joint", "fr_hipx_joint", "hl_hipx_joint", "hr_hipx_joint",
-    ]
+    ] # 幅度较小的腿的左右开合关节
 
     hipy_joint_names = [
         "fl_hipy_joint", "fr_hipy_joint", "hl_hipy_joint", "hr_hipy_joint",
-    ]
+    ] # 幅度较大的腿的前后摆动关节
 
     knee_joint_names = [
         "fl_knee_joint", "fr_knee_joint", "hl_knee_joint", "hr_knee_joint",
-    ]
+    ] # 膝关节
 
     arm_joint_names = [
         "arm_joint1", "arm_joint2", "arm_joint3", "arm_joint4", "arm_joint5", "arm_joint6",  
@@ -393,7 +393,7 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.rewards.ang_vel_xy_l2.weight = -0.02
         self.rewards.flat_orientation_l2.weight = 0
         self.rewards.base_height_l2.weight = -0.5
-        self.rewards.base_height_l2.params["target_height"] = 0.50
+        self.rewards.base_height_l2.params["target_height"] = 0.513 # 这个是用zero_agent在平坦地面上测量得到的平均高度，作为目标高度
         self.rewards.base_height_l2.params["asset_cfg"].body_names = [self.base_link_name]
         self.rewards.body_lin_acc_l2.weight = 0
         self.rewards.body_lin_acc_l2.params["asset_cfg"].body_names = [self.base_link_name]
@@ -411,7 +411,6 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.rewards.joint_acc_l2.params["asset_cfg"].joint_names = self.leg_joint_names
         self.rewards.joint_acc_wheel_l2.weight = -1e-7
         self.rewards.joint_acc_wheel_l2.params["asset_cfg"].joint_names = self.wheel_joint_names
-        # self.rewards.create_joint_deviation_l1_rewterm("joint_deviation_hip_l1", -0.2, [".*_hip_joint"])
         self.rewards.joint_pos_limits.weight = -5.0
         self.rewards.joint_pos_limits.params["asset_cfg"].joint_names = self.leg_joint_names
         self.rewards.joint_vel_limits.weight = 0

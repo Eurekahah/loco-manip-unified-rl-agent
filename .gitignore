@@ -38,3 +38,7 @@ _build
 
 
 **/usd/*
+*.mp4
+*.png
+*.csv
+*.npz

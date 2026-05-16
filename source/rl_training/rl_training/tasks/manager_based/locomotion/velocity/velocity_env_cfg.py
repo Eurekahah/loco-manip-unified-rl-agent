@@ -486,14 +486,6 @@ class RewardsCfg:
             weight=0.0,
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
         )
-    
-    def create_joint_deviation_l1_rewterm(self, attr_name, weight, joint_names_pattern):
-        rew_term = RewTerm(
-            func=mdp.joint_deviation_l1,
-            weight=weight,
-            params={"asset_cfg": SceneEntityCfg("robot", joint_names=joint_names_pattern)},
-        )
-        setattr(self, attr_name, rew_term)
 
     joint_pos_limits = RewTerm(
         func=mdp.joint_pos_limits, weight=0.0, params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")}

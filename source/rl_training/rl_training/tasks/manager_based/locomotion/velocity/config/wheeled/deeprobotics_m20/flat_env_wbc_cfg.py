@@ -126,15 +126,23 @@ class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
         self.rewards.base_height_l2.weight = 0.0  # 关闭原有的高度奖励，改用新的 body_height_tracking
         self.rewards.lin_vel_z_l2.weight = 0.0      # 降低底盘 z 轴速度惩罚
         self.rewards.ang_vel_xy_l2.weight = 0.0     # 关闭水平面角速度惩罚
-        self.rewards.feet_air_time.weight = 2.0
-        self.rewards.feet_air_time.params["threshold"] = 0.5
-        self.rewards.feet_air_time.params["sensor_cfg"].body_names = [self.foot_link_name]
-        self.commands.base_velocity.ranges.lin_vel_x = (0.0, 0.0)
-        self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
-        self.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
-        self.commands.body_pose.height_range = (0.55, 0.55)
-        self.commands.body_pose.pitch_range = (0.35, 0.35)
-        self.commands.body_pose.roll_range = (0.0, 0.0)
+        self.rewards.stand_still.weight = 0.0      # 关闭站立不动奖励
+
+        self.rewards.hipx_joint_pos_penalty.func = mdp.joint_pos_penalty_wbc
+        self.rewards.hipx_joint_pos_penalty.params["pose_command_name"] = "body_pose"
+        self.rewards.hipy_joint_pos_penalty.func = mdp.joint_pos_penalty_wbc
+        self.rewards.hipy_joint_pos_penalty.params["pose_command_name"] = "body_pose"
+        self.rewards.knee_joint_pos_penalty.func = mdp.joint_pos_penalty_wbc
+        self.rewards.knee_joint_pos_penalty.params["pose_command_name"] = "body_pose"
+        # self.rewards.feet_air_time.weight = 2.0
+        # self.rewards.feet_air_time.params["threshold"] = 0.5
+        # self.rewards.feet_air_time.params["sensor_cfg"].body_names = [self.foot_link_name]
+        # self.commands.base_velocity.ranges.lin_vel_x = (0.0, 0.0)
+        # self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
+        # self.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
+        # self.commands.body_pose.height_range = (0.55, 0.55)
+        # self.commands.body_pose.pitch_range = (0.35, 0.35)
+        # self.commands.body_pose.roll_range = (0.0, 0.0)
         
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "FlatEnvWBCConfig":
