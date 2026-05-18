@@ -148,7 +148,7 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             ".*wheel_joint": 0.0,
             # 机械臂旋转关节
             "arm_joint1": 0.0,       # limit: [-2.618, 2.618]  ✓ 安全
-            "arm_joint2": 2.0,       # limit: [0, 3.14]        ⚠️ 边界改为0.1
+            "arm_joint2": 3.0,       # limit: [0, 3.14]        ⚠️ 边界改为0.1
             "arm_joint3": -1.0,      # limit: [-2.697, 0]      ⚠️ 边界改为-0.1
             "arm_joint4": 0.0,       # limit: [-1.832, 1.832]  ✓ 安全
             "arm_joint5": 0.0,       # limit: [-1.22, 1.22]    ✓ 安全

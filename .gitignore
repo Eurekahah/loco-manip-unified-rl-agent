@@ -42,3 +42,4 @@ _build
 *.png
 *.csv
 *.npz
+scripts/utils/*
