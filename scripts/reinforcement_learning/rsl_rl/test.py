@@ -232,19 +232,26 @@ class TrackingMetricsRecorder:
 
     def _record_scheme1(self, base_env, robot):
         cmd = base_env.command_manager.get_command("base_velocity")  # (N, 3)
-
         lin_vel_cmd = cmd[:, :2]
         lin_vel_obs = robot.data.root_lin_vel_b[:, :2]
-        lin_err = torch.norm(lin_vel_cmd - lin_vel_obs, dim=-1)
-        lin_err_mean = lin_err.mean().item()
-
+        
+        # 分别计算 x, y 方向的误差
+        lin_err = lin_vel_cmd - lin_vel_obs  # (N, 2)
+        lin_err_x_mean = lin_err[:, 0].abs().mean().item()
+        lin_err_y_mean = lin_err[:, 1].abs().mean().item()
+        
+        # 保留原来的合并误差（可选）
+        lin_err_mean = torch.norm(lin_err, dim=-1).mean().item()
+        
         ang_vel_cmd = cmd[:, 2]
         ang_vel_obs = robot.data.root_ang_vel_b[:, 2]
         ang_err = (ang_vel_cmd - ang_vel_obs).abs()
         ang_err_mean = ang_err.mean().item()
-
+        
         return {
             "lin_vel_error": lin_err_mean,
+            "lin_vel_error_x": lin_err_x_mean,
+            "lin_vel_error_y": lin_err_y_mean,
             "ang_vel_error": ang_err_mean
         }
 
@@ -261,8 +268,8 @@ class TrackingMetricsRecorder:
 
         roll_obs, pitch_obs, _ = euler_xyz_from_quat(robot.data.root_quat_w)
 
-        roll_cmd  = cmd[:, 1]
-        pitch_cmd = cmd[:, 2]
+        pitch_cmd = cmd[:, 1]
+        roll_cmd  = cmd[:, 2]
 
         roll_err  = (roll_cmd  - roll_obs ).abs().mean().item()
         pitch_err = (pitch_cmd - pitch_obs).abs().mean().item()

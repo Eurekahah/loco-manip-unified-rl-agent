@@ -172,7 +172,7 @@ class PreTrainedPickWBCAction(ActionTerm):
 
         # body_pose 增量模式：缓存上一时刻的目标 body pose（height, pitch, roll）
         self._target_body_height = torch.full(
-            (self.num_envs,), 0.55, device=self.device  # 初始值取0.55m
+            (self.num_envs,), 0.513, device=self.device  # 初始值取0.513m
         )
         self._target_body_pitch = torch.zeros(self.num_envs, device=self.device)
         self._target_body_roll  = torch.zeros(self.num_envs, device=self.device)
@@ -227,7 +227,7 @@ class PreTrainedPickWBCAction(ActionTerm):
         ee_pos_b = math_utils.quat_apply(root_quat_inv, ee_pos_w - self.robot.data.root_pos_w)
 
         # 读取当前机身实际 pose 用于重置
-        default_height = 0.55
+        default_height = 0.513
         default_pitch  = 0.0
         default_roll   = 0.0 
 
@@ -322,6 +322,7 @@ class PreTrainedPickWBCAction(ActionTerm):
         self._ll_command[:, 10] = self._target_body_height
         self._ll_command[:, 11] = self._target_body_pitch
         self._ll_command[:, 12] = self._target_body_roll
+        print(self.ll_command)
         
 
     def apply_actions(self):
@@ -499,8 +500,8 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
     @configclass
     class LowLevelCommandRanges:
         # base_velocity ranges，对应 CommandsCfg.base_velocity.ranges
-        lin_vel_x: tuple[float, float] = (0.0, 0.9)
-        lin_vel_y: tuple[float, float] = (0.0, 0.0)
+        lin_vel_x: tuple[float, float] = (-1.0, 1.0)
+        lin_vel_y: tuple[float, float] = (-1.0, 1.0)
         ang_vel_z: tuple[float, float] = (-1.0, 1.0)
         # ee_pose ranges，对应 CommandsCfg.ee_pose 的 command 输出空间
         # command 输出是世界坐标系下的 [x, y, z, qw, qx, qy, qz]
@@ -512,8 +513,8 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
         # target_height: 机器狗期望站立高度（米），参考低层训练时的正常高度
         target_height: tuple[float, float] = (0.33, 0.6)
         # target_pitch: 机身期望俯仰角（弧度），正值抬头
-        target_pitch: tuple[float, float] = (0.0, 0.35)  # (-0.35, 0.35)
+        target_pitch: tuple[float, float] = (-0.35, 0.35)  # (-0.35, 0.35)
         # target_roll: 机身期望侧倾角（弧度），正值右倾
-        target_roll: tuple[float, float] = (-0.05, 0.05) # (-0.25, 0.25)
+        target_roll: tuple[float, float] = (-0.25, 0.25) # (-0.25, 0.25)
 
     low_level_command_ranges: LowLevelCommandRanges = LowLevelCommandRanges()

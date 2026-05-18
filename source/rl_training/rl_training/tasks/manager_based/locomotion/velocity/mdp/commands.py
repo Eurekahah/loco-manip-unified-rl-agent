@@ -777,7 +777,7 @@ class BodyPoseCommandCfg(CommandTermCfg):
     class_type: type = BodyPoseCommand
 
     # ---- height（机身高度，单位 m）----
-    # 正常站立高度约 0.55 m，蹲下约 0.35 m
+    # 正常站立高度约 0.513 m，蹲下约 0.35 m
     height_range: tuple = (0.33, 0.65) # 截断区间 [最低蹲伏, 最高]
 
     # ---- pitch（前后俯仰，单位 rad）----
