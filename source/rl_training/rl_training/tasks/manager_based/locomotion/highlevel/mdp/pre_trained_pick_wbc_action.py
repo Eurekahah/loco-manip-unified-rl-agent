@@ -322,7 +322,7 @@ class PreTrainedPickWBCAction(ActionTerm):
         self._ll_command[:, 10] = self._target_body_height
         self._ll_command[:, 11] = self._target_body_pitch
         self._ll_command[:, 12] = self._target_body_roll
-        print(self.ll_command)
+        # print(self.ll_command)
         
 
     def apply_actions(self):

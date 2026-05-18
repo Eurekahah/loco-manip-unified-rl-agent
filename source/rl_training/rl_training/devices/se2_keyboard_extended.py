@@ -163,6 +163,7 @@ class Se2KeyboardExtended(DeviceBase):
             if event.input.name == "L":
                 self.reset()
             elif event.input.name == "M":
+                # 这个没有用，需要获取当前的姿态，计算差值设置
                 # reset only the pose channels (indices 3-5)
                 self._base_command[3:] = 0.0
                 print("[Se2KeyboardExtended] Pose reset to zero")
@@ -236,7 +237,7 @@ class Se2KeyboardExtendedCfg(DeviceCfg):
     v_x_sensitivity:     float = 0.8
     v_y_sensitivity:     float = 0.4
     omega_z_sensitivity: float = 1.0
-    height_sensitivity:  float = 0.05
-    pitch_sensitivity:   float = 0.02
-    roll_sensitivity:    float = 0.02
+    height_sensitivity:  float = 1.0
+    pitch_sensitivity:   float = 1.0
+    roll_sensitivity:    float = 1.0
     class_type: type[DeviceBase] = Se2KeyboardExtended

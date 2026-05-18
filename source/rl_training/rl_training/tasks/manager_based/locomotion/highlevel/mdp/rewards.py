@@ -86,9 +86,9 @@ def distance_to_target_reward_shift(
     dist = torch.norm(diff, dim=-1).clamp(min=1e-3)
     
     delta_dist = torch.abs(dist - target_dist)
-    reward = torch.tanh(-sharpness * delta_dist) + 1  # ∈ (0, 2]，峰值在 dist=0.73m 时为 2
+    reward = torch.tanh(-sharpness * delta_dist) + 1
     
-    return reward / 2.0  # 归一化到 (0, 1]
+    return reward
 
 # def distance_to_target_reward(env, robot_cfg, target_cfg, std=1.0):
 #     robot_pos_w  = robot_root_pos_w(env, robot_cfg)
@@ -144,38 +144,30 @@ def heading_to_target_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     target_cfg: SceneEntityCfg,
-    std: float = 0.8,
 ) -> torch.Tensor:
-    """
-    Dense reward for facing the target.
-
-    r = exp(-angle² / (2·std²))
-
-    Value is 1.0 when perfectly aligned, decays for larger angular error.
-
-    Args:
-        std: Angular width in radians. Default 0.8 rad ≈ 46°.
-
-    Returns shape (N,).
-    """
     robot_pos_w  = robot_root_pos_w(env, robot_cfg)
     robot_quat_w = robot_root_quat_w(env, robot_cfg)
     target_pos_w = object_root_pos_w(env, target_cfg)
 
-    rel_pos_w      = target_pos_w[:, :2] - robot_pos_w[:, :2]  # (N, 2)
-    target_angle_w = torch.atan2(rel_pos_w[:, 1], rel_pos_w[:, 0])  # (N,)
+    # 机器人前向单位向量（XY平面，yaw方向）
+    heading_quat = yaw_quat(robot_quat_w)                          # (N, 4)
+    forward = torch.zeros(robot_pos_w.shape[0], 3, device=env.device)
+    forward[:, 0] = 1.0                                            # 局部坐标系前向轴，按实际改
+    forward_w = quat_apply(heading_quat, forward)                  # (N, 3) 世界系前向向量
 
-    heading_quat = yaw_quat(robot_quat_w)
-    robot_yaw    = 2.0 * torch.atan2(heading_quat[:, 3], heading_quat[:, 0])  # (N,)
+    # 目标方向单位向量（XY平面）
+    rel_pos = target_pos_w[:, :3] - robot_pos_w[:, :3]            # (N, 3)
+    rel_pos[:, 2] = 0.0                                            # 清零Z，只保留XY
+    dist = torch.norm(rel_pos, dim=-1)                             # (N,)
 
-    angle_error = wrap_to_pi(target_angle_w - robot_yaw)  # (N,)  ∈ [-π, π]
-    reward = torch.exp(-angle_error**2 / (2.0 * std**2))  # (N,)
-
-    # Mask out when robot is already very close (heading irrelevant at target)
-    diff = target_pos_w[:, :2] - robot_pos_w[:, :2]
-    dist = torch.norm(diff, dim=-1)
-    reward = torch.where(dist < 0.3, torch.zeros_like(reward), reward)
-
+    # 余弦相似度
+    reward = torch.zeros(robot_pos_w.shape[0], device=env.device)
+    safe = dist >= 0.3
+    forward_w_xy = forward_w.clone()
+    forward_w_xy[:, 2] = 0.0                                       # 前向向量也只取XY
+    reward[safe] = F.cosine_similarity(
+        forward_w_xy[safe], rel_pos[safe], dim=-1
+    )                                                              # cos∈[-1,1]，对齐时1.0
     return reward
 
 
@@ -966,10 +958,7 @@ def object_ee_symmetric_alignment_progress(
     object_cfg: SceneEntityCfg,
     ee_frame_cfg_finger1: SceneEntityCfg,
     ee_frame_cfg_finger2: SceneEntityCfg,
-    action_term_name: str = "pre_trained_pick_action",
-    cmd_proximity_gate: float = 0.3,   # cmd_pos 距物体多近才激活夹爪对准奖励
-    sensitivity: float = 50.0,
-    penalty_scale: float = 0.0,
+    sensitivity: float = 10.0,
 ) -> torch.Tensor:
     object_asset = env.scene[object_cfg.name]
     robot_asset  = env.scene[ee_frame_cfg_finger1.name]
@@ -991,12 +980,6 @@ def object_ee_symmetric_alignment_progress(
     finger_span = torch.norm(pos1 - pos2, dim=-1)
     gate_open   = (finger_span > min_finger_dist).float()
 
-    # ---- 核心新增：cmd_pos 距离门控 ----
-    action_term = env.action_manager.get_term(action_term_name)
-    cmd_pos_w   = action_term.ll_command[:, 3:6]
-    cmd_dist    = torch.norm(cmd_pos_w - object_pos_w, dim=-1)
-    gate_cmd    = (cmd_dist < cmd_proximity_gate).float()   # (N,)
-
     # 未进入门控区域时直接返回 0，不更新历史最近（避免污染 min_dist）
     key = f"_min_finger_mean_dist_{object_cfg.name}"
     if key not in env.extras:
@@ -1011,16 +994,14 @@ def object_ee_symmetric_alignment_progress(
     regression = (mean_dist - min_dist).clamp(min=0.0)
 
     # 只在 gate 激活时更新历史最近，gate 未激活时 min_dist 保持不变
-    active = gate_cmd * gate_open                           # (N,)
-    new_min = torch.where(active.bool(), 
+    new_min = torch.where(gate_open.bool(), 
                           torch.minimum(min_dist, mean_dist),
                           min_dist)
     env.extras[key] = new_min
 
-    reward = (torch.tanh(sensitivity * progress)
-            - penalty_scale * torch.tanh(sensitivity * regression))
+    reward = (torch.tanh(sensitivity * progress))
 
-    return reward * gate_open * gate_cmd
+    return reward * gate_open
 
 
 def gripper_contact_symmetric_grasp_progress(
@@ -1143,22 +1124,24 @@ def base_vel_cmd_action_l1_near_object(
 ) -> torch.Tensor:
     """
     机体距物体在 distance_threshold 范围内时，对 policy 输出的 ll_command
-    施加 L1 范数惩罚，抑制大幅指令抖动。
+    施加惩罚：reward = -|vx| + 0.25 * exp(-|vx|)
     范围外返回 0。
     """
     # 机体与物体的水平距离
     robot_pos_w  = robot_root_pos_w(env, robot_cfg)
     target_pos_w = object_root_pos_w(env, object_cfg)
     diff = target_pos_w[:, :2] - robot_pos_w[:, :2]
-    dist = torch.norm(diff, dim=-1)                          # (N,)
+    dist = torch.norm(diff, dim=-1)          # (N,)
+    gate = (dist < distance_threshold).float()  # (N,)
 
-    gate = (dist < distance_threshold).float()               # (N,)
-
-    # policy 输出的原始指令 L1 范数
+    # policy 输出的 vx 指令
     action_term = env.action_manager.get_term(action_term_name)
-    l1  = action_term.ll_command[:,:2].abs().sum(dim=-1)                              # (N,)
+    vx = action_term.ll_command[:, 0].abs()  # (N,)  |x|
 
-    return l1 * gate
+    # 公式：-|x| + 0.25 * exp(-|x|)
+    reward = -vx + 0.25 * torch.exp(-vx)    # (N,)
+
+    return reward * gate
 
 def ee_delta_pose_l1_near_object(
     env: ManagerBasedRLEnv,
@@ -1240,82 +1223,45 @@ def object_is_lifted_progress(
     return torch.tanh(sensitivity * progress) * gate_close_cmd
 
 
-def ee_orientation_to_object_progress(
+def ee_orientation_to_object(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg,
-    ee_frame_cfg: SceneEntityCfg,          # 通常是 arm_link6
-    sensitivity: float = 50.0,             # 进步敏感度
-    dist_gate: float = 0.01,               # 距离门控，小于此值不计算奖励
-    # 可选 cmd 门控（与 object_is_lifted_progress 风格一致，默认关闭）
-    use_cmd_gate: bool = False,
-    action_term_name: Optional[str] = None,
-    cmd_proximity_gate: float = 0.2,
+    ee_frame_cfg: SceneEntityCfg,
+    dist_gate: float = 0.01,
 ) -> torch.Tensor:
     """
-    步进版 EE z轴方向对准物体奖励。
-    只奖励余弦相似度相比历史最高值的进步，并使用 tanh 压缩。
+    稠密版 EE z轴方向对准物体奖励。
+    直接返回当前帧的余弦相似度，不依赖历史最佳值。
     """
     robot_asset = env.scene[ee_frame_cfg.name]
     object_asset = env.scene[object_cfg.name]
 
     # ---------- 位置 / 姿态 ----------
     if ee_frame_cfg.body_ids is not None:
-        ee_pos_w = robot_asset.data.body_pos_w[:, ee_frame_cfg.body_ids[0], :]   # (N,3)
-        ee_quat_w = robot_asset.data.body_quat_w[:, ee_frame_cfg.body_ids[0], :] # (N,4)
+        ee_pos_w  = robot_asset.data.body_pos_w[:, ee_frame_cfg.body_ids[0], :]
+        ee_quat_w = robot_asset.data.body_quat_w[:, ee_frame_cfg.body_ids[0], :]
     else:
-        ee_pos_w = robot_asset.data.body_pos_w[:, -1, :]
+        ee_pos_w  = robot_asset.data.body_pos_w[:, -1, :]
         ee_quat_w = robot_asset.data.body_quat_w[:, -1, :]
 
-    obj_pos_w = object_asset.data.root_pos_w[:, :3]                              # (N,3)
+    obj_pos_w = object_asset.data.root_pos_w[:, :3]
 
     # ---------- EE z轴世界方向 ----------
     z_axis_local = torch.zeros(env.num_envs, 3, device=env.device)
-    z_axis_local[:, 2] = 1.0                                                    # 局部 [0,0,1]
-    ee_z_dir_world = quat_apply(ee_quat_w, z_axis_local)                        # (N,3)
+    z_axis_local[:, 2] = 1.0
+    ee_z_dir_world = quat_apply(ee_quat_w, z_axis_local)
 
     # ---------- 指向物体的方向 ----------
-    obj_dir = obj_pos_w - ee_pos_w                                               # (N,3)
-    obj_dist = torch.norm(obj_dir, dim=-1)                                       # (N,)
+    obj_dir  = obj_pos_w - ee_pos_w
+    obj_dist = torch.norm(obj_dir, dim=-1)
 
-    # 当前余弦相似度（仅远距离有效）
-    cos_sim = torch.zeros(env.num_envs, device=env.device)
+    # ---------- 余弦相似度（稠密，当前帧直接计算）----------
+    reward = torch.zeros(env.num_envs, device=env.device)
     far_mask = obj_dist >= dist_gate
     if far_mask.any():
         obj_dir_unit = obj_dir[far_mask] / obj_dist[far_mask].unsqueeze(-1)
-        cos_sim[far_mask] = F.cosine_similarity(
+        reward[far_mask] = F.cosine_similarity(
             ee_z_dir_world[far_mask], obj_dir_unit, dim=-1
-        )  # ∈ [-1, 1]
-
-    # ---------- 步进奖励缓存 ----------
-    cache_key = f"_best_cosine_{ee_frame_cfg.name}_{object_cfg.name}"
-    if not hasattr(env, cache_key):
-        setattr(env, cache_key, torch.full((env.num_envs,), -1.0, device=env.device))
-    best_cos = getattr(env, cache_key)
-
-    # 重置逻辑：新 episode 时将 best_cos 重置为当前余弦值（首次进步为0）
-    just_reset = env.episode_length_buf == 1
-    if just_reset.any():
-        # 注意：重置时只有远距离的环境才用当前余弦，近距离的用 -1（避免负进步）
-        reset_val = torch.where(far_mask[just_reset], cos_sim[just_reset], 
-                                torch.full_like(cos_sim[just_reset], -1.0))
-        best_cos[just_reset] = reset_val
-
-    # ---------- 可选 cmd 门控 ----------
-    gate = torch.ones(env.num_envs, device=env.device)
-    if use_cmd_gate:
-        if action_term_name is None:
-            raise ValueError("Must provide action_term_name when use_cmd_gate=True")
-        action_term = env.action_manager.get_term(action_term_name)
-        cmd_pos_w = action_term.ll_command[:, 3:6]          # 假设 cmd 在动作的后三维
-        cmd_dist = torch.norm(cmd_pos_w - obj_pos_w, dim=-1)
-        gate = (cmd_dist < cmd_proximity_gate).float()
-
-    # ---------- 计算进步奖励 ----------
-    progress = (cos_sim - best_cos).clamp(min=0.0)          # 只奖励正向进步
-    reward = torch.tanh(sensitivity * progress) * gate
-
-    # 更新历史最佳余弦（仅更新远距离的环境，近距离保持不变）
-    if far_mask.any():
-        best_cos[far_mask] = torch.maximum(best_cos[far_mask], cos_sim[far_mask])
+        )
 
     return reward

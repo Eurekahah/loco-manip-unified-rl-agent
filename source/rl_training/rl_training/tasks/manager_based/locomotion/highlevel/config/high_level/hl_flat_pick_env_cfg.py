@@ -225,21 +225,9 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 阶段一：底盘接近物体（导航层，沿用原逻辑）
     # =========================================================
 
-    # 整体接近：机器人基座靠近物体
-    # approach_object = RewTerm(
-    #     func=mdp.distance_to_target_reward_shift_progress,
-    #     weight=1.0,                          # 略降权重，让位给 EE 精确接近
-    #     params={
-    #         "robot_cfg": SceneEntityCfg("robot"),
-    #         "target_cfg": SceneEntityCfg("object"),
-    #         "sensitivity": 20.0,
-    #         "penalty_scale": 0.5,   # 后退时额外惩罚，可选
-    #         "stop_reward_dist" : 0.73,
-    #     },
-    # )
     approach_object = RewTerm(
         func=mdp.distance_to_target_reward_shift,
-        weight=0.1,                          # 略降权重，让位给 EE 精确接近
+        weight=0.01,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
@@ -248,92 +236,29 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         },
     )
 
-    # 底盘朝向物体
-    # heading_to_object = RewTerm(
-    #     func=mdp.heading_to_target_reward_progress,
-    #     weight=1.5,
-    #     params={
-    #         "robot_cfg": SceneEntityCfg("robot"),
-    #         "target_cfg": SceneEntityCfg("object"),
-    #         "sensitivity": 30.0,
-    #         "penalty_scale":  0.2,
-    #         "near_dist_gate": 0.5,
-    #     },
-    # )
-
     heading_to_object = RewTerm(
         func=mdp.heading_to_target_reward,
-        weight=0.5,
+        weight=0.25,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
-            "std": 0.1,
         },
     )
 
-    forward_velocity_penalty = RewTerm(
-        func=mdp.forward_velocity_penalty,
-        weight=-0.05,
-        params={"action_name": "pre_trained_pick_action"},
-        )
-
-    lateral_velocity_penalty = RewTerm(
-        func=mdp.lateral_velocity_penalty,
-        weight=-0.05,
-        params={"action_name": "pre_trained_pick_action"},
+    base_vel_cmd_action_l1_near_object = RewTerm(
+        func=mdp.base_vel_cmd_action_l1_near_object,
+        weight=1.0,
+        params={
+            "action_term_name": "pre_trained_pick_action",
+            "robot_cfg":        SceneEntityCfg("robot"),
+            "object_cfg":       SceneEntityCfg("object"),
+            "distance_threshold": 0.8,
+        },
     )
-
-    angular_velocity_penalty = RewTerm(
-        func=mdp.angular_velocity_penalty,
-        weight=-0.02,
-        params={"action_name": "pre_trained_pick_action"},
-    )
-    # base_vel_cmd_action_l1_near_object = RewTerm(
-    #     func=mdp.base_vel_cmd_action_l1_near_object,
-    #     weight=-1.0,
-    #     params={
-    #         "action_term_name": "pre_trained_pick_action",
-    #         "robot_cfg":        SceneEntityCfg("robot"),
-    #         "object_cfg":       SceneEntityCfg("object"),
-    #         "distance_threshold": 0.8,
-    #     },
-    # )
 
     # =========================================================
     # 阶段二：末端执行器精确接近物体
     # =========================================================
-
-    cmd_pos_to_object = RewTerm(
-        func=mdp.cmd_pos_to_object_reward_progress,
-        weight=3.0,
-        params={
-            "action_term_name": "pre_trained_pick_action",
-            "object_cfg":       SceneEntityCfg("object"),
-            "sensitivity": 20.0,
-            "penalty_scale":    0.5,
-        },
-    )
-    ee_delta_pose_l1_near_object = RewTerm(
-        func=mdp.ee_delta_pose_l1_near_object,
-        weight=-0.1,
-        params={
-            "action_term_name": "pre_trained_pick_action",
-            "object_cfg":       SceneEntityCfg("object"),
-            "ee_frame_cfg":     SceneEntityCfg("robot", body_names="arm_link6"),
-            "distance_threshold":    0.2,
-        },
-    )
-
-    # 核心密集奖励：arm_link6（EE）到物体距离，高斯核塑形
-    # reach_object_ee = RewTerm(
-    #     func=mdp.object_ee_distance,
-    #     weight=5.0,                          # 权重高于底盘接近，引导手臂精细运动
-    #     params={
-    #         "std": 0.3,                      # 高斯核宽度，越小精度要求越高
-    #         "object_cfg": SceneEntityCfg("object"),
-    #         "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
-    #     },
-    # )
 
     # =========================================================
     # 阶段三：夹爪对准物体
@@ -342,66 +267,63 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 夹爪朝向对准：arm_link7/8 两指到物体的距离之和最小化
     gripper_alignment_symmetric = RewTerm(
         func=mdp.object_ee_symmetric_alignment_progress,
-        weight=4.0,
+        weight=1.0,
         params={
             "min_finger_dist":       0.04,
             "object_cfg":            SceneEntityCfg("object"),
             "ee_frame_cfg_finger1":  SceneEntityCfg("robot", body_names="arm_link7"),
             "ee_frame_cfg_finger2":  SceneEntityCfg("robot", body_names="arm_link8"),
-            "sensitivity":           50.0,
-            "penalty_scale":         0.5,
-            "cmd_proximity_gate":    0.3,
-            "action_term_name":      "pre_trained_pick_action",  # 用于取 cmd_pos
+            "sensitivity":           10.0,
         },
     )
 
     ee_orientation_to_object = RewTerm(
-        func=mdp.ee_orientation_to_object_progress,
-        weight=1.0,
+        func=mdp.ee_orientation_to_object,
+        weight=0.01,
         params={
             "object_cfg":   SceneEntityCfg("object"),
             "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
-            "action_term_name":      "pre_trained_pick_action", 
+            "dist_gate": 0.01,
         },
     )
 
 
     # 夹爪同步接触奖励：arm_link7/8 两指同时接触物体时给予奖励
-    grasp_contact_symmetric = RewTerm(
-        func=mdp.gripper_contact_symmetric_grasp_progress,
-        weight=5.0,  
-        params={
-            "threshold": 0.5,
-            "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
-            "sensor_cfg_finger2": SceneEntityCfg("arm_link8_contact_forces", body_names="arm_link8"),
-            "object_cfg": SceneEntityCfg("object"),
-            "ee_frame_cfg_finger1": SceneEntityCfg("robot", body_names="arm_link7"),
-            "ee_frame_cfg_finger2": SceneEntityCfg("robot", body_names="arm_link8"),
-            "gripper_action_name": "gripper_action",
-            "min_finger_dist": 0.02,
-            "cmd_proximity_gate": 0.2,  # 新增：只有当 cmd_pos 距离物体小于20cm时，接触奖励才生效
-            "action_term_name": "pre_trained_pick_action",  # 用于取 cmd_pos
-            "sensitivity": 10,
-        },
-    )
+    # grasp_contact_symmetric = RewTerm(
+    #     func=mdp.gripper_contact_symmetric_grasp_progress,
+    #     weight=5.0,  
+    #     params={
+    #         "threshold": 0.5,
+    #         "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
+    #         "sensor_cfg_finger2": SceneEntityCfg("arm_link8_contact_forces", body_names="arm_link8"),
+    #         "object_cfg": SceneEntityCfg("object"),
+    #         "ee_frame_cfg_finger1": SceneEntityCfg("robot", body_names="arm_link7"),
+    #         "ee_frame_cfg_finger2": SceneEntityCfg("robot", body_names="arm_link8"),
+    #         "gripper_action_name": "gripper_action",
+    #         "min_finger_dist": 0.02,
+    #         "cmd_proximity_gate": 0.2,  # 新增：只有当 cmd_pos 距离物体小于20cm时，接触奖励才生效
+    #         "action_term_name": "pre_trained_pick_action",  # 用于取 cmd_pos
+    #         "sensitivity": 10,
+    #     },
+    # )
 
     # =========================================================
     # 阶段四：抬起物体
     # =========================================================
     lift_object = RewTerm(
         func=mdp.object_is_lifted_progress,
-        weight=10.0,                         # 最高权重，作为最终目标信号
+        weight=1.0,                         # 最高权重，作为最终目标信号
         params={
             "object_cfg": SceneEntityCfg("object"),
             "cmd_proximity_gate": 0.2,  # 新增：只有当 cmd_pos 距离物体小于20cm时，抓取奖励才生效
             "action_term_name": "pre_trained_pick_action",  # 用于取 cmd_pos
-            "sensitivity": 100
+            "sensitivity": 10
         },
     )
 
     pickup_success = RewTerm(
         func=mdp.is_terminated_term,   # 配合 TerminationCfg 使用
-        weight=10.0,
+        weight=3.5,
         params={"term_keys": "pick_success"},
     )
 
@@ -414,7 +336,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 手臂主体非预期碰撞（排除夹爪，夹爪需要接触物体）
     undesired_arm_contacts = RewTerm(
         func=mdp.undesired_contacts,
-        weight=-0.01,
+        weight=-1e-5,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "arm_contact_forces",
@@ -425,7 +347,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     )
     undesired_body_contacts = RewTerm(
         func=mdp.undesired_contacts,
-        weight=-0.01,
+        weight=-1e-5,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "contact_forces",
@@ -435,22 +357,22 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         },
     )
 
-    joint_pos_limit_penalty = RewTerm(
-        func=mdp.joint_pos_limits,
-        weight=-0.5,
-        params={
-            "asset_cfg": SceneEntityCfg("robot"),
-        },
-    )
+    # joint_pos_limit_penalty = RewTerm(
+    #     func=mdp.joint_pos_limits,
+    #     weight=-0.5,
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot"),
+    #     },
+    # )
 
-    joint_vel_limit_penalty = RewTerm(
-        func=mdp.joint_vel_limits,
-        weight=-0.5,
-        params={
-            "soft_ratio": 0.9,
-            "asset_cfg": SceneEntityCfg("robot"),
-        },
-    )
+    # joint_vel_limit_penalty = RewTerm(
+    #     func=mdp.joint_vel_limits,
+    #     weight=-0.5,
+    #     params={
+    #         "soft_ratio": 0.9,
+    #         "asset_cfg": SceneEntityCfg("robot"),
+    #     },
+    # )
 
     
 
@@ -473,15 +395,6 @@ class HLFlatPickTerminationsCfg(HighLevelTerminationsCfg):
     #         "object_cfg": SceneEntityCfg("object"),
     #         "height_threshold": 0.2,  # 物体世界位姿高度小于0.2m算掉落
     #     },  
-    # )
-
-    # action_target_too_far = DoneTerm(
-    #     func=mdp.action_target_too_far,
-    #     params={
-    #         "action_term_name": "pre_trained_pick_action",
-    #         "ee_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
-    #         "distance_threshold": 1.0,
-    #     },
     # )
 
     pick_success = DoneTerm(

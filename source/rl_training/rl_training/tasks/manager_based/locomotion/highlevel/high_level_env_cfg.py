@@ -384,14 +384,8 @@ class ObservationsCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-4.0)
+    # termination_penalty = RewTerm(func=mdp.is_terminated, weight=-4.0)
 
-    # 惩罚：碰撞（撞桌腿、撞物体）
-    # collision_penalty = RewTerm(
-    #     func=mdp.contact_forces,
-    #     weight=-1.0,
-    #     params={"sensor_cfg": SceneEntityCfg("contact_forces"), "threshold": 5.0},
-    # )
 
     # 惩罚：action rate，防止指令抖动
     # batch_size也可以调小一点
@@ -399,21 +393,6 @@ class RewardsCfg:
         func=mdp.action_rate_l2,
         weight=-0.001,
     )
-    # position_tracking = RewTerm(
-    #     func=mdp.position_command_error_tanh,
-    #     weight=0.5,
-    #     params={"std": 2.0, "command_name": "pose_command"},
-    # )
-    # position_tracking_fine_grained = RewTerm(
-    #     func=mdp.position_command_error_tanh,
-    #     weight=0.5,
-    #     params={"std": 0.2, "command_name": "pose_command"},
-    # )
-    # orientation_tracking = RewTerm(
-    #     func=mdp.heading_command_error_abs,
-    #     weight=-0.2,
-    #     params={"command_name": "pose_command"},
-    # )
 
 
 @configclass
