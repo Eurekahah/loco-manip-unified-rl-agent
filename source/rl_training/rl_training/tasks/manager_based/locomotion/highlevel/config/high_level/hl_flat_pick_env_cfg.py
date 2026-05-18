@@ -232,7 +232,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
             "target_dist": 0.73,   # 期望的接近距离，越小要求越精确
-            "sharpness": 10.0,         # 越大，峰越窄越尖锐
+            "sharpness": 5.0,         # 越大，峰越窄越尖锐
         },
     )
 
@@ -247,7 +247,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     base_vel_cmd_action_l1_near_object = RewTerm(
         func=mdp.base_vel_cmd_action_l1_near_object,
-        weight=1.0,
+        weight=1e-5,
         params={
             "action_term_name": "pre_trained_pick_action",
             "robot_cfg":        SceneEntityCfg("robot"),
@@ -448,7 +448,7 @@ class HLFlatPickEventCfg(HighLevelEventCfg):
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (1.1, 1.2), "y": (-0.6, 0.6),  "yaw": (-0.393, 0.393)},
+            "pose_range": {"x": (1.3, 1.4), "y": (-0.6, 0.6),  "yaw": (-0.393, 0.393)},
             "velocity_range": {
                 "x": (-0.0, 0.0),
                 "y": (-0.0, 0.0),
@@ -503,22 +503,15 @@ class HLFlatSideCameraSceneCfg(HighLevelSceneCfg):
         ),
     )
 
-# def override_value(env, env_ids, data, value, num_steps):
-#     print(f"Curriculum step: {env.common_step_counter}, overriding value to {value} for envs {env_ids}")
-#     if env.common_step_counter > num_steps:
-#         return value
-#     return mdp.modify_term_cfg.NO_CHANGE
 
-# @configclass
-# class HLFlatPickCurriculumCfg:
-#     ee_pos_delta_max = CurrTerm(
-#         func=mdp.modify_term_cfg, 
-#         params={
-#             "address": "actions.pre_trained_pick_action.delta_pos_max",  # note: `_manager.cfg` is omitted
-#             "modify_fn": override_value,
-#             "modify_params": {"value": 0.05, "num_steps": 10},
-#         }
-#     )
+@configclass
+class HLFlatPickCurriculumCfg:
+    vx_cmd_penalty = CurrTerm(
+        func=mdp.modify_reward_weight, 
+        params={"term_name": "base_vel_cmd_action_l1_near_object", 
+                "weight": 1.0, 
+                "num_steps": 30000}
+    )
 
 
 
@@ -530,7 +523,7 @@ class HLFlatPickEnvCfg(HighLevelFlatEnvCfg):
     terminations: HLFlatPickTerminationsCfg = HLFlatPickTerminationsCfg()
     commands: HLFlatPickCommandCfg = HLFlatPickCommandCfg()
     events: HLFlatPickEventCfg = HLFlatPickEventCfg()
-    # curriculum: HLFlatPickCurriculumCfg = HLFlatPickCurriculumCfg()
+    curriculum: HLFlatPickCurriculumCfg = HLFlatPickCurriculumCfg()
     gripper_link_names = "arm_link[7-8]"
 
     def __post_init__(self):

@@ -78,7 +78,7 @@ def distance_to_target_reward_shift(
     robot_cfg: SceneEntityCfg,
     target_cfg: SceneEntityCfg,
     target_dist: float = 0.73,   # 最优距离（m）
-    sharpness: float = 10.0,     # 越大，峰越窄越尖锐
+    sharpness: float = 5.0,     # 越大，峰越窄越尖锐
 ) -> torch.Tensor:
     robot_pos_w  = robot_root_pos_w(env, robot_cfg)
     target_pos_w = object_root_pos_w(env, target_cfg)
