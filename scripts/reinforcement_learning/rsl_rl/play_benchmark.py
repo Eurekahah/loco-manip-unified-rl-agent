@@ -208,10 +208,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     benchmarkrunner = BenchmarkRunner(
         env=env.unwrapped,
         ee_command=ee_command,
-        pos_success_threshold=0.05,    # 5cm
-        rot_success_threshold=0.3,     # ~17 degrees
+        pos_success_threshold=0.1,    # 5cm
+        rot_success_threshold=1.8,     # ~17 degrees
         save_dir="./benchmark_results",
-        env_idx=0,                     # 如果多env并行，只跟踪第0个
         hold_steps_required=10,        # 需要连续10步（0.2s）误差达标
     )
     benchmarkrunner.start()

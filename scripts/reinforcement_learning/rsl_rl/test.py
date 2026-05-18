@@ -131,6 +131,8 @@ class TrackingMetricsRecorder:
         # done 掩码：reset 帧误差会失真，记录后在 RMSE 计算时可选过滤
         self.done_steps: list[bool] = []
         self.episode_records = []  # list[dict[str, float]]
+        self.episode_std_records = []
+        self.episode_mae_records = []  # 新增 MAE 记录列表
         self.current_episode = {k: [] for k in self.records.keys()}
 
         # ── [SCHEME4] Termination 统计专用字段 ──────────────────────
@@ -173,6 +175,7 @@ class TrackingMetricsRecorder:
         elif self.scheme == "2":
             vals = self._record_scheme1(base_env, robot)
             vals.update(self._record_scheme2(base_env, robot))
+            vals.update(self._record_scheme3(base_env, robot))
         elif self.scheme == "3":
             vals = self._record_scheme1(base_env, robot)
             vals.update(self._record_scheme3(base_env, robot))
@@ -264,15 +267,15 @@ class TrackingMetricsRecorder:
 
         height_cmd = cmd[:, 0]
         height_obs = robot.data.root_pos_w[:, 2]
-        height_err = (height_cmd - height_obs).abs().mean().item()
+        height_err = (height_cmd - height_obs).abs()
 
         roll_obs, pitch_obs, _ = euler_xyz_from_quat(robot.data.root_quat_w)
 
         pitch_cmd = cmd[:, 1]
         roll_cmd  = cmd[:, 2]
 
-        roll_err  = (roll_cmd  - roll_obs ).abs().mean().item()
-        pitch_err = (pitch_cmd - pitch_obs).abs().mean().item()
+        roll_err  = (roll_cmd  - roll_obs ).abs()
+        pitch_err = (pitch_cmd - pitch_obs).abs()
 
         return {
             "height_error": height_err,
@@ -303,11 +306,11 @@ class TrackingMetricsRecorder:
 
         pos_cmd = cmd[:, :3]
         pos_obs = robot.data.body_pos_w[:, ee_idx, :]
-        pos_err = torch.norm(pos_cmd - pos_obs, dim=-1).mean().item()
+        pos_err = torch.norm(pos_cmd - pos_obs, dim=-1)
 
         quat_cmd = cmd[:, 3:7]
         quat_obs = robot.data.body_quat_w[:, ee_idx, :]
-        rot_err  = quat_error_magnitude(quat_cmd, quat_obs).mean().item()
+        rot_err  = quat_error_magnitude(quat_cmd, quat_obs)
 
         return {
             "ee_pos_error": pos_err,
@@ -327,13 +330,22 @@ class TrackingMetricsRecorder:
 
     def _end_episode(self):
         episode_rmse = {}
+        episode_std = {}
+        episode_mae = {}
 
         for k, vals in self.records.items():
-            arr = np.array(vals)
+            arr = torch.cat(vals).cpu().numpy()
             rmse = float(np.sqrt(np.mean(arr ** 2)))
+            mae  = float(np.mean(np.abs(arr)))
+            std = float(np.std(arr))          
             episode_rmse[k] = rmse
+            episode_mae[k] = mae
+            episode_std[k] = std
 
+        # print(f"Episode {len(self.episode_records)+1} RMSE: {episode_rmse} MAE: {episode_mae} Std: {episode_std} ")
         self.episode_records.append(episode_rmse)
+        self.episode_std_records.append(episode_std)
+        self.episode_mae_records.append(episode_mae)
 
         # reset buffer
         self.records = {}
@@ -354,17 +366,23 @@ class TrackingMetricsRecorder:
             print("[Metrics] 无 episode 数据，跳过汇总。")
             return
 
-        print("\n" + "=" * 50)
-        print("Episode-level RMSE mean:")
+        print("\n" + "=" * 60)
+        print(f"{'Episode-level RMSE / Std':^60}")
+        print("=" * 60)
+        print(f"  {'Metric':<25} {'RMSE':>10} {'MAE':>10} {'Std':>10}")
+        print("-" * 60)
 
         keys = self.episode_records[0].keys()
-        summary = {}
         for k in keys:
-            vals = [ep[k] for ep in self.episode_records if k in ep]
-            mean_rmse = float(np.mean(vals))
-            summary[k] = mean_rmse
-            print(f"  {k}: {mean_rmse:.6f}")
-        print("=" * 50)
+            rmse_vals = [ep[k] for ep in self.episode_records if k in ep]
+            mae_vals = [ep[k] for ep in self.episode_mae_records if k in ep]
+            std_vals  = [ep[k] for ep in self.episode_std_records if k in ep]   # ← 新增
+            mean_rmse = float(np.mean(rmse_vals))
+            mean_mae = float(np.mean(mae_vals))
+            mean_std  = float(np.mean(std_vals))                                  # ← 新增
+            print(f"  {k:<25} {mean_rmse:>10.6f}  {mean_mae:>10.6f}  {mean_std:>10.6f}")            # ← 修改
+
+        print("=" * 60)
 
     # ── [SCHEME4] Termination 统计汇总 ──────────────────────────────
     def _finalize_scheme4(self):
