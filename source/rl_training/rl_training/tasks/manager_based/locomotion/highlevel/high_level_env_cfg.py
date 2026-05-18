@@ -62,7 +62,7 @@ class HighLevelSceneCfg(MySceneCfg):
                 max_depenetration_velocity=5.0,
                 disable_gravity=False,
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
             pos=(2.0, 0.0, 0.03),
