@@ -227,7 +227,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     approach_object = RewTerm(
         func=mdp.distance_to_target_reward_shift,
-        weight=0.01,
+        weight=0.1,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "target_cfg": SceneEntityCfg("object"),
@@ -279,7 +279,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
 
     ee_orientation_to_object = RewTerm(
         func=mdp.ee_orientation_to_object,
-        weight=0.01,
+        weight=0.1,
         params={
             "object_cfg":   SceneEntityCfg("object"),
             "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
