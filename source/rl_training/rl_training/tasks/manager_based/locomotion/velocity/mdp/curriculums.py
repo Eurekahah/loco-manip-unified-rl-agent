@@ -15,6 +15,7 @@ from __future__ import annotations
 import torch
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
+from isaaclab.envs.mdp import modify_term_cfg  # noqa: F401, F403
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -117,3 +118,10 @@ def advance_arm_weight(
         cmd.set_min_weight(new_min)
 
     return cmd.get_max_weight()
+
+
+def override_value(env, env_ids, data, value, num_steps):
+    """通用的"超过 num_steps 后覆盖为 value"函数，配合 modify_term_cfg 使用。"""
+    if env.common_step_counter > num_steps:
+        return value
+    return modify_term_cfg.NO_CHANGE  # 不触发则不写回
