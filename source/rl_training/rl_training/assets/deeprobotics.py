@@ -122,7 +122,8 @@ DEEPROBOTICS_M20_CFG = ArticulationCfg(
 
 DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20/M20_usd/M20_assemble.usd",
+        # usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20/M20_usd/M20_assemble.usd",
+        usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20/M20_usd/M20_adjusted.usd",
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
