@@ -21,12 +21,12 @@ Left  Y  → Reset / success (calls "N" callback)
 
 Output from advance()
 ---------------------
-np.ndarray of shape (14,):
+np.ndarray of shape (13,):
     [vx, vy, wz,                          # indices 0-2  chassis velocity
-     delta_h, delta_pitch, delta_roll,    # indices 3-5  body pose delta
-     arm_dx, arm_dy, arm_dz,             # indices 6-8  arm Cartesian delta (m)
-     arm_dqw, arm_dqx, arm_dqy, arm_dqz, # indices 9-12 arm rotation delta (quat)
-     arm_gripper]                         # index  13    gripper [0=open, 1=closed]
+     arm_dx, arm_dy, arm_dz,              # indices 3-5  arm Cartesian delta (m)
+     arm_dr, arm_dp, arm_dy,              # indices 6-8  arm rotation delta (quat)
+     delta_h, delta_pitch, delta_roll,    # indices 9-11 body pose delta
+     arm_gripper]                         # index   12    gripper [0=open, 1=closed]
 """
 
 from __future__ import annotations
@@ -150,6 +150,7 @@ class Se2VRExtended(DeviceBase):
 
         # ---- command buffer [13] ----
         self._command = np.zeros(13, dtype=np.float64)
+        self._command[9] = cfg.default_body_height
         # Arm rotation slot initialised to identity quaternion
         # self._command[9:13] = _IDENTITY_QUAT
 
@@ -204,6 +205,7 @@ class Se2VRExtended(DeviceBase):
     def reset(self):
         """Reset all buffers and VR origins."""
         self._command[:] = 0.0
+        self._command[9] = self._cfg.default_body_height
         self._vr_origin = {
             "left":  {"pos": None, "rot": None},
             "right": {"pos": None, "rot": None},
@@ -282,7 +284,9 @@ class Se2VRExtended(DeviceBase):
             hand = goal.arm
 
             # calibration (triggered once on button-B press)
+            # 按B键设置当前位姿为 origin，后续计算增量
             if self._calibration_triggered.get(hand, False):
+                print(f"[VR Device] Calibrating {hand} controller origin...")
                 self._vr_origin[hand]["pos"] = sim_pos.copy()
                 self._vr_origin[hand]["rot"] = r_sim
                 self._calibration_triggered[hand] = False
@@ -301,7 +305,7 @@ class Se2VRExtended(DeviceBase):
                 self._update_arm(delta_pos, r_diff, trigger)
             elif hand == "left":
                 self._update_body(delta_pos, r_diff, trigger)
-                self._update_chassis_from_thumbstick(goal)
+                self._update_chassis_from_thumbstick(goal, r_diff)
 
     # ------------------------------------------------------------------
     # Command updaters
@@ -311,32 +315,63 @@ class Se2VRExtended(DeviceBase):
                 delta_pos: np.ndarray,
                 r_diff: R,
                 trigger: float):
+        # ------------------------------------------------------------------
+        # Remap sim-frame delta → EE-frame delta
+        #
+        # Sim frame:  x=forward, y=left,  z=up
+        # EE  frame:  z=forward, x=left,  y=up
+        #
+        # Mapping:  EE_x =  sim_y  (left)
+        #           EE_y =  sim_z  (up)
+        #           EE_z =  sim_x  (forward)
+        # ------------------------------------------------------------------
+        ee_dx = delta_pos[1]   #  sim_y  → EE x (left)
+        ee_dy = delta_pos[2]   #  sim_z  → EE y (up)
+        ee_dz = delta_pos[0]   #  sim_x  → EE z (forward)
 
-        # arm position delta
-        scaled_pos = delta_pos * self.arm_pos_sensitivity
-        self._command[3:6] = scaled_pos
+        self._command[3] = ee_dx * self.arm_pos_sensitivity
+        self._command[4] = ee_dy * self.arm_pos_sensitivity
+        self._command[5] = ee_dz * self.arm_pos_sensitivity
 
-        # arm orientation delta
-        euler = r_diff.as_euler("XYZ", degrees=False)
+        # Rotation: extract Euler in EE frame (XYZ = roll/pitch/yaw relative to EE axes)
+        # Apply the same axis remap to the rotation euler angles
+        euler_sim = r_diff.as_euler("XYZ", degrees=False)
+        # euler_sim: [rot_around_sim_x, rot_around_sim_y, rot_around_sim_z]
+        #            = [roll,           pitch,            yaw           ]
+        #
+        # EE axes remapped:
+        #   rot around EE_x (left)    = rot around sim_y  → euler_sim[1]
+        #   rot around EE_y (up)      = rot around sim_z  → euler_sim[2]
+        #   rot around EE_z (forward) = rot around sim_x  → euler_sim[0]
+        self._command[6] = euler_sim[1] * self.arm_rot_sensitivity  # EE roll  (around EE x)
+        self._command[7] = euler_sim[2] * self.arm_rot_sensitivity  # EE pitch (around EE y)
+        self._command[8] = euler_sim[0] * self.arm_rot_sensitivity  # EE yaw   (around EE z)
 
-        self._command[6] = euler[0] * self.arm_rot_sensitivity
-        self._command[7] = euler[1] * self.arm_rot_sensitivity
-        self._command[8] = euler[2] * self.arm_rot_sensitivity
+        print(f"Arm position delta (EE frame): x={self._command[3]:.3f}, y={self._command[4]:.3f}, z={self._command[5]:.3f}")
+        print(f"Arm rotation delta (EE frame, rad): roll={self._command[6]:.3f}, pitch={self._command[7]:.3f}, yaw={self._command[8]:.3f}")
 
         # --- gripper ---
-        self._command[12] = trigger
+        self._command[12] = 1.0 if trigger > 0.5 else -1.0
+        print(f"Gripper trigger value: {trigger:.2f}")
 
     def _update_body(self, delta_pos: np.ndarray, r_diff: R, trigger: float):
         """Write body height / pitch / roll deltas from left controller."""
         # height: Z-component of position delta, trigger raises/lowers
-        self._command[9] = delta_pos[2] * self.height_sensitivity + trigger * self.height_sensitivity
+        self._command[9] = (
+            self._cfg.default_body_height
+            + delta_pos[2] * self.height_sensitivity
+            + trigger * self.height_sensitivity
+        )
 
         # pitch / roll from rotation delta (Euler XYZ in sim frame)
         euler = r_diff.as_euler("XYZ", degrees=False)
-        self._command[10] = euler[1] * self.pitch_sensitivity   # pitch (Y)
-        self._command[11] = euler[0] * self.roll_sensitivity    # roll  (X)
+        
+        print(f"Body height delta: {self._command[9]:.3f}")
+        self._command[10] = - euler[0] * self.pitch_sensitivity   # pitch (Y)
+        self._command[11] = euler[1] * self.roll_sensitivity    # roll  (X)
+        print(f"Body rotation delta (radians): pitch={euler[1]:.3f}, roll={euler[0]:.3f}")
 
-    def _update_chassis_from_thumbstick(self, goal):
+    def _update_chassis_from_thumbstick(self, goal, r_diff):
         """Map left thumbstick axes to (vx, vy, wz)."""
         if not (goal.metadata and "thumbstick" in goal.metadata):
             return
@@ -344,11 +379,15 @@ class Se2VRExtended(DeviceBase):
         # Typical VR thumbstick: x=horizontal, y=vertical (forward)
         stick_x = float(stick.get("x", 0.0))
         stick_y = float(stick.get("y", 0.0))
-        twist   = float(stick.get("twist", 0.0))  # some controllers expose twist
+        # twist   = float(stick.get("twist", 0.0))  # quest3s doesn't have twist
 
-        self._command[0] = stick_y * self.v_x_sensitivity
+        euler = r_diff.as_euler("XYZ", degrees=False)
+
+        self._command[0] = - stick_y * self.v_x_sensitivity
         self._command[1] = stick_x * self.v_y_sensitivity
-        self._command[2] = twist   * self.omega_z_sensitivity
+        self._command[2] = euler[2] * self.omega_z_sensitivity
+        print(f"v_x = {self._command[0]:.3f}, v_y = {self._command[1]:.3f}, w_z = {self._command[2]:.3f}")
+
 
     # ------------------------------------------------------------------
     # Coordinate conversion  (identical to XTrainerVR._convert_goal_to_pose)
@@ -504,6 +543,8 @@ class Se2VRExtendedCfg(DeviceCfg):
     """Yaw rate scale (left thumbstick twist / rotation)."""
 
     # -- body pose --
+    default_body_height: float = 0.513
+    """Default body height (m) restored on reset / init."""
     height_sensitivity:  float = 1.0
     """Body height delta scale (left controller Z + trigger)."""
     pitch_sensitivity:   float = 1.0

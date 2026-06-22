@@ -63,6 +63,18 @@ class HLFlatPickWBCActionsCfg(HLFlatPickActionsCfg):
         debug_vis=False,
     )
 
+@configclass
+class TeleopActionsCfg(HLFlatPickActionsCfg):
+    pre_trained_pick_action = mdp.TeleopLLActionCfg(
+        asset_name="robot",
+        policy_path="logs/rsl_rl/deeprobotics_m20_wbc_flat/2026-06-09_21-10-22/exported/policy.pt",  
+        low_level_decimation=4,
+        low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
+        low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,
+        low_level_ee_actions=_low_level_env_cfg.actions.ee_ik,
+        low_level_observations=_low_level_env_cfg.observations.policy,
+        debug_vis=False,
+    )
 
 @configclass
 class PolicyCfg(HighLevelObservationsCfg.PolicyCfg):
@@ -554,6 +566,15 @@ class HLFlatPickWBCTeacherEnvCfg(HLFlatPickTeacherEnvCfg):
         super().__post_init__()
 
         if self.__class__.__name__ == "HLFlatPickWBCTeacherEnvCfg":
+            self.disable_zero_weight_rewards()
+
+@configclass
+class TeleopEnvCfg(HLFlatPickTeacherEnvCfg):
+    actions: TeleopActionsCfg = TeleopActionsCfg()
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.__class__.__name__ == "TeleopEnvCfg":
             self.disable_zero_weight_rewards()
 
 @configclass
