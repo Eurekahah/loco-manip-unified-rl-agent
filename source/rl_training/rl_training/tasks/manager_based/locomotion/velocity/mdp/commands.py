@@ -35,7 +35,11 @@ class UniformThresholdVelocityCommand(mdp.UniformVelocityCommand):
         # set small commands to zero
         # 小线速度指令设置为0
         self.vel_command_b[env_ids, :2] *= (torch.norm(self.vel_command_b[env_ids, :2], dim=1) > 0.0).unsqueeze(1)
-
+    
+    def _update_metrics(self):
+        super()._update_metrics()
+        self.metrics["end_error_lin_vel"] = torch.norm(self.vel_command_b[:, :2] - self.robot.data.root_lin_vel_b[:, :2], dim=-1)
+        self.metrics["end_error_ang_vel"] = torch.abs(self.vel_command_b[:, 2] - self.robot.data.root_ang_vel_b[:, 2])
 
 @configclass
 class UniformThresholdVelocityCommandCfg(mdp.UniformVelocityCommandCfg):
@@ -659,13 +663,7 @@ class BodyPoseCommand(CommandTerm):
     def _update_metrics(self):
         """可选：记录命令统计量用于 tensorboard。"""
         # ------------------------------------------------------------------ #
-        # 1. 命令本身的均值（描述当前采样分布的中心）
-        # ------------------------------------------------------------------ #
-        self.metrics["height_abs_mean"] = self._command[:, 0].abs()
-        self.metrics["pitch_abs_mean"]  = self._command[:, 1].abs()
-        self.metrics["roll_abs_mean"]   = self._command[:, 2].abs()
-        # ------------------------------------------------------------------ #
-        # 2. 读取实际 body pose
+        # 读取实际 body pose
         # ------------------------------------------------------------------ #
         # 实际高度：root 在世界系下的 z 坐标
         actual_height = self._env.scene["robot"].data.root_pos_w[:, 2]        # (num_envs,)
@@ -676,7 +674,7 @@ class BodyPoseCommand(CommandTerm):
         actual_roll, actual_pitch, _ = math_utils.euler_xyz_from_quat(actual_quat)  # (num_envs,) each
 
         # ------------------------------------------------------------------ #
-        # 3. 误差 = 命令 - 实际
+        # 误差 = 命令 - 实际
         # ------------------------------------------------------------------ #
         height_error = self._command[:, 0] - actual_height
         pitch_error  = self._command[:, 1] - actual_pitch
