@@ -32,7 +32,7 @@ def track_lin_vel_xy_exp(
         torch.square(env.command_manager.get_command(command_name)[:, :2] - asset.data.root_lin_vel_b[:, :2]),
         dim=1,
     )
-    reward = torch.exp(-lin_vel_error / std**2)
+    reward = torch.exp(-lin_vel_error / std**2) / 2 + torch.exp(-lin_vel_error / 0.1) / 2
     # reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
     return reward
 

@@ -60,7 +60,7 @@ class DeeproboticsM20WBCFlatPPORunnerCfg(DeeproboticsM20RoughPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
 
-        self.max_iterations = 5000
+        self.max_iterations = 20000
         self.experiment_name = "deeprobotics_m20_wbc_flat"
 
 from dataclasses import MISSING
