@@ -259,6 +259,55 @@ class WBCCurriculumCfg(DeeproboticsM20CurriculumsCfg):
         },
     )
 
+    # ── Stage 4：75k步后 v_x 范围升级到 (-2, 2) ──────────────────
+    base_velocity_lin_vel_x_s4: CurrTerm = CurrTerm(
+        func=mdp.modify_term_cfg,
+        params={
+            "address": "commands.base_velocity.ranges.lin_vel_x",
+            "modify_fn": mdp.override_value,
+            "modify_params": {
+                "value": (-2.0, 2.0),
+                "num_steps": 75_000,
+            },
+        },
+    )
+    # ── Stage 5：100k步后 v_x 范围升级到 (-3, 3) ─────────────────
+    base_velocity_lin_vel_x_s5: CurrTerm = CurrTerm(
+        func=mdp.modify_term_cfg,
+        params={
+            "address": "commands.base_velocity.ranges.lin_vel_x",
+            "modify_fn": mdp.override_value,
+            "modify_params": {
+                "value": (-3.0, 3.0),
+                "num_steps": 100_000,
+            },
+        },
+    )
+    # ── Stage 6：125k步后 v_x 范围升级到 (-4, 4) ─────────────────
+    base_velocity_lin_vel_x_s6: CurrTerm = CurrTerm(
+        func=mdp.modify_term_cfg,
+        params={
+            "address": "commands.base_velocity.ranges.lin_vel_x",
+            "modify_fn": mdp.override_value,
+            "modify_params": {
+                "value": (-4.0, 4.0),
+                "num_steps": 125_000,
+            },
+        },
+    )
+    # ── Stage 7：150k步后 v_x 范围升级到 (-5, 5) ─────────────────
+    base_velocity_lin_vel_x_s7: CurrTerm = CurrTerm(
+        func=mdp.modify_term_cfg,
+        params={
+            "address": "commands.base_velocity.ranges.lin_vel_x",
+            "modify_fn": mdp.override_value,
+            "modify_params": {
+                "value": (-5.0, 5.0),
+                "num_steps": 150_000,
+            },
+        },
+    )
+
 
     
 @configclass
@@ -281,7 +330,7 @@ class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
         self.rewards.knee_joint_pos_penalty.func = mdp.joint_pos_penalty_wbc
         self.rewards.knee_joint_pos_penalty.params["pose_command_name"] = "body_pose"
         
-        self.commands.base_velocity.ranges.lin_vel_x = (-5.0, 5.0)
+        self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.0)
         self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
         # self.rewards.body_height_tracking.weight = 0.8

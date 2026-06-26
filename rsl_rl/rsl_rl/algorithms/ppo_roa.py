@@ -59,7 +59,7 @@ class PPORoA(PPO):
         #   - delay_updates: number of update() calls before the constraint loss starts ramping
         #   - ramp_updates:  number of update() calls over which it linearly anneals start->end
         # This exactly mirrors the old `priv_reg_coef_schedual` semantics.
-        constraint_coef_schedule: tuple[float, float, int, int] = (0.0, 1.0, 0, 1),
+        constraint_coef_schedule: tuple[float, float, int, int] = (0.0, 1.0, 5000, 5000),
         # RND parameters
         rnd_cfg: dict | None = None,
         # Symmetry parameters
