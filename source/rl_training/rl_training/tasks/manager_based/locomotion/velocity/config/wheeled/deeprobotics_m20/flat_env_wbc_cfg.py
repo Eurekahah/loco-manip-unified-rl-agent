@@ -2,6 +2,7 @@ from isaaclab.utils import configclass
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import SceneEntityCfg
 
 from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.flat_env_cfg import DeeproboticsM20FlatEnvCfg
@@ -72,8 +73,78 @@ class WBCObservationsCfg(DeeproboticsM20ObservationsCfg):
             self.enable_corruption = False
             self.concatenate_terms = True
     
+    @configclass
+    class HistoryCfg(ObsGroup):
+        """Adaptation module (history encoder) 的输入：最近 history_length 步的 [状态, 上一步动作] 拼接序列。
+
+        论文里状态窗口和动作窗口是错位一格的 (s_{t-10:t-1}, a_{t-11:t-2})，这里按你的要求统一用
+        history_length=50 的对齐窗口，简化实现；如果以后要还原论文的错位窗口，需要分别为状态和动作
+        维护两个不同长度/偏移的 buffer，目前先不处理。
+        """
+        history_obs = ObsTerm(
+            func=mdp.history_single_step_obs,
+            history_length=10,          # 对应 ActorCriticHistory 里的 history_length 参数，两边必须一致
+            flatten_history_dim=True,   # 关键: 输出 (history_length * single_step_dim,)，而不是 (history_length, single_step_dim)
+            clip=(-100.0, 100.0),
+        )
+
+        def __post_init__(self):
+            # 部署时机载传感器读数本身就有噪声，这里是否加 Unoise 取决于你想不想让 adaptation module
+            # 在训练时就适应噪声输入；如果想加噪声，要在 history_single_step_obs 内部手动加，
+            # 因为 ObsTerm 的 noise 字段是在单个 ObsTerm 输出整段历史之后才生效的，不会按时间步分别加噪。
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    @configclass
+    class PrivilegedCfg(ObsGroup):
+        # 对应 randomize_rigid_body_mass_base（base_link, add）
+        base_extra_payload = ObsTerm(
+            func=mdp.privileged_base_extra_payload,
+            params={"asset_cfg": SceneEntityCfg("robot", body_names="base_link")},
+        )
+        # 对应 randomize_rigid_body_mass（非base_link, scale）
+        end_effector_payload = ObsTerm(
+            func=mdp.privileged_end_effector_payload,
+            params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
+        )
+        # 对应 randomize_com_positions（base_link）
+        # base_com_offset = ObsTerm(
+        #     func=mdp.privileged_base_com_offset,
+        #     params={"asset_cfg": SceneEntityCfg("robot", body_names="base_link")},
+        # )
+        # 对应 randomize_rigid_body_inertia（之前缺失，补上）
+        inertia_scale = ObsTerm(
+            func=mdp.privileged_rigid_body_inertia,
+            params={"asset_cfg": SceneEntityCfg("robot", body_names=".*")},
+        )
+        # 对应 randomize_actuator_gains，按 joint_names 正则区分 arm / leg（去掉了不存在的 buffer 依赖）
+        arm_gain_scale = ObsTerm(
+            func=mdp.privileged_joint_gain_scale,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names="arm_joint.*")},
+        )
+        leg_gain_scale = ObsTerm(
+            func=mdp.privileged_joint_gain_scale,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names="^(fl|fr|hl|hr)_(hipx|hipy|knee|wheel)_joint$")},
+        )
+        # 对应 randomize_rigid_body_material 的 friction
+        friction = ObsTerm(
+            func=mdp.privileged_friction_coefficient,
+            params={"asset_cfg": SceneEntityCfg("robot", body_names=[".*wheel"])},
+        )
+        # 对应 randomize_rigid_body_material 的 restitution（之前缺失，补上）
+        restitution = ObsTerm(
+            func=mdp.privileged_restitution_coefficient,
+            params={"asset_cfg": SceneEntityCfg("robot", body_names=[".*wheel"])},
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+    
     policy: PolicyCfg = PolicyCfg()
     critic: CriticCfg = CriticCfg()
+    history: HistoryCfg = HistoryCfg()
+    privileged: PrivilegedCfg = PrivilegedCfg()
 
 @configclass
 class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
@@ -234,8 +305,8 @@ class FlatEnvWBCConfig_PLAY(FlatEnvWBCConfig):
         self.commands.base_velocity.ranges.lin_vel_x = (0.0, 0.0)
         self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
         self.commands.base_velocity.ranges.ang_vel_z = (1.0, 1.0)
-        self.commands.body_pose.height_range = (0.513, 0.513)
-        self.commands.body_pose.pitch_range = (0.35, 0.35)
-        self.commands.body_pose.roll_range = (0.0, 0.0)
+        self.commands.body_pose.height_range = (0.4, 0.4)
+        self.commands.body_pose.pitch_range = (0.2, 0.2)
+        self.commands.body_pose.roll_range = (-0.0, 0.0)
         if self.__class__.__name__ == "FlatEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()
