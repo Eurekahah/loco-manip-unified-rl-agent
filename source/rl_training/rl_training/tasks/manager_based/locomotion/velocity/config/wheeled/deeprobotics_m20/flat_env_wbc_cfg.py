@@ -112,28 +112,19 @@ class WBCObservationsCfg(DeeproboticsM20ObservationsCfg):
         #     func=mdp.privileged_base_com_offset,
         #     params={"asset_cfg": SceneEntityCfg("robot", body_names="base_link")},
         # )
-        # 对应 randomize_rigid_body_inertia（之前缺失，补上）
+        # 对应 randomize_rigid_body_inertia
         inertia_scale = ObsTerm(
             func=mdp.privileged_rigid_body_inertia,
             params={"asset_cfg": SceneEntityCfg("robot", body_names=".*")},
         )
-        # 对应 randomize_actuator_gains，按 joint_names 正则区分 arm / leg（去掉了不存在的 buffer 依赖）
-        arm_gain_scale = ObsTerm(
+        # 对应 randomize_actuator_gains
+        gain_scale = ObsTerm(
             func=mdp.privileged_joint_gain_scale,
-            params={"asset_cfg": SceneEntityCfg("robot", joint_names="arm_joint.*")},
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
         )
-        leg_gain_scale = ObsTerm(
-            func=mdp.privileged_joint_gain_scale,
-            params={"asset_cfg": SceneEntityCfg("robot", joint_names="^(fl|fr|hl|hr)_(hipx|hipy|knee|wheel)_joint$")},
-        )
-        # 对应 randomize_rigid_body_material 的 friction
-        friction = ObsTerm(
-            func=mdp.privileged_friction_coefficient,
-            params={"asset_cfg": SceneEntityCfg("robot", body_names=[".*wheel"])},
-        )
-        # 对应 randomize_rigid_body_material 的 restitution（之前缺失，补上）
-        restitution = ObsTerm(
-            func=mdp.privileged_restitution_coefficient,
+        # 对应 randomize_rigid_body_material 的 静摩擦、动摩擦、恢复系数
+        material_properties = ObsTerm(
+            func=mdp.privileged_material_properties,
             params={"asset_cfg": SceneEntityCfg("robot", body_names=[".*wheel"])},
         )
 
@@ -351,11 +342,11 @@ class FlatEnvWBCConfig_PLAY(FlatEnvWBCConfig):
         self.curriculum.body_pose_height_range_s2 = None
         self.curriculum.body_pose_pitch_range_s3 = None
         self.curriculum.body_pose_roll_range_s3 = None
-        self.commands.base_velocity.ranges.lin_vel_x = (0.0, 0.0)
-        self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
-        self.commands.base_velocity.ranges.ang_vel_z = (1.0, 1.0)
-        self.commands.body_pose.height_range = (0.4, 0.4)
-        self.commands.body_pose.pitch_range = (0.2, 0.2)
-        self.commands.body_pose.roll_range = (-0.0, 0.0)
+        self.commands.base_velocity.ranges.lin_vel_x = (-5.0, 5.0)
+        self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        self.commands.body_pose.height_range = (0.33, 0.6)
+        self.commands.body_pose.pitch_range = (-0.35, 0.35)
+        self.commands.body_pose.roll_range = (-0.25, 0.25)
         if self.__class__.__name__ == "FlatEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()

@@ -43,8 +43,8 @@ parser.add_argument("--resample_interval", type=float, default=5.0,
                     help="每段命令持续时间（秒，默认 5.0）")
 parser.add_argument("--env_id", type=int, default=0,
                     help="记录哪个环境的数据（默认 0）")
-parser.add_argument("--save_fig", type=str, default="tracking_result.png",
-                    help="图像保存路径（默认 tracking_result.png）")
+parser.add_argument("--save_fig", type=str, default=None,
+                    help="图像保存路径（默认根据 checkpoint 路径自动生成 tracking_result.png）")
 # ── RSL-RL CLI 参数（checkpoint 等由此注入）──────────────────────────────────
 cli_args.add_rsl_rl_args(parser)
 # ── AppLauncher 参数（headless、device 等）───────────────────────────────────
@@ -69,7 +69,7 @@ import matplotlib.gridspec as gridspec
 
 import gymnasium as gym
 
-from rsl_rl.runners import OnPolicyRunner, DistillationRunner
+from rsl_rl.runners import OnPolicyRunner, DistillationRunner, OnPolicyRunnerHis
 
 from isaaclab.envs import (
     DirectMARLEnv,
@@ -180,6 +180,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
         if hasattr(cmd_term_cfg, "resampling_time_range"):
             cmd_term_cfg.resampling_time_range = (dt_segment, dt_segment)
             print(f"[INFO] 已将命令 '{attr_name}' 的重采样间隔固定为 {dt_segment}s")
+        # if hasattr(cmd_term_cfg, "debug_vis"):
+        #     cmd_term_cfg.debug_vis = False
 
     # ── 2. 与原始 play.py 相同：构建环境 + 可选 MARL 转换 ───────────────────
     env = gym.make(args_cli.task, cfg=env_cfg)
@@ -205,6 +207,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     log_dir = os.path.dirname(resume_path)
     print(f"[INFO] Loading model checkpoint from: {resume_path}")
 
+    if args_cli.save_fig is not None:
+        save_fig_path = args_cli.save_fig
+    else:
+        save_fig_path = os.path.join(os.path.dirname(args_cli.checkpoint), "tracking_result.png")
+    print(f"[INFO] 跟踪结果图像将保存至: {save_fig_path}")
+
     # ── 5. 与原始 play.py 相同：用 Runner 加载模型 ───────────────────────────
     if agent_cfg.class_name == "OnPolicyRunner":
         runner = OnPolicyRunner(env, agent_cfg.to_dict(),
@@ -212,6 +220,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     elif agent_cfg.class_name == "DistillationRunner":
         runner = DistillationRunner(env, agent_cfg.to_dict(),
                                     log_dir=None, device=agent_cfg.device)
+    elif agent_cfg.class_name == "OnPolicyRunnerHis":
+        runner = OnPolicyRunnerHis(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
 
@@ -331,8 +341,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     # 自动调整子图间距
     plt.subplots_adjust(hspace=0.35, top=0.95, bottom=0.05)
 
-    plt.savefig(args_cli.save_fig, dpi=150, bbox_inches="tight")
-    print(f"[INFO] 图像已保存至: {args_cli.save_fig}")
+    plt.savefig(save_fig_path, dpi=150, bbox_inches="tight")
+    print(f"[INFO] 图像已保存至: {save_fig_path}")
 
     # ── 12. 打印平均跟踪误差 ──────────────────────────────────────────────────
     vel_err  = np.abs(act_vel  - cmd_vel)
@@ -353,6 +363,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     print("=" * 55 + "\n")
 
     # ── 13. 关闭环境 ──────────────────────────────────────────────────────────
+    cmd_manager = raw_env.command_manager
+    for term_name in cmd_manager.active_terms:
+        term = cmd_manager.get_term(term_name)
+        if hasattr(term, "set_debug_vis"):
+            term.set_debug_vis(False)
     env.close()
 
 

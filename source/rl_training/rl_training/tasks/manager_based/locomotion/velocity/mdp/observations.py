@@ -131,51 +131,82 @@ def privileged_base_com_offset(
     default_com = asset.data.default_com[:, base_body_id, :3].to(env.device)
     return current_com - default_com
 
-def privileged_friction_coefficient(
+# 这个摩擦是仅静摩擦，且多只脚取平均
+# def privileged_friction_coefficient(
+#     env: ManagerBasedRLEnv,
+#     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+# ) -> torch.Tensor:
+#     """地面摩擦系数。
+
+#     假设你用 `events.randomize_rigid_body_material` 对脚部/地面做了摩擦随机化，这里从
+#     physx material properties 里读静摩擦系数 (index 0: static friction)。如果你的随机化是对
+#     terrain 而不是 robot body 做的，需要换成对应 terrain asset 的读取方式。
+#     """
+#     asset = env.scene[asset_cfg.name]
+#     foot_body_ids = asset_cfg.body_ids  # 传入脚部 link 对应的 body_ids
+#     materials = asset.root_physx_view.get_material_properties().to(env.device)  # [num_envs, num_bodies, 3]
+#     static_friction = materials[:, foot_body_ids, 0]
+#     return static_friction.mean(dim=-1, keepdim=True)  # 多只脚取平均，或者保留逐脚维度自行决定
+
+# 这个摩擦是静摩擦和动摩擦都保留，且逐脚维度保留
+def privileged_material_properties(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
-    """地面摩擦系数。
+    """脚部 PhysX 材质特权信息：静摩擦、动摩擦、恢复系数。
 
-    假设你用 `events.randomize_rigid_body_material` 对脚部/地面做了摩擦随机化，这里从
-    physx material properties 里读静摩擦系数 (index 0: static friction)。如果你的随机化是对
-    terrain 而不是 robot body 做的，需要换成对应 terrain asset 的读取方式。
+    假设用 `events.randomize_rigid_body_material` 对脚部/地面做了材质随机化，
+    这里从 physx material properties 中一次性读取：
+        index 0 -> 静摩擦系数 (static friction)
+        index 1 -> 动摩擦系数 (dynamic friction)
+        index 2 -> 恢复系数 (restitution)
+
+    默认逐脚维度全部保留，不做平均，方便策略/critic 学习逐脚非对称信息
+    （例如某只脚踩在滑面、其他脚正常的情况）。如果你的恢复系数随机化对所有脚
+    用的是同一个 range、不需要区分逐脚，可以设 `average_restitution=True` 把
+    恢复系数压成单一维度，减小特权观测维度。
+
+    注意：
+    - 如果随机化是对 terrain 而不是 robot body 做的，需要换成对应 terrain
+      asset 的读取方式。
+    - 如果摩擦/恢复系数随机化同时作用于脚和地形，且 PhysX combine_mode 不是
+      简单 average，这里读到的脚部材质值不完全等于仿真中实际生效的有效系数，
+      需要结合地形材质额外做 combine 计算。
+
+    Returns:
+        torch.Tensor: 默认 shape 为 [num_envs, num_feet * 3]，按
+            [foot0_static, ..., footN_static,
+             foot0_dynamic, ..., footN_dynamic,
+             foot0_restitution, ..., footN_restitution]
+            排列；若 average_restitution=True，则 shape 为
+            [num_envs, num_feet * 2 + 1]，恢复系数部分被替换为跨脚均值（单维度）。
     """
     asset = env.scene[asset_cfg.name]
-    foot_body_ids = asset_cfg.body_ids  # 传入脚部 link 对应的 body_ids
+    foot_body_ids = asset_cfg.body_ids  # 脚部 link 对应的 body_ids
+
     materials = asset.root_physx_view.get_material_properties().to(env.device)  # [num_envs, num_bodies, 3]
-    static_friction = materials[:, foot_body_ids, 0]
-    return static_friction.mean(dim=-1, keepdim=True)  # 多只脚取平均，或者保留逐脚维度自行决定
+    static_friction = materials[:, foot_body_ids, 0]    # [num_envs, num_feet]
+    dynamic_friction = materials[:, foot_body_ids, 1]   # [num_envs, num_feet]
+    restitution = materials[:, foot_body_ids, 2]        # [num_envs, num_feet]
 
-def privileged_restitution_coefficient(
-    env: ManagerBasedRLEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-) -> torch.Tensor:
-    """脚部恢复系数 (restitution)，对应 randomize_rigid_body_material 里的 restitution_range。"""
+    return torch.cat([static_friction, dynamic_friction, restitution], dim=-1)
+
+
+def privileged_joint_gain_scale(env, asset_cfg=SceneEntityCfg("robot", joint_names=".*")):
     asset = env.scene[asset_cfg.name]
-    foot_body_ids = asset_cfg.body_ids
-    materials = asset.root_physx_view.get_material_properties().to(env.device)  # [N, num_bodies, 3]
-    restitution = materials[:, foot_body_ids, 2]  # index 2: restitution
-    return restitution.mean(dim=-1, keepdim=True)
+    included_actuators = {"joint","wheel", "piper_arm", "piper_gripper"} # 此处轮子和夹爪可以去掉
+    
+    scales = []
+    for actuator_name, actuator in asset.actuators.items():
+        if actuator_name not in included_actuators:
+            continue
+        current_k = actuator.stiffness
+        current_d = actuator.damping
+        default_k = actuator.cfg.stiffness
+        default_d = actuator.cfg.damping
+        k_scale = current_k / max(default_k, 1e-8) if isinstance(default_k, float) else current_k / current_k.new_tensor(default_k).clamp_min(1e-8)
+        d_scale = current_d / max(default_d, 1e-8) if isinstance(default_d, float) else current_d / current_d.new_tensor(default_d).clamp_min(1e-8)
+        scales.append(k_scale)
+        scales.append(d_scale)
 
-
-def privileged_joint_gain_scale(
-    env: ManagerBasedRLEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=".*"),
-) -> torch.Tensor:
-    """指定关节子集（如手臂/腿部）的 stiffness、damping 缩放系数，对应 randomize_actuator_gains。
-
-    不依赖任何自定义 buffer，直接读 articulation 当前的关节增益与默认值做比值。
-    具体属性名请按你所用 IsaacLab 版本核实（不同版本可能是
-    asset.data.joint_stiffness / asset.actuators[name].stiffness 等）。
-    """
-    asset = env.scene[asset_cfg.name]
-    joint_ids = asset_cfg.joint_ids
-    current_stiffness = asset.data.joint_stiffness[:, joint_ids].to(env.device)
-    default_stiffness = asset.data.default_joint_stiffness[:, joint_ids].to(env.device)
-    current_damping = asset.data.joint_damping[:, joint_ids].to(env.device)
-    default_damping = asset.data.default_joint_damping[:, joint_ids].to(env.device)
-
-    stiffness_scale = current_stiffness / default_stiffness.clamp_min(1e-8)
-    damping_scale = current_damping / default_damping.clamp_min(1e-8)
-    return torch.cat([stiffness_scale, damping_scale], dim=-1)
+    return torch.cat(scales, dim=-1)

@@ -356,6 +356,17 @@ class EventCfg:
         },
     )
 
+    randomize_rigid_body_mass_end_effector = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=""),
+            "mass_distribution_params": (1.0, 3.0),
+            "operation": "scale",
+            "recompute_inertia": True,
+        },
+    )
+
     randomize_rigid_body_mass_base = EventTerm(
         func=mdp.randomize_rigid_body_mass,
         mode="startup",

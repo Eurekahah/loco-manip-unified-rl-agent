@@ -373,6 +373,7 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.events.randomize_rigid_body_mass.params["asset_cfg"].body_names = [
             f"^(?!.*{self.base_link_name}).*"
         ]
+        self.events.randomize_rigid_body_mass_end_effector.params["asset_cfg"].body_names = ["arm_link6"]
         self.events.randomize_com_positions.params["asset_cfg"].body_names = [self.base_link_name]
         self.events.randomize_apply_external_force_torque.params["asset_cfg"].body_names = [self.base_link_name]
 
