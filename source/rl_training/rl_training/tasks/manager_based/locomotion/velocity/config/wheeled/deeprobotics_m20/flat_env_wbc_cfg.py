@@ -334,6 +334,43 @@ class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "FlatEnvWBCConfig":
             self.disable_zero_weight_rewards()
+from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.rough_env_cfg import DeeproboticsM20RoughEnvCfg
+
+@configclass
+class RoughEnvWBCConfig(DeeproboticsM20RoughEnvCfg):
+    
+    commands: WBCCommandsCfg = WBCCommandsCfg()
+    observations: WBCObservationsCfg = WBCObservationsCfg()
+    rewards: WBCRewardsCfg = WBCRewardsCfg()
+    curriculum: WBCCurriculumCfg = WBCCurriculumCfg()
+    def __post_init__(self):
+        super().__post_init__()
+        self.rewards.base_height_l2.weight = 0.0  # 关闭原有的高度奖励，改用新的 body_height_tracking
+        self.rewards.lin_vel_z_l2.weight = 0.0      # 降低底盘 z 轴速度惩罚
+        self.rewards.ang_vel_xy_l2.weight = 0.0     # 关闭水平面角速度惩罚
+        self.rewards.stand_still.weight = 0.0      # 关闭站立不动奖励
+
+        self.rewards.hipx_joint_pos_penalty.func = mdp.joint_pos_penalty_wbc
+        self.rewards.hipx_joint_pos_penalty.params["pose_command_name"] = "body_pose"
+        self.rewards.hipy_joint_pos_penalty.func = mdp.joint_pos_penalty_wbc
+        self.rewards.hipy_joint_pos_penalty.params["pose_command_name"] = "body_pose"
+        self.rewards.knee_joint_pos_penalty.func = mdp.joint_pos_penalty_wbc
+        self.rewards.knee_joint_pos_penalty.params["pose_command_name"] = "body_pose"
+
+        self.terminations.root_height_below_minimum = None # pyramid_stairs_inv地形存在高度低于0m的部分，删除根据高度判断终止的条件
+        # self.scene.terrain.terrain_generator=mdp.ALL_TERRAINS_CFG
+        self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        # self.rewards.body_height_tracking.weight = 0.8
+        # self.rewards.body_pitch_tracking.weight = 0.8
+        # self.rewards.body_roll_tracking.weight = 0.0
+        self.commands.body_pose.height_range = (0.513, 0.513)  # Stage 1 初始值
+        self.commands.body_pose.pitch_range  = (0.0, 0.0)
+        self.commands.body_pose.roll_range   = (0.0, 0.0)
+        # If the weight of rewards is 0, set rewards to None
+        if self.__class__.__name__ == "RoughEnvWBCConfig":
+            self.disable_zero_weight_rewards()
 
 class FlatEnvWBCConfig_PLAY(FlatEnvWBCConfig):
     def __post_init__(self):
