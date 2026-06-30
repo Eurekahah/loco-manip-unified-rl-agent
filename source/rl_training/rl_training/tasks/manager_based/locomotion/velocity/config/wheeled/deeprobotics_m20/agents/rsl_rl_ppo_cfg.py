@@ -141,5 +141,5 @@ class HistoryAdaptationPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         lam=0.95,
         desired_kl=0.01,
         max_grad_norm=1.0,
-        constraint_coef_schedule= (0.0, 1.0, 5000, 5000),
+        constraint_coef_schedule= (0.0, 0.1, 3000, 7000),
     )
