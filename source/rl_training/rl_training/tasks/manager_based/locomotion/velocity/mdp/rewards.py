@@ -16,6 +16,7 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensor, RayCaster
 from isaaclab.utils.math import quat_apply_inverse, yaw_quat
+from .utils import compute_base_height_rel_to_feet
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -81,13 +82,14 @@ def body_height_tracking(
     command_name: str = "body_pose",
     std: float = 0.05,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    feet_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*wheel"),
 ) -> torch.Tensor:
     """机身高度跟踪奖励（高斯核，误差越小奖励越高）。"""
     asset = env.scene[asset_cfg.name]
     cmd = env.command_manager.get_command(command_name)  # (N, 3)
     target_h = cmd[:, 0]
 
-    actual_h = asset.data.root_state_w[:, 2]  # z 高度
+    actual_h = compute_base_height_rel_to_feet(env, asset_cfg, feet_cfg)  # z 高度
     error = (actual_h - target_h).pow(2)
     return torch.exp(-error / (2 * std ** 2))
 

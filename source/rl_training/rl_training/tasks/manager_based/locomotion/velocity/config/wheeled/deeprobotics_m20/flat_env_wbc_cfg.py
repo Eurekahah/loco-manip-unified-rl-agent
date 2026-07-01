@@ -41,6 +41,8 @@ class WBCCommandsCfg(DeeproboticsM20CommandsCfg):
         # mean=0.0°, std≈3.4°, range=(-14.3°, 14.3°)
         roll_range=(-0.25, 0.25),
         resampling_time_range=(10.0, 10.0),
+        asset_cfg= SceneEntityCfg("robot"),
+        feet_cfg= SceneEntityCfg("robot", body_names=".*wheel"),
         debug_vis=True,
     )
 
@@ -152,6 +154,7 @@ class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
             "command_name": "body_pose",
             "std": 0.04,                    # 误差容忍度（m），越小越严格
             "asset_cfg": SceneEntityCfg("robot"),
+            "feet_cfg": SceneEntityCfg("robot", body_names=".*wheel"),  # 足端的 body_names 正则表达式
         },
     )
 
@@ -385,5 +388,30 @@ class FlatEnvWBCConfig_PLAY(FlatEnvWBCConfig):
         self.commands.body_pose.height_range = (0.33, 0.6)
         self.commands.body_pose.pitch_range = (-0.35, 0.35)
         self.commands.body_pose.roll_range = (-0.25, 0.25)
+        self.curriculum.base_velocity_lin_vel_x_s4 = None
+        self.curriculum.base_velocity_lin_vel_x_s5 = None
+        self.curriculum.base_velocity_lin_vel_x_s6 = None
+        self.curriculum.base_velocity_lin_vel_x_s7 = None
+        
         if self.__class__.__name__ == "FlatEnvWBCConfig_PLAY":
+            self.disable_zero_weight_rewards()
+
+class RoughEnvWBCConfig_PLAY(RoughEnvWBCConfig):
+    def __post_init__(self):
+        super().__post_init__()
+        # self.curriculum.body_pose_cmd_schedule = None
+        self.curriculum.body_pose_height_range_s2 = None
+        self.curriculum.body_pose_pitch_range_s3 = None
+        self.curriculum.body_pose_roll_range_s3 = None
+        self.curriculum.base_velocity_lin_vel_x_s4 = None
+        self.curriculum.base_velocity_lin_vel_x_s5 = None
+        self.curriculum.base_velocity_lin_vel_x_s6 = None
+        self.curriculum.base_velocity_lin_vel_x_s7 = None
+        self.commands.base_velocity.ranges.lin_vel_x = (-2.0, 2.0)
+        self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        self.commands.body_pose.height_range = (0.33, 0.6)
+        self.commands.body_pose.pitch_range = (-0.35, 0.35)
+        self.commands.body_pose.roll_range = (-0.25, 0.25)
+        if self.__class__.__name__ == "RoughEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()

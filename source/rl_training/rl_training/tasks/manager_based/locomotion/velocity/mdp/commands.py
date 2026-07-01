@@ -15,9 +15,11 @@ from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.utils import configclass
 import isaaclab.utils.math as math_utils
 
+from isaaclab.managers import SceneEntityCfg
 import rl_training.tasks.manager_based.locomotion.velocity.mdp as mdp
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG, BLUE_ARROW_X_MARKER_CFG
+from .utils import compute_base_height_rel_to_feet
 
 
 if TYPE_CHECKING:
@@ -608,7 +610,9 @@ class BodyPoseCommand(CommandTerm):
         super().__init__(cfg, env)
 
         # command buffer: [height, pitch, roll]
-        self.command = torch.zeros(self.num_envs, 3, device=self.device)
+        self._command = torch.zeros(self.num_envs, 3, device=self.device)
+        self.cfg.asset_cfg.resolve(self._env.scene)
+        self.cfg.feet_cfg.resolve(self._env.scene)
 
     @property
     def _low(self) -> torch.Tensor:
@@ -666,7 +670,7 @@ class BodyPoseCommand(CommandTerm):
         # 读取实际 body pose
         # ------------------------------------------------------------------ #
         # 实际高度：root 在世界系下的 z 坐标
-        actual_height = self._env.scene["robot"].data.root_pos_w[:, 2]        # (num_envs,)
+        actual_height = compute_base_height_rel_to_feet(self._env, self.cfg.asset_cfg, self.cfg.feet_cfg)  # (num_envs,)
 
         # 实际 pitch / roll：从四元数转欧拉角
         # euler_xyz_from_quat 返回顺序为 (roll, pitch, yaw)，单位 rad
@@ -730,10 +734,13 @@ class BodyPoseCommand(CommandTerm):
 
         zeros = torch.zeros(self.num_envs, device=self.device)
 
+        ref_ground_h = self._env.scene["robot"].data.root_pos_w[:, 2] - compute_base_height_rel_to_feet(self._env, self.cfg.asset_cfg, self.cfg.feet_cfg)
+
+
         # ---------- 公共：圆片位置（两个圆片同位置）----------
         disc_pos = torch.zeros(self.num_envs, 3, device=self.device)
         disc_pos[:, :2] = base_xy
-        disc_pos[:, 2] = target_h
+        disc_pos[:, 2] = target_h + ref_ground_h
 
         # ---------- 公共：基础旋转（法线朝上，圆片水平）----------
         half_pi = torch.full((self.num_envs,), -torch.pi / 2, device=self.device)
@@ -787,4 +794,6 @@ class BodyPoseCommandCfg(CommandTermCfg):
 
     # ---- 继承自 CommandTermCfg ----
     resampling_time_range: tuple = (10.0, 10.0)  # 每 5~10 s 重采样一次
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+    feet_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*wheel")
     debug_vis: bool = False

@@ -103,7 +103,7 @@ class HistoryAdaptationPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     class_name = "OnPolicyRunnerHis"
     num_steps_per_env = 24
     max_iterations = 20000
-    save_interval = 100
+    save_interval = 500
     experiment_name = "history_adaptation"
     empirical_normalization = False
     clip_actions = 100
