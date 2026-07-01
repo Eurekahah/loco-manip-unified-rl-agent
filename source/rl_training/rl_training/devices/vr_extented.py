@@ -325,9 +325,9 @@ class Se2VRExtended(DeviceBase):
         #           EE_y =  sim_z  (up)
         #           EE_z =  sim_x  (forward)
         # ------------------------------------------------------------------
-        ee_dx = delta_pos[1]   #  sim_y  → EE x (left)
-        ee_dy = delta_pos[2]   #  sim_z  → EE y (up)
-        ee_dz = delta_pos[0]   #  sim_x  → EE z (forward)
+        ee_dx =  delta_pos[0]   #  sim_y  → EE x (left)
+        ee_dy =  delta_pos[1]   #  sim_z  → EE y (up)
+        ee_dz =  delta_pos[2]   #  sim_x  → EE z (forward)
 
         self._command[3] = ee_dx * self.arm_pos_sensitivity
         self._command[4] = ee_dy * self.arm_pos_sensitivity
@@ -343,16 +343,12 @@ class Se2VRExtended(DeviceBase):
         #   rot around EE_x (left)    = rot around sim_y  → euler_sim[1]
         #   rot around EE_y (up)      = rot around sim_z  → euler_sim[2]
         #   rot around EE_z (forward) = rot around sim_x  → euler_sim[0]
-        self._command[6] = euler_sim[1] * self.arm_rot_sensitivity  # EE roll  (around EE x)
-        self._command[7] = euler_sim[2] * self.arm_rot_sensitivity  # EE pitch (around EE y)
-        self._command[8] = euler_sim[0] * self.arm_rot_sensitivity  # EE yaw   (around EE z)
-
-        print(f"Arm position delta (EE frame): x={self._command[3]:.3f}, y={self._command[4]:.3f}, z={self._command[5]:.3f}")
-        print(f"Arm rotation delta (EE frame, rad): roll={self._command[6]:.3f}, pitch={self._command[7]:.3f}, yaw={self._command[8]:.3f}")
+        self._command[6] =  euler_sim[0] * self.arm_rot_sensitivity  # EE roll  (around EE x)
+        self._command[7] =  euler_sim[1] * self.arm_rot_sensitivity  # EE pitch (around EE y)
+        self._command[8] =  euler_sim[2] * self.arm_rot_sensitivity  # EE yaw   (around EE z)
 
         # --- gripper ---
         self._command[12] = 1.0 if trigger > 0.5 else -1.0
-        print(f"Gripper trigger value: {trigger:.2f}")
 
     def _update_body(self, delta_pos: np.ndarray, r_diff: R, trigger: float):
         """Write body height / pitch / roll deltas from left controller."""
@@ -366,7 +362,7 @@ class Se2VRExtended(DeviceBase):
         # pitch / roll from rotation delta (Euler XYZ in sim frame)
         euler = r_diff.as_euler("XYZ", degrees=False)
         
-        print(f"Body height delta: {self._command[9]:.3f}")
+        # print(f"Body height delta: {self._command[9]:.3f}")
         self._command[10] = - euler[0] * self.pitch_sensitivity   # pitch (Y)
         self._command[11] = euler[1] * self.roll_sensitivity    # roll  (X)
         print(f"Body rotation delta (radians): pitch={euler[1]:.3f}, roll={euler[0]:.3f}")
@@ -386,7 +382,7 @@ class Se2VRExtended(DeviceBase):
         self._command[0] = - stick_y * self.v_x_sensitivity
         self._command[1] = stick_x * self.v_y_sensitivity
         self._command[2] = euler[2] * self.omega_z_sensitivity
-        print(f"v_x = {self._command[0]:.3f}, v_y = {self._command[1]:.3f}, w_z = {self._command[2]:.3f}")
+        # print(f"v_x = {self._command[0]:.3f}, v_y = {self._command[1]:.3f}, w_z = {self._command[2]:.3f}")
 
 
     # ------------------------------------------------------------------
@@ -535,7 +531,7 @@ class Se2VRExtendedCfg(DeviceCfg):
     """
 
     # -- chassis --
-    v_x_sensitivity:     float = 1.0
+    v_x_sensitivity:     float = 5.0
     """Forward / backward velocity scale (left thumbstick Y)."""
     v_y_sensitivity:     float = 1.0
     """Lateral velocity scale (left thumbstick X)."""
@@ -545,11 +541,11 @@ class Se2VRExtendedCfg(DeviceCfg):
     # -- body pose --
     default_body_height: float = 0.513
     """Default body height (m) restored on reset / init."""
-    height_sensitivity:  float = 1.0
+    height_sensitivity:  float = 0.5
     """Body height delta scale (left controller Z + trigger)."""
-    pitch_sensitivity:   float = 1.0
+    pitch_sensitivity:   float = 0.35
     """Body pitch delta scale (left controller rotation Y)."""
-    roll_sensitivity:    float = 1.0
+    roll_sensitivity:    float = 0.25
     """Body roll delta scale (left controller rotation X)."""
 
     # -- arm --
