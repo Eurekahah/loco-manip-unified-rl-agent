@@ -371,6 +371,11 @@ class RoughEnvWBCConfig(DeeproboticsM20RoughEnvCfg):
         self.commands.body_pose.height_range = (0.513, 0.513)  # Stage 1 初始值
         self.commands.body_pose.pitch_range  = (0.0, 0.0)
         self.commands.body_pose.roll_range   = (0.0, 0.0)
+        
+        self.curriculum.base_velocity_lin_vel_x_s4 = None
+        self.curriculum.base_velocity_lin_vel_x_s5 = None
+        self.curriculum.base_velocity_lin_vel_x_s6 = None
+        self.curriculum.base_velocity_lin_vel_x_s7 = None
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "RoughEnvWBCConfig":
             self.disable_zero_weight_rewards()
@@ -407,7 +412,7 @@ class RoughEnvWBCConfig_PLAY(RoughEnvWBCConfig):
         self.curriculum.base_velocity_lin_vel_x_s5 = None
         self.curriculum.base_velocity_lin_vel_x_s6 = None
         self.curriculum.base_velocity_lin_vel_x_s7 = None
-        self.commands.base_velocity.ranges.lin_vel_x = (-2.0, 2.0)
+        self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.0)
         self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
         self.commands.body_pose.height_range = (0.33, 0.6)
