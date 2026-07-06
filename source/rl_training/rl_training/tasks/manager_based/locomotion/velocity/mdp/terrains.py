@@ -134,3 +134,220 @@ ALL_TERRAINS_CFG = TerrainGeneratorCfg(
     },
 )
 """All-terrains configuration (for visually inspecting every terrain type Isaac Lab provides)."""
+
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+"""
+拆分后的地形配置。
+
+原始的 ROUGH_TERRAINS_CFG 把多种地形按比例混在同一个 TerrainGeneratorCfg 里，
+无法单独测试机器人在某一种地形上的表现。这里把每种地形拆成独立的
+TerrainGeneratorCfg（proportion=1.0），并额外加了一个纯平地配置，
+方便逐个地形做专项测试。
+
+使用方式：
+    from <your_pkg>.terrains_split_cfg import TERRAIN_CFGS
+    cfg = TERRAIN_CFGS["stairs"]   # 或 "flat" / "boxes" / ...
+"""
+
+# --------------------------------------------------------------------------- #
+#  公共参数（与原始 ROUGH_TERRAINS_CFG 保持一致）
+# --------------------------------------------------------------------------- #
+_COMMON_KW = dict(
+    size=(8.0, 8.0),
+    border_width=20.0,
+    num_rows=10,
+    num_cols=20,
+    horizontal_scale=0.1,
+    vertical_scale=0.005,
+    slope_threshold=0.75,
+    use_cache=False,
+)
+
+# --------------------------------------------------------------------------- #
+#  1. 正楼梯 (pyramid_stairs)
+# --------------------------------------------------------------------------- #
+STAIRS_TERRAIN_CFG = TerrainGeneratorCfg(
+    **_COMMON_KW,
+    sub_terrains={
+        "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
+            proportion=1.0,
+            step_height_range=(0.05, 0.23),
+            step_width=0.3,
+            platform_width=3.0,
+            border_width=1.0,
+            holes=False,
+        ),
+    },
+)
+"""正向金字塔楼梯地形（上台阶）。"""
+
+# --------------------------------------------------------------------------- #
+#  2. 倒楼梯 (pyramid_stairs_inv)
+# --------------------------------------------------------------------------- #
+STAIRS_INV_TERRAIN_CFG = TerrainGeneratorCfg(
+    **_COMMON_KW,
+    sub_terrains={
+        "pyramid_stairs_inv": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
+            proportion=1.0,
+            step_height_range=(0.05, 0.23),
+            step_width=0.3,
+            platform_width=3.0,
+            border_width=1.0,
+            holes=False,
+        ),
+    },
+)
+"""倒金字塔楼梯地形（下台阶/坑）。"""
+
+# --------------------------------------------------------------------------- #
+#  3. 方块地形 (boxes)
+# --------------------------------------------------------------------------- #
+BOXES_TERRAIN_CFG = TerrainGeneratorCfg(
+    **_COMMON_KW,
+    sub_terrains={
+        "boxes": terrain_gen.MeshRandomGridTerrainCfg(
+            proportion=1.0,
+            grid_width=0.45,
+            grid_height_range=(0.05, 0.2),
+            platform_width=2.0,
+        ),
+    },
+)
+"""随机方块/网格地形。"""
+
+# --------------------------------------------------------------------------- #
+#  4. 随机粗糙地形 (random_rough)
+# --------------------------------------------------------------------------- #
+RANDOM_ROUGH_TERRAIN_CFG = TerrainGeneratorCfg(
+    **_COMMON_KW,
+    sub_terrains={
+        "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
+            proportion=1.0,
+            noise_range=(0.02, 0.10),
+            noise_step=0.02,
+            border_width=0.25,
+        ),
+    },
+)
+"""随机粗糙地形（高度场噪声）。"""
+
+# --------------------------------------------------------------------------- #
+#  5. 金字塔斜坡 (hf_pyramid_slope)
+# --------------------------------------------------------------------------- #
+SLOPE_TERRAIN_CFG = TerrainGeneratorCfg(
+    **_COMMON_KW,
+    sub_terrains={
+        "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
+            proportion=1.0,
+            slope_range=(0.0, 0.4),
+            platform_width=2.0,
+            border_width=0.25,
+        ),
+    },
+)
+"""上坡（金字塔斜坡）地形。"""
+
+# --------------------------------------------------------------------------- #
+#  6. 倒金字塔斜坡 (hf_pyramid_slope_inv)
+# --------------------------------------------------------------------------- #
+SLOPE_INV_TERRAIN_CFG = TerrainGeneratorCfg(
+    **_COMMON_KW,
+    sub_terrains={
+        "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
+            proportion=1.0,
+            slope_range=(0.0, 0.4),
+            platform_width=2.0,
+            border_width=0.25,
+        ),
+    },
+)
+"""下坡（倒金字塔斜坡）地形。"""
+
+# --------------------------------------------------------------------------- #
+#  7. 平地（新增，用于基线测试）
+# --------------------------------------------------------------------------- #
+FLAT_TERRAIN_CFG = TerrainGeneratorCfg(
+    **_COMMON_KW,
+    sub_terrains={
+        "flat": terrain_gen.MeshPlaneTerrainCfg(
+            proportion=1.0,
+        ),
+    },
+)
+"""纯平地地形，用作基线（无地形干扰）对照测试。"""
+
+# --------------------------------------------------------------------------- #
+#  8. 原始混合地形（保留，便于对比/回归测试）
+# --------------------------------------------------------------------------- #
+ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
+    **_COMMON_KW,
+    sub_terrains={
+        "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
+            proportion=0.2,
+            step_height_range=(0.05, 0.23),
+            step_width=0.3,
+            platform_width=3.0,
+            border_width=1.0,
+            holes=False,
+        ),
+        "pyramid_stairs_inv": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
+            proportion=0.2,
+            step_height_range=(0.05, 0.23),
+            step_width=0.3,
+            platform_width=3.0,
+            border_width=1.0,
+            holes=False,
+        ),
+        "boxes": terrain_gen.MeshRandomGridTerrainCfg(
+            proportion=0.2, grid_width=0.45, grid_height_range=(0.05, 0.2), platform_width=2.0
+        ),
+        "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
+            proportion=0.2, noise_range=(0.02, 0.10), noise_step=0.02, border_width=0.25
+        ),
+        "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
+            proportion=0.1, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
+        ),
+        "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
+            proportion=0.1, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
+        ),
+    },
+)
+"""原始的混合地形配置（保留，未做改动）。"""
+
+# --------------------------------------------------------------------------- #
+#  9. 无楼梯混合地形
+# --------------------------------------------------------------------------- #
+NONE_STAIRS_TERRAINS_CFG = TerrainGeneratorCfg(
+    **_COMMON_KW,
+    sub_terrains={
+        "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
+            proportion=0.35, noise_range=(0.02, 0.10), noise_step=0.02, border_width=0.25
+        ),
+        "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
+            proportion=0.25, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
+        ),
+        "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
+            proportion=0.25, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
+        ),
+        "flat": terrain_gen.MeshPlaneTerrainCfg(
+            proportion=0.15,
+        ),
+    },
+)
+# --------------------------------------------------------------------------- #
+#  方便测试脚本按名字索引
+# --------------------------------------------------------------------------- #
+TERRAIN_CFGS = {
+    "flat": FLAT_TERRAIN_CFG,
+    "stairs": STAIRS_TERRAIN_CFG,
+    "stairs_inv": STAIRS_INV_TERRAIN_CFG,
+    "boxes": BOXES_TERRAIN_CFG,
+    "random_rough": RANDOM_ROUGH_TERRAIN_CFG,
+    "slope": SLOPE_TERRAIN_CFG,
+    "slope_inv": SLOPE_INV_TERRAIN_CFG,
+    "mixed": ROUGH_TERRAINS_CFG,
+}
+"""名称 -> TerrainGeneratorCfg 的映射，供测试脚本 --terrain 参数使用。"""

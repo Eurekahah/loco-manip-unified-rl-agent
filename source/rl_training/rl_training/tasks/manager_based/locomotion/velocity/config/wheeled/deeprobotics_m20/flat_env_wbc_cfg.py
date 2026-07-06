@@ -420,3 +420,74 @@ class RoughEnvWBCConfig_PLAY(RoughEnvWBCConfig):
         self.commands.body_pose.roll_range = (-0.25, 0.25)
         if self.__class__.__name__ == "RoughEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()
+
+class RoughWOStairsEnvWBCConfig(RoughEnvWBCConfig):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.terrain.terrain_generator = mdp.NONE_STAIRS_TERRAINS_CFG
+        self.curriculum.base_velocity_lin_vel_x_s4 = CurrTerm(
+            func=mdp.modify_term_cfg,
+            params={
+                "address": "commands.base_velocity.ranges.lin_vel_x",
+                "modify_fn": mdp.override_value,
+                "modify_params": {
+                    "value": (-2.0, 2.0),
+                    "num_steps": 75_000,
+                },
+            },
+        )
+        self.curriculum.base_velocity_lin_vel_x_s5 = CurrTerm(
+            func=mdp.modify_term_cfg,
+            params={
+                "address": "commands.base_velocity.ranges.lin_vel_x",
+                "modify_fn": mdp.override_value,
+                "modify_params": {
+                    "value": (-3.0, 3.0),
+                    "num_steps": 100_000,
+                },
+            },
+        )
+        self.curriculum.base_velocity_lin_vel_x_s6 = CurrTerm(
+            func=mdp.modify_term_cfg,
+            params={
+                "address": "commands.base_velocity.ranges.lin_vel_x",
+                "modify_fn": mdp.override_value,
+                "modify_params": {
+                    "value": (-4.0, 4.0),
+                    "num_steps": 125_000,
+                },
+            },
+        )
+        self.curriculum.base_velocity_lin_vel_x_s7 = CurrTerm(
+            func=mdp.modify_term_cfg,
+            params={
+                "address": "commands.base_velocity.ranges.lin_vel_x",
+                "modify_fn": mdp.override_value,
+                "modify_params": {
+                    "value": (-5.0, 5.0),
+                    "num_steps": 150_000,
+                },
+            },
+        )
+        if self.__class__.__name__ == "RoughWOStairsEnvWBCConfig":
+            self.disable_zero_weight_rewards()
+
+class RoughWOStairsEnvWBCConfig_PLAY(RoughWOStairsEnvWBCConfig):
+    def __post_init__(self):
+        super().__post_init__()
+        # self.curriculum.body_pose_cmd_schedule = None
+        self.curriculum.body_pose_height_range_s2 = None
+        self.curriculum.body_pose_pitch_range_s3 = None
+        self.curriculum.body_pose_roll_range_s3 = None
+        self.curriculum.base_velocity_lin_vel_x_s4 = None
+        self.curriculum.base_velocity_lin_vel_x_s5 = None
+        self.curriculum.base_velocity_lin_vel_x_s6 = None
+        self.curriculum.base_velocity_lin_vel_x_s7 = None
+        self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        self.commands.body_pose.height_range = (0.33, 0.6)
+        self.commands.body_pose.pitch_range = (-0.35, 0.35)
+        self.commands.body_pose.roll_range = (-0.25, 0.25)
+        if self.__class__.__name__ == "RoughWOStairsEnvWBCConfig_PLAY":
+            self.disable_zero_weight_rewards()
