@@ -52,7 +52,7 @@ class ActorCriticHistory(nn.Module):
         num_actions: int,
         # Latent / encoder configuration
         latent_dim: int = 32,
-        history_length: int = 50,
+        history_length: int = 10,
         history_encoder_hidden_channels: tuple[int, ...] | list[int] = (32, 32, 32),
         history_encoder_kernel_sizes: tuple[int, ...] | list[int] = (4, 3, 2),
         history_encoder_strides: tuple[int, ...] | list[int] = (2, 1, 1),

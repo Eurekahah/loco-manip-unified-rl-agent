@@ -136,6 +136,7 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
 
         self.num_collision_check_samples = cfg.num_collision_check_samples
         self.max_resample_attempts = cfg.max_resample_attempts
+        self.arm_base_link_idx = env.scene["robot"].data.body_names.index(self.cfg.arm_base_link_name)
 
 
     def _resample_command(self, env_ids):
@@ -168,7 +169,7 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
 
         # 获取当前坐标系（实时跟随 yaw）
         origin_pos, quat_yaw = self.get_height_invariant_base_frame(
-            self._env, torch.arange(self._env.num_envs)
+            self._env, torch.arange(self._env.num_envs, device=self.device)
         )
         # p_end_w = self.local_to_world(self.pose_end_local, origin_pos, quat_yaw)  # (N, 7)
 
@@ -274,8 +275,7 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         - 朝向：只保留 yaw，去除 roll 和 pitch
         """
         # 获取机械臂arm_base的位置 
-        arm_base_link_idx = env.scene["robot"].data.body_names.index(self.cfg.arm_base_link_name)
-        arm_base_link_pos_w = env.scene["robot"].data.body_pos_w[env_ids, arm_base_link_idx]
+        arm_base_link_pos_w = env.scene["robot"].data.body_pos_w[env_ids, self.arm_base_link_idx]
         # 获取基座的姿态
         base_quat_w = env.scene["robot"].data.root_quat_w[env_ids]  # (N, 4) wxyz
 

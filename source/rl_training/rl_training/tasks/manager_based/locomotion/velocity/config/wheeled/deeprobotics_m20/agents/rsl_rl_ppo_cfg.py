@@ -121,7 +121,7 @@ class HistoryAdaptationPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         critic_hidden_dims=[512, 256, 128],
         activation="elu",
         latent_dim= 32,
-        history_length= 50,
+        history_length= 10,
         history_encoder_hidden_channels= (32, 32, 32),
         history_encoder_kernel_sizes= (4, 3, 2),
         history_encoder_strides= (2, 1, 1),
