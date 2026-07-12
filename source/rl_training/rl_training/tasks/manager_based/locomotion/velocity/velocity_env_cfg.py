@@ -850,20 +850,20 @@ class CurriculumCfg:
             "range_multiplier": (0.1, 1.0),
         },
     )
-    arm_weight_curriculum = CurrTerm(
-        func=mdp.advance_arm_weight,
-        params={
-            "max_iterations": 5000,       # 和 RunnerCfg 保持一致
-            "num_steps_per_env": 24,
-            "ramp_start_frac": 0.0,
-            "ramp_end_frac": 0.5,         # iteration=2500 时 max_weight=1.0
-            "max_target": 1.0,
-            "min_target": 0.8,
-            "min_start_frac": 0.5,        # max_weight>0.5 后才推 min
-            "initial_max_weight": 0.0,
-            "initial_min_weight": 0.0,
-        }
-    )
+    # arm_weight_curriculum = CurrTerm(
+    #     func=mdp.advance_arm_weight,
+    #     params={
+    #         "max_iterations": 5000,       # 和 RunnerCfg 保持一致
+    #         "num_steps_per_env": 24,
+    #         "ramp_start_frac": 0.0,
+    #         "ramp_end_frac": 0.5,         # iteration=2500 时 max_weight=1.0
+    #         "max_target": 1.0,
+    #         "min_target": 0.8,
+    #         "min_start_frac": 0.5,        # max_weight>0.5 后才推 min
+    #         "initial_max_weight": 0.0,
+    #         "initial_min_weight": 0.0,
+    #     }
+    # )
 
 
 ##

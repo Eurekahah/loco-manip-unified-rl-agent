@@ -80,8 +80,7 @@ class WBCObservationsCfg(DeeproboticsM20ObservationsCfg):
         """Adaptation module (history encoder) 的输入：最近 history_length 步的 [状态, 上一步动作] 拼接序列。
 
         论文里状态窗口和动作窗口是错位一格的 (s_{t-10:t-1}, a_{t-11:t-2})，这里按你的要求统一用
-        history_length=50 的对齐窗口，简化实现；如果以后要还原论文的错位窗口，需要分别为状态和动作
-        维护两个不同长度/偏移的 buffer，目前先不处理。
+        history_length=10 的对齐窗口，简化实现；
         """
         history_obs = ObsTerm(
             func=mdp.history_single_step_obs,
@@ -348,6 +347,10 @@ class RoughEnvWBCConfig(DeeproboticsM20RoughEnvCfg):
     curriculum: WBCCurriculumCfg = WBCCurriculumCfg()
     def __post_init__(self):
         super().__post_init__()
+        self.scene.height_scanner = None
+        self.scene.height_scanner_base = None
+        self.observations.policy.height_scan = None
+        self.observations.critic.height_scan = None
         self.rewards.base_height_l2.weight = 0.0  # 关闭原有的高度奖励，改用新的 body_height_tracking
         self.rewards.lin_vel_z_l2.weight = 0.0      # 降低底盘 z 轴速度惩罚
         self.rewards.ang_vel_xy_l2.weight = 0.0     # 关闭水平面角速度惩罚
@@ -471,6 +474,89 @@ class RoughWOStairsEnvWBCConfig(RoughEnvWBCConfig):
         )
         if self.__class__.__name__ == "RoughWOStairsEnvWBCConfig":
             self.disable_zero_weight_rewards()
+        # self.disable_rewards(keep=[])
+        # self.disable_curriculum(keep=[])
+        # self.scene.terrain.terrain_type = "plane"
+        # self.scene.terrain.terrain_generator = None
+
+        # self.commands.ee_pose = None
+        # self.observations.policy.ee_goal = None
+        # self.observations.critic.ee_goal = None
+        # self.actions.ee_ik = None
+        
+    def disable_curriculum(self, keep: list[str] | None = None, exclude: list[str] | None = None):
+        """
+        禁用CurrTerm用于逐项profiling。
+
+        Args:
+            keep: 只保留这些名字的curriculum term，其余全部设为None。
+                传 [] 则禁用全部curriculum term。
+                传 None 则不按keep过滤(配合exclude使用，或者两者都不传=只按weight==0原逻辑禁用)。
+            exclude: 禁用这些名字的curriculum term，其余保留。
+                    keep和exclude不要同时传，keep优先级更高。
+        """
+        all_names = [
+            attr for attr in dir(self.curriculum)
+            if not attr.startswith("__") and not callable(getattr(self.curriculum, attr))
+        ]
+
+        disabled = []
+        for name in all_names:
+            curriculum_attr = getattr(self.curriculum, name)
+            if curriculum_attr is None:
+                continue
+
+            should_disable = False
+            if keep is not None:
+                should_disable = name not in keep
+            elif exclude is not None:
+                should_disable = name in exclude
+            else:
+                should_disable = False  # 默认不禁用
+
+            if should_disable:
+                setattr(self.curriculum, name, None)
+                disabled.append(name)
+
+        print(f"[disable_curriculum] Disabled {len(disabled)} curriculum terms: {disabled}")
+        return disabled
+
+    def disable_rewards(self, keep: list[str] | None = None, exclude: list[str] | None = None):
+        """
+        禁用RewTerm用于逐项profiling。
+
+        Args:
+            keep: 只保留这些名字的reward term，其余全部设为None。
+                传 [] 则禁用全部reward term。
+                传 None 则不按keep过滤(配合exclude使用，或者两者都不传=只按weight==0原逻辑禁用)。
+            exclude: 禁用这些名字的reward term，其余保留。
+                    keep和exclude不要同时传，keep优先级更高。
+        """
+        all_names = [
+            attr for attr in dir(self.rewards)
+            if not attr.startswith("__") and not callable(getattr(self.rewards, attr))
+        ]
+
+        disabled = []
+        for name in all_names:
+            reward_attr = getattr(self.rewards, name)
+            if reward_attr is None:
+                continue
+
+            should_disable = False
+            if keep is not None:
+                should_disable = name not in keep
+            elif exclude is not None:
+                should_disable = name in exclude
+            else:
+                should_disable = reward_attr.weight == 0
+
+            if should_disable:
+                setattr(self.rewards, name, None)
+                disabled.append(name)
+
+        print(f"[disable_rewards] Disabled {len(disabled)} reward terms: {disabled}")
+        return disabled
 
 class RoughWOStairsEnvWBCConfig_PLAY(RoughWOStairsEnvWBCConfig):
     def __post_init__(self):

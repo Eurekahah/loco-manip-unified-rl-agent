@@ -13,7 +13,8 @@ from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
 import isaaclab.utils.math as math_utils
 from isaaclab.envs.mdp import observations as base_mdp  # noqa: F401, F403
-
+from isaaclab.managers.manager_base import ManagerTermBase
+from isaaclab.managers.manager_term_cfg import ObservationTermCfg
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
 
@@ -67,146 +68,211 @@ def history_single_step_obs(
     """Adaptation module 单个时间步的输入: base state + arm state + leg state + 上一步18维关节目标位置。
 
     顺序需要和你认为的 "single_step_dim" 保持一致，方便排查维度问题:
-      [base_lin_vel(3), base_ang_vel(3), projected_gravity(3),
+      [base_ang_vel(3), projected_gravity(3),
        joint_pos(N), joint_vel(N), last_action(18)]
     """
-    base_lin_vel = base_mdp.base_lin_vel(env, asset_cfg)
     base_ang_vel = base_mdp.base_ang_vel(env, asset_cfg)
     projected_gravity = base_mdp.projected_gravity(env, asset_cfg)
     joint_pos = base_mdp.joint_pos_rel(env, asset_cfg)
     joint_vel = base_mdp.joint_vel_rel(env, asset_cfg)
     last_action = base_mdp.last_action(env)
     return torch.cat(
-        [base_lin_vel, base_ang_vel, projected_gravity, joint_pos, joint_vel, last_action],
+        [base_ang_vel, projected_gravity, joint_pos, joint_vel, last_action],
         dim=-1,
     )
 
-def privileged_base_extra_payload(
-    env: ManagerBasedRLEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-) -> torch.Tensor:
-    """基座额外负载 (kg)，相对默认质量的偏移量。
+"""
+特权信息观测项(lazy-init cached version)
 
-    假设你在 EventCfg 里用 `events.randomize_rigid_body_mass` 对 base link 做了质量随机化，
-    这里直接从 physx view 里读当前质量、减去 asset 的默认质量得到偏移。
-    """
-    asset = env.scene[asset_cfg.name]
-    base_body_id = asset_cfg.body_ids[0] if asset_cfg.body_ids is not None else 0
-    current_mass = asset.root_physx_view.get_masses()[:, base_body_id].to(env.device)
-    default_mass = asset.data.default_mass[:, base_body_id].to(env.device)
-    return (current_mass - default_mass).unsqueeze(-1)
+关键点:
+- IsaacLab 的 manager 构建顺序是 ObservationManager 先于 EventManager 的 "startup" 模式事件。
+  也就是说,如果在 ObsTerm 的 __init__ 里就去查 root_physx_view,拿到的还是随机化之前的默认值,
+  是错的。
+- 解决办法:__init__ 只保存 asset/body_ids 等引用,不做任何物理查询;真正的查询延迟到
+  第一次被调用(__call__)时才执行 —— 那时候 startup 随机化事件肯定已经跑完了。查询结果
+  缓存进 self.buf,之后每次 __call__ 都是直接返回缓存,开销为零。
+- reset(env_ids) 保留接口、留空。如果以后把某个随机化改成 "reset" mode(每个 episode
+  都重新随机化),把对应类 reset() 里注释掉的查询逻辑取消注释即可。
+"""
 
 
-def privileged_end_effector_payload(
-    env: ManagerBasedRLEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-) -> torch.Tensor:
-    """末端负载 (kg)，同上，但取末端执行器 link 的 body_id。"""
-    asset = env.scene[asset_cfg.name]
-    ee_body_id = asset_cfg.body_ids[0]  # 调用时传入末端 link 对应的 SceneEntityCfg(body_names=...)
-    current_mass = asset.root_physx_view.get_masses()[:, ee_body_id].to(env.device)
-    default_mass = asset.data.default_mass[:, ee_body_id].to(env.device)
-    return (current_mass - default_mass).unsqueeze(-1)
+class privileged_base_extra_payload(ManagerTermBase):
+    """基座额外负载 (kg),相对默认质量的偏移量。对应 randomize_rigid_body_mass(add)。"""
 
-def privileged_rigid_body_inertia(
-    env: ManagerBasedRLEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-) -> torch.Tensor:
-    """指定 body 的惯量缩放系数，对应 randomize_rigid_body_inertia。"""
-    asset = env.scene[asset_cfg.name]
-    body_ids = asset_cfg.body_ids
-    current_inertia = asset.root_physx_view.get_inertias()[:, body_ids].to(env.device)
-    default_inertia = asset.data.default_inertia[:, body_ids].to(env.device)
-    # 取对角项的均值缩放比例作为简化标量特征，也可保留完整张量
-    return (current_inertia - default_inertia).mean(dim=-1)
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
+        self.asset = env.scene[asset_cfg.name]
+        self.body_id = asset_cfg.body_ids[0] if asset_cfg.body_ids is not None else 0
+        self.buf: torch.Tensor | None = None
+        self.count = 0
 
-def privileged_base_com_offset(
-    env: ManagerBasedRLEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-) -> torch.Tensor:
-    """基座质心偏移 (3,)，相对默认 COM 的偏移向量。"""
-    asset = env.scene[asset_cfg.name]
-    base_body_id = asset_cfg.body_ids[0] if asset_cfg.body_ids is not None else 0
-    current_com = asset.root_physx_view.get_coms()[:, base_body_id, :3].to(env.device)
-    default_com = asset.data.default_com[:, base_body_id, :3].to(env.device)
-    return current_com - default_com
+    def _compute(self):
+        current_mass = self.asset.root_physx_view.get_masses()[:, self.body_id].to(self._env.device)
+        default_mass = self.asset.data.default_mass[:, self.body_id].to(self._env.device)
+        self.buf = (current_mass - default_mass).unsqueeze(-1)
 
-# 这个摩擦是仅静摩擦，且多只脚取平均
-# def privileged_friction_coefficient(
-#     env: ManagerBasedRLEnv,
-#     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-# ) -> torch.Tensor:
-#     """地面摩擦系数。
+    def reset(self, env_ids: torch.Tensor | slice | None = None):
+        pass
 
-#     假设你用 `events.randomize_rigid_body_material` 对脚部/地面做了摩擦随机化，这里从
-#     physx material properties 里读静摩擦系数 (index 0: static friction)。如果你的随机化是对
-#     terrain 而不是 robot body 做的，需要换成对应 terrain asset 的读取方式。
-#     """
-#     asset = env.scene[asset_cfg.name]
-#     foot_body_ids = asset_cfg.body_ids  # 传入脚部 link 对应的 body_ids
-#     materials = asset.root_physx_view.get_material_properties().to(env.device)  # [num_envs, num_bodies, 3]
-#     static_friction = materials[:, foot_body_ids, 0]
-#     return static_friction.mean(dim=-1, keepdim=True)  # 多只脚取平均，或者保留逐脚维度自行决定
+    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+        if self.count < 2 or self.buf is None:
+            self._compute()
+            self.count += 1
+        return self.buf
 
-# 这个摩擦是静摩擦和动摩擦都保留，且逐脚维度保留
-def privileged_material_properties(
-    env: ManagerBasedRLEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-) -> torch.Tensor:
-    """脚部 PhysX 材质特权信息：静摩擦、动摩擦、恢复系数。
 
-    假设用 `events.randomize_rigid_body_material` 对脚部/地面做了材质随机化，
-    这里从 physx material properties 中一次性读取：
-        index 0 -> 静摩擦系数 (static friction)
-        index 1 -> 动摩擦系数 (dynamic friction)
-        index 2 -> 恢复系数 (restitution)
+class privileged_end_effector_payload(ManagerTermBase):
+    """末端负载 (kg)。对应 randomize_rigid_body_mass(scale)。"""
 
-    默认逐脚维度全部保留，不做平均，方便策略/critic 学习逐脚非对称信息
-    （例如某只脚踩在滑面、其他脚正常的情况）。如果你的恢复系数随机化对所有脚
-    用的是同一个 range、不需要区分逐脚，可以设 `average_restitution=True` 把
-    恢复系数压成单一维度，减小特权观测维度。
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
+        self.asset = env.scene[asset_cfg.name]
+        self.body_id = asset_cfg.body_ids[0]
+        self.buf: torch.Tensor | None = None
+        self.count = 0
 
-    注意：
-    - 如果随机化是对 terrain 而不是 robot body 做的，需要换成对应 terrain
-      asset 的读取方式。
-    - 如果摩擦/恢复系数随机化同时作用于脚和地形，且 PhysX combine_mode 不是
-      简单 average，这里读到的脚部材质值不完全等于仿真中实际生效的有效系数，
-      需要结合地形材质额外做 combine 计算。
+    def _compute(self):
+        current_mass = self.asset.root_physx_view.get_masses()[:, self.body_id].to(self._env.device)
+        default_mass = self.asset.data.default_mass[:, self.body_id].to(self._env.device)
+        self.buf = (current_mass - default_mass).unsqueeze(-1)
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None):
+        pass
+
+    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+        if self.count < 2 or self.buf is None:
+            self._compute()
+            self.count += 1
+        return self.buf
+
+
+class privileged_rigid_body_inertia(ManagerTermBase):
+    """指定 body 的惯量偏移(对角项均值)。对应 randomize_rigid_body_inertia。"""
+
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
+        self.asset = env.scene[asset_cfg.name]
+        self.body_ids = asset_cfg.body_ids
+        self.buf: torch.Tensor | None = None
+        self.count = 0
+
+    def _compute(self):
+        current_inertia = self.asset.root_physx_view.get_inertias()[:, self.body_ids].to(self._env.device)
+        default_inertia = self.asset.data.default_inertia[:, self.body_ids].to(self._env.device)
+        self.buf = (current_inertia - default_inertia).mean(dim=-1)
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None):
+        pass
+
+    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+        if self.count < 2 or self.buf is None:
+            self._compute()
+            self.count += 1
+        return self.buf
+
+
+class privileged_base_com_offset(ManagerTermBase):
+    """基座质心偏移 (3,)。对应 randomize_com_positions。"""
+
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
+        self.asset = env.scene[asset_cfg.name]
+        self.body_id = asset_cfg.body_ids[0] if asset_cfg.body_ids is not None else 0
+        self.buf: torch.Tensor | None = None
+        self.count = 0
+
+    def _compute(self):
+        current_com = self.asset.root_physx_view.get_coms()[:, self.body_id, :3].to(self._env.device)
+        default_com = self.asset.data.default_com[:, self.body_id, :3].to(self._env.device)
+        self.buf = current_com - default_com
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None):
+        pass
+
+    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+        if self.count < 2 or self.buf is None:
+            self._compute()
+            self.count += 1
+        return self.buf
+
+
+class privileged_material_properties(ManagerTermBase):
+    """脚部 PhysX 材质特权信息:静摩擦、动摩擦、恢复系数。对应 randomize_rigid_body_material。
 
     Returns:
-        torch.Tensor: 默认 shape 为 [num_envs, num_feet * 3]，按
+        torch.Tensor: shape [num_envs, num_feet * 3],按
             [foot0_static, ..., footN_static,
              foot0_dynamic, ..., footN_dynamic,
-             foot0_restitution, ..., footN_restitution]
-            排列；若 average_restitution=True，则 shape 为
-            [num_envs, num_feet * 2 + 1]，恢复系数部分被替换为跨脚均值（单维度）。
+             foot0_restitution, ..., footN_restitution] 排列。
     """
-    asset = env.scene[asset_cfg.name]
-    foot_body_ids = asset_cfg.body_ids  # 脚部 link 对应的 body_ids
 
-    materials = asset.root_physx_view.get_material_properties().to(env.device)  # [num_envs, num_bodies, 3]
-    static_friction = materials[:, foot_body_ids, 0]    # [num_envs, num_feet]
-    dynamic_friction = materials[:, foot_body_ids, 1]   # [num_envs, num_feet]
-    restitution = materials[:, foot_body_ids, 2]        # [num_envs, num_feet]
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
+        self.asset = env.scene[asset_cfg.name]
+        self.foot_body_ids = asset_cfg.body_ids
+        self.buf: torch.Tensor | None = None
+        self.count = 0
 
-    return torch.cat([static_friction, dynamic_friction, restitution], dim=-1)
+    def _compute(self):
+        materials = self.asset.root_physx_view.get_material_properties().to(self._env.device)  # [num_envs, num_bodies, 3]
+        static_friction = materials[:, self.foot_body_ids, 0]
+        dynamic_friction = materials[:, self.foot_body_ids, 1]
+        restitution = materials[:, self.foot_body_ids, 2]
+        self.buf = torch.cat([static_friction, dynamic_friction, restitution], dim=-1)
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None):
+        pass
+
+    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+        if self.count < 2 or self.buf is None:
+            self._compute()
+            self.count += 1
+        return self.buf
 
 
-def privileged_joint_gain_scale(env, asset_cfg=SceneEntityCfg("robot", joint_names=".*")):
-    asset = env.scene[asset_cfg.name]
-    included_actuators = {"joint","wheel", "piper_arm", "piper_gripper"} # 此处轮子和夹爪可以去掉
-    
-    scales = []
-    for actuator_name, actuator in asset.actuators.items():
-        if actuator_name not in included_actuators:
-            continue
-        current_k = actuator.stiffness
-        current_d = actuator.damping
-        default_k = actuator.cfg.stiffness
-        default_d = actuator.cfg.damping
-        k_scale = current_k / max(default_k, 1e-8) if isinstance(default_k, float) else current_k / current_k.new_tensor(default_k).clamp_min(1e-8)
-        d_scale = current_d / max(default_d, 1e-8) if isinstance(default_d, float) else current_d / current_d.new_tensor(default_d).clamp_min(1e-8)
-        scales.append(k_scale)
-        scales.append(d_scale)
+class privileged_joint_gain_scale(ManagerTermBase):
+    """关节 PD 增益缩放系数(stiffness/damping 相对默认值的比例)。对应 randomize_actuator_gains。"""
 
-    return torch.cat(scales, dim=-1)
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.asset = env.scene[cfg.params["asset_cfg"].name]
+        self.included_actuators = {"joint", "wheel", "piper_arm", "piper_gripper"}  # 轮子和夹爪可按需去掉
+        self.buf: torch.Tensor | None = None
+        self.count = 0
+
+    def _compute(self):
+        scales = []
+        for actuator_name, actuator in self.asset.actuators.items():
+            if actuator_name not in self.included_actuators:
+                continue
+            current_k = actuator.stiffness
+            current_d = actuator.damping
+            default_k = actuator.cfg.stiffness
+            default_d = actuator.cfg.damping
+            k_scale = (
+                current_k / max(default_k, 1e-8)
+                if isinstance(default_k, float)
+                else current_k / current_k.new_tensor(default_k).clamp_min(1e-8)
+            )
+            d_scale = (
+                current_d / max(default_d, 1e-8)
+                if isinstance(default_d, float)
+                else current_d / current_d.new_tensor(default_d).clamp_min(1e-8)
+            )
+            scales.append(k_scale)
+            scales.append(d_scale)
+        self.buf = torch.cat(scales, dim=-1)
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None):
+        pass
+
+    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+        if self.count < 2 or self.buf is None:
+            self._compute()
+            self.count += 1
+        return self.buf
