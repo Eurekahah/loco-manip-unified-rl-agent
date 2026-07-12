@@ -65,6 +65,7 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
     # )
 
     # IK由command直接驱动，不占policy的action_dim
+    # IK给出的关节增量再做内插
     ee_ik = mdp.CommandDrivenIKActionCfg(
         asset_name="robot",
         joint_names=["arm_joint[1-6]"],
@@ -250,16 +251,14 @@ class DeeproboticsM20CommandsCfg(CommandsCfg):
         arm_base_link_name="arm_base",  # 采样坐标系xy位置
         ranges=mdp.HeightInvariantEECommandCfg.Ranges(
             # 球坐标位置采样范围
-            p_l= (0.4, 0.7),           # 半径 l
-            p_pitch= (-1, 2*math.pi/5),   # pitch p
+            p_l= (0.35, 0.62),           # 半径 l
+            p_pitch= (-math.pi/4, 2*math.pi/5),   # pitch p
             p_yaw = (-3*math.pi/5, 3*math.pi/5),     # yaw y
             # 姿态采样范围
             o_roll = (-math.pi / 4, math.pi / 4),
             o_pitch =(-math.pi / 4, math.pi / 4),
             o_yaw = (-math.pi, math.pi),
-            # 插值时间间隔采样范围
-            T_traj = (1.0, 3.0),
-            T_hold = (0.5, 2.0)
+            orn_cone_min_scale = 0.1,
         ),
     )
 

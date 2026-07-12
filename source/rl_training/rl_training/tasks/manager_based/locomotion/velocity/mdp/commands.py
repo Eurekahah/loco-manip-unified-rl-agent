@@ -104,20 +104,13 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         num_envs = env.num_envs
         device = env.device
 
-        self.t = torch.zeros(num_envs, device=device)
-        self.pose_end_local = torch.zeros(num_envs, 7, device=device)
-        self.pose_end_w = torch.zeros(num_envs, 7, device=device)
-        self.pose_command_w = torch.zeros(num_envs, 7, device=device)
-        self.pose_command_local = torch.zeros(num_envs, 7, device=device)
-        self.pose_start_w = torch.zeros(num_envs,7,device=device)
+        self.pose_end_cart = torch.zeros(num_envs, 7, device=device)
+        self.pose_command_b = torch.zeros(num_envs, 7, device=device)
 
-        self.ee_start_sphere = torch.zeros(self.num_envs, 3, device=self.device)
-        self.ee_end_sphere = torch.zeros(self.num_envs, 3, device=self.device)
-        self.ee_end_cart = torch.zeros(self.num_envs, 3, device=self.device)
+        self.ee_start_pos_sphere = torch.zeros(self.num_envs, 3, device=self.device)
+        self.ee_end_pos_sphere = torch.zeros(self.num_envs, 3, device=self.device)
+        self.ee_end_pos_cart = torch.zeros(self.num_envs, 3, device=self.device)
         self.ee_end_orn_quat = torch.zeros(self.num_envs, 4, device=self.device)
-
-        self.T_traj = torch.ones(num_envs, device=device)
-        self.T_hold = torch.ones(num_envs, device=device)
 
         # 碰撞盒 limits 转为 tensor，移到对应设备
         self.collision_lower_limits = torch.tensor(
@@ -136,89 +129,48 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
 
         self.num_collision_check_samples = cfg.num_collision_check_samples
         self.max_resample_attempts = cfg.max_resample_attempts
+        self.arm_base_link_idx = env.scene["robot"].data.body_names.index(self.cfg.arm_base_link_name)
 
 
     def _resample_command(self, env_ids):
         # 1. 获取当前 height-invariant 坐标系
         origin_pos, quat_yaw = self.get_height_invariant_base_frame(self._env, env_ids)
-        
+
         # 2. 球坐标采样新目标
         self._resample_ee_goal(env_ids)
-        
-        # 3. 转换到世界坐标
-        self.pose_end_w[env_ids] = self.local_to_world(self.pose_end_local[env_ids], origin_pos, quat_yaw)
-        # self.pose_command_w[env_ids] = self.pose_end_w[env_ids].clone()  # 初始命令即为目标位姿，后续通过插值平滑过渡
-        
-        # 4. 重置插值计时
-        self.t[env_ids] = 0.0
-        self.T_traj[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(*self.cfg.ranges.T_traj)
-        self.T_hold[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(*self.cfg.ranges.T_hold)
-        self.pose_start_w[env_ids, :3] = self.robot.data.body_pos_w[env_ids, self.body_idx]
-        self.pose_start_w[env_ids, 3:] = self.robot.data.body_quat_w[env_ids, self.body_idx]
 
+        # 3. 转换到当前 root 坐标系
+        pos_local = self.pose_end_cart[env_ids, :3]
+        quat_local = self.pose_end_cart[env_ids, 3:]
 
+        pos_world = math_utils.quat_apply(quat_yaw, pos_local) + origin_pos
+        quat_world = math_utils.quat_mul(quat_yaw, quat_local)
+
+        root_pos_w = self.robot.data.root_pos_w[env_ids]
+        root_quat_w = self.robot.data.root_quat_w[env_ids]
+        target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
+            root_pos_w, root_quat_w, pos_world, quat_world,
+        )
+        self.pose_command_b[env_ids] = torch.cat([target_pos_b, target_quat_b], dim=-1)
+        
+    
     def _update_command(self):
-        # pass
-        # 每步更新插值目标，t大于T_tra且小于T_tra+T_hold则保持目标不变，大于T_tra+T_hold则重采样新目标
-        alpha = (self.t / self.T_traj).clamp(0, 1).unsqueeze(-1).expand_as(self.ee_start_sphere)  # (N, 3)
-
-        # 获取当前 EE 位姿（世界坐标）
-        ee_pos_w  = self.robot.data.body_pos_w[:, self.body_idx]   # (N, 3)
-        ee_quat_w = self.robot.data.body_quat_w[:, self.body_idx]  # (N, 4)
-
-        # 获取当前坐标系（实时跟随 yaw）
-        origin_pos, quat_yaw = self.get_height_invariant_base_frame(
-            self._env, torch.arange(self._env.num_envs)
-        )
-        # p_end_w = self.local_to_world(self.pose_end_local, origin_pos, quat_yaw)  # (N, 7)
-
-        # 对球坐标进行插值后转换到笛卡尔坐标
-        pos_interp_local = sphere2cart(torch.lerp(self.ee_start_sphere,self.ee_end_sphere,alpha))
-        # 位置：线性插值
-        # pos_interp = (1 - alpha) * self.pose_start_w[:,:3] + alpha * self.pose_end_w[..., :3]  # (N, 3)
-        # self.pose_command_w = torch.cat([pos_interp, quat_interp], dim=-1)  # (N, 7)
-        pos_interp_w = math_utils.quat_apply(quat_yaw, pos_interp_local) + origin_pos  # (N, 3)
-        self.pose_command_w = torch.cat([pos_interp_w, self.pose_end_w[..., 3:]], dim=-1)
-
-        # local 姿态：世界系固定目标姿态 转回 当前 local frame
-        quat_orn_local = math_utils.quat_mul(
-            math_utils.quat_conjugate(quat_yaw),
-            self.pose_end_w[..., 3:]
-        )  # (N, 4)
-        self.pose_command_local = torch.cat([pos_interp_local, quat_orn_local], dim=-1)
-        # print("[HeightInvariantEECommand] pose_command_w:", self.pose_command_w)
-        self.t += self._env.step_dt
-
-        # 检查是否需要重采样，如果插值时间超过轨迹时间 + 保持时间，则重采样新目标
-        done_mask = self.t >= (self.T_traj + self.T_hold)
-        if done_mask.any():
-            self._resample(done_mask.nonzero(as_tuple=False).flatten())
-
-    def _update_metrics(self):
-
-        pos_error, rot_error = math_utils.compute_pose_error(
-            self.pose_command_w[:, :3],
-            self.pose_command_w[:, 3:],
-            self.robot.data.body_pos_w[:, self.body_idx],   # 标量idx -> (N, 3)
-            self.robot.data.body_quat_w[:, self.body_idx],  # 标量idx -> (N, 4)
-        )
-        self.metrics["position_error"] = torch.norm(pos_error, dim=-1)
-        self.metrics["orientation_error"] = torch.norm(rot_error, dim=-1)
+        pass
 
     def collision_check(self, env_ids: torch.Tensor) -> torch.Tensor:
         """
-        检查 pose_start_w → pose_end_w 路径是否与 AABB 碰撞盒或地面相交。
+        检查 ee_start_pos_sphere → ee_end_pos_sphere 路径是否与 AABB 碰撞盒或地面相交。
         返回: collision_mask (len(env_ids),)  True = 碰撞，需要重采样
         """
         origin_pos, quat_yaw = self.get_height_invariant_base_frame(self._env, env_ids)
 
         # 球坐标插值（在球坐标空间做 lerp）
-        # ee_start_sphere / ee_end_sphere shape: (N, 3)，假设为 (r, θ, φ)
+        # ee_start_pos_sphere / ee_end_pos_sphere shape: (N, 3)，假设为 (r, θ, φ)
         t = self.collision_check_t  # (T,)
         
         # 球坐标空间线性插值: (1, N, 3) + (T, 1, 1) * delta → (T, N, 3)
-        sphere_start = self.ee_start_sphere[env_ids]  # (N, 3)
-        sphere_end   = self.ee_end_sphere[env_ids]    # (N, 3)
+        sphere_start = self.ee_start_pos_sphere[env_ids]  # (N, 3)
+        sphere_end   = self.ee_end_pos_sphere[env_ids]    # (N, 3)
         
         path_sphere = sphere_start.unsqueeze(0) + t[:, None, None] * (
             sphere_end - sphere_start
@@ -228,8 +180,6 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         T, N, _ = path_sphere.shape
         path_cart_local = sphere2cart(path_sphere.reshape(T * N, 3)).reshape(T, N, 3)  # (T, N, 3)
 
-        # start 需要转到世界坐标（local → world），end 已是世界坐标
-        # 对路径上所有点做 local → world 变换
         # local_to_world 期望输入 (N, 3)，这里批量处理 (T*N, 3)
         origin_pos_rep = origin_pos.unsqueeze(0).expand(T, N, 3).reshape(T * N, 3)
         quat_yaw_rep   = quat_yaw.unsqueeze(0).expand(T, N, 4).reshape(T * N, 4)
@@ -274,8 +224,7 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         - 朝向：只保留 yaw，去除 roll 和 pitch
         """
         # 获取机械臂arm_base的位置 
-        arm_base_link_idx = env.scene["robot"].data.body_names.index(self.cfg.arm_base_link_name)
-        arm_base_link_pos_w = env.scene["robot"].data.body_pos_w[env_ids, arm_base_link_idx]
+        arm_base_link_pos_w = env.scene["robot"].data.body_pos_w[env_ids, self.arm_base_link_idx]
         # 获取基座的姿态
         base_quat_w = env.scene["robot"].data.root_quat_w[env_ids]  # (N, 4) wxyz
 
@@ -294,14 +243,68 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
     
     def _resample_ee_goal_orn(self, env_ids):
         """
-        SO(3)中均匀采样EE目标位姿
+        在锥形范围内采样 EE 目标姿态：
+        - 锥轴对齐到目标位置向量方向（sphere2cart(ee_end_pos_sphere)）；
+        - 锥张角（pitch/yaw 范围）随径向距离 p_l 增大而收窄；
+        - roll（绕锥轴自转）不受距离影响，仍在 o_roll 范围内均匀采样。
         """
-        # ---------- 姿态（欧拉角） ----------
         n = len(env_ids)
-        r_roll  = torch.empty(n, device=self.device).uniform_(*self.cfg.ranges.o_roll)
-        r_pitch = torch.empty(n, device=self.device).uniform_(*self.cfg.ranges.o_pitch)
+
+        # ---- 1. 根据径向距离 p_l 计算锥角收缩系数 ----
+        p_l = self.ee_end_pos_sphere[env_ids, 0]  # (N,) 径向距离，此时位置应已采样完毕
+        l_min, l_max = self.cfg.ranges.p_l
+        frac = ((p_l - l_min) / max(l_max - l_min, 1e-6)).clamp(0.0, 1.0)  # 距离越远 frac 越大
+
+        # 近处 scale=1（用满 o_pitch/o_yaw 范围），远处收缩到 min_scale
+        min_scale = getattr(self.cfg.ranges, "orn_cone_min_scale", 0.1)
+        scale = 1.0 - frac * (1.0 - min_scale)  # (N,)
+
+        def _sample_scaled(rng, scale):
+            lo, hi = rng  # 假设范围以 0 为中心（如 (-a, a)），直接按 scale 缩放上下界
+            lo_s, hi_s = lo * scale, hi * scale
+            u = torch.rand(n, device=self.device)
+            return lo_s + u * (hi_s - lo_s)
+
+        r_roll  = _sample_scaled(self.cfg.ranges.o_roll, scale)
+        r_pitch = _sample_scaled(self.cfg.ranges.o_pitch, scale)
+        # yaw（绕最终 z 轴自转）不影响 z 轴指向，不缩放
         r_yaw   = torch.empty(n, device=self.device).uniform_(*self.cfg.ranges.o_yaw)
-        self.ee_end_orn_quat[env_ids] = math_utils.quat_from_euler_xyz(r_roll, r_pitch, r_yaw)  # (N, 4) wxyz
+
+
+        quat_local = math_utils.quat_from_euler_xyz(r_roll, r_pitch, r_yaw)  # (N,4) 锥内局部偏转
+
+        # ---- 2. 计算锥轴对齐旋转：把默认参考方向对齐到位置向量方向 ----
+        pos_dir = math_utils.normalize(sphere2cart(self.ee_end_pos_sphere[env_ids]))  # (N,3)
+        ref_axis = torch.zeros_like(pos_dir)
+        ref_axis[:, 2] = 1.0  # 与原实现里 roll=pitch=yaw=0 时的默认朝向保持一致（局部 z 轴）
+
+        q_align = self._quat_from_two_vectors(ref_axis, pos_dir)  # (N,4) wxyz
+
+        # ---- 3. 组合：先做锥内局部偏转，再整体对齐到位置方向 ----
+        self.ee_end_orn_quat[env_ids] = math_utils.quat_mul(q_align, quat_local)
+
+    def _quat_from_two_vectors(self, v_from: torch.Tensor, v_to: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        """计算把 v_from 旋转到 v_to 的最短路径四元数 (wxyz)，v_from/v_to 形状为 (N,3)。"""
+        v_from = math_utils.normalize(v_from)
+        v_to = math_utils.normalize(v_to)
+        dot = (v_from * v_to).sum(-1, keepdim=True)          # (N,1)
+        cross = torch.cross(v_from, v_to, dim=-1)             # (N,3)
+
+        quat = torch.cat([1.0 + dot, cross], dim=-1)          # (N,4) 未归一化
+
+        # 处理 v_from 与 v_to 几乎完全反向的退化情况（叉积接近零）
+        parallel_neg = dot.squeeze(-1) < (-1.0 + eps)
+        if parallel_neg.any():
+            idx = parallel_neg.nonzero(as_tuple=True)[0]
+            v = v_from[idx]
+            aux = torch.zeros_like(v)
+            aux[:, 0] = 1.0
+            collinear = v[:, 0].abs() > 0.9
+            aux[collinear] = torch.tensor([0.0, 1.0, 0.0], device=v.device)
+            ortho = math_utils.normalize(torch.cross(v, aux, dim=-1))
+            quat[idx] = torch.cat([torch.zeros(len(idx), 1, device=v.device), ortho], dim=-1)
+
+        return math_utils.normalize(quat)
 
     def _resample_ee_goal_sphere(self, env_ids):
         """
@@ -309,36 +312,33 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         """
         # ---------- 位置（球坐标系） ----------
         n = len(env_ids)
-        self.ee_end_sphere[env_ids] = torch.stack([
+        self.ee_end_pos_sphere[env_ids] = torch.stack([
             torch.empty(n, device=self.device).uniform_(*self.cfg.ranges.p_l),
             torch.empty(n, device=self.device).uniform_(*self.cfg.ranges.p_pitch),
             torch.empty(n, device=self.device).uniform_(*self.cfg.ranges.p_yaw),
         ], dim=-1)  # (N, 3)
-
-
     
     def _resample_ee_goal(self, env_ids):
         init_env_ids = env_ids.clone()
-        self._resample_ee_goal_orn(env_ids)
         # 起点优先使用上一轮的终点球坐标，保证插值命令连续且起点远离当前 EE。
         # 仅当上一轮终点为零向量时（首次 reset）才回退到真实 EE 位置。
-        prev_end_valid = self.ee_end_sphere[env_ids].norm(dim=-1) > 0  # (N,)
+        prev_end_valid = self.ee_end_pos_sphere[env_ids].norm(dim=-1) > 0  # (N,)
         if prev_end_valid.all():
-            self.ee_start_sphere[env_ids] = self.ee_end_sphere[env_ids].clone()
+            self.ee_start_pos_sphere[env_ids] = self.ee_end_pos_sphere[env_ids].clone()
         else:
             # 部分环境是首次 reset，分别处理
             ids_valid   = env_ids[prev_end_valid]
             ids_invalid = env_ids[~prev_end_valid]
 
             if len(ids_valid) > 0:
-                self.ee_start_sphere[ids_valid] = self.ee_end_sphere[ids_valid].clone()
+                self.ee_start_pos_sphere[ids_valid] = self.ee_end_pos_sphere[ids_valid].clone()
 
             if len(ids_invalid) > 0:
                 ee_pos_w = self.robot.data.body_pos_w[ids_invalid, self.body_idx]
                 origin_pos, quat_yaw = self.get_height_invariant_base_frame(self._env, ids_invalid)
                 quat_yaw_inv = math_utils.quat_conjugate(quat_yaw)
                 ee_pos_local = math_utils.quat_apply(quat_yaw_inv, ee_pos_w - origin_pos)
-                self.ee_start_sphere[ids_invalid] = cart2sphere(ee_pos_local)
+                self.ee_start_pos_sphere[ids_invalid] = cart2sphere(ee_pos_local)
 
         for i in range(self.cfg.max_resample_attempts):
             self._resample_ee_goal_sphere(env_ids)
@@ -346,41 +346,21 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
             env_ids = env_ids[collision_mask]
             if len(env_ids) == 0:
                 break
-        
-        self.ee_end_cart[init_env_ids,:] = sphere2cart(self.ee_end_sphere[init_env_ids,:])
-        self.pose_end_local[init_env_ids] = torch.cat(
-            [self.ee_end_cart[init_env_ids], self.ee_end_orn_quat[init_env_ids]], dim=-1
+        self._resample_ee_goal_orn(init_env_ids)
+        self.ee_end_pos_cart[init_env_ids,:] = sphere2cart(self.ee_end_pos_sphere[init_env_ids,:])
+        self.pose_end_cart[init_env_ids] = torch.cat(
+            [self.ee_end_pos_cart[init_env_ids], self.ee_end_orn_quat[init_env_ids]], dim=-1
         )  # (N, 7)
-
-    def local_to_world(self, pose_local, origin_pos, quat_yaw):
-        """
-        将 height-invariant 坐标系中的目标位姿 (N, 7) 转换到世界坐标系。
-
-        pose_local: (N, 7)  前3位为位置，后4位为四元数 wxyz
-        origin_pos: (N, 3)
-        quat_yaw:   (N, 4)  仅含 yaw 的四元数
-        """
-        pos_local  = pose_local[..., :3]   # (N, 3)
-        quat_local = pose_local[..., 3:]   # (N, 4)
-
-        # 位置：先用 yaw 旋转，再加原点偏移
-        pos_world = math_utils.quat_apply(quat_yaw, pos_local) + origin_pos  # (N, 3)
-
-        # 姿态：world_quat = quat_yaw ⊗ quat_local
-        quat_world = math_utils.quat_mul(quat_yaw, quat_local)  # (N, 4)
-
-        pose_world = torch.cat([pos_world, quat_world], dim=-1)  # (N, 7)
-        return pose_world
     
     @property
     def command(self) -> torch.Tensor:
         """返回当前命令（实现抽象属性方法）"""
-        return self.pose_command_w
+        return self.pose_command_b
     
     @property
     def command_local(self) -> torch.Tensor:
         """height-invariant local 坐标，给 obs 用"""
-        return self.pose_command_local
+        return self.pose_command_b
     
     def _set_debug_vis_impl(self, debug_vis: bool):
         super()._set_debug_vis_impl(debug_vis)
@@ -430,9 +410,7 @@ class HeightInvariantEECommandCfg(mdp.UniformPoseCommandCfg):
 
         o_yaw: tuple[float,float] = MISSING      # orientation_yaw
 
-        T_traj: tuple[float, float] = MISSING    # 插值间隔采样范围
-
-        T_hold: tuple[float, float] = MISSING  # 保持时间范围
+        orn_cone_min_scale: float = MISSING      # 锥桶最小收缩范围
 
     ranges: Ranges = MISSING
 
