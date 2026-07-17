@@ -151,6 +151,14 @@ class TeleopLLAction(ActionTerm):
         self._low_level_obs_manager = ObservationManager({"ll_policy": cfg.low_level_observations}, env)
         self._counter = 0
 
+        # default EE 位姿缓存（body系），首次使用时 / reset 时填充
+        self._default_ee_pos_b: torch.Tensor = torch.zeros(self.num_envs, 3, device=self.device)
+        self._default_ee_quat_b: torch.Tensor = torch.zeros(self.num_envs, 4, device=self.device)
+        self._default_ee_quat_b[:, 0] = 1.0  # 单位四元数初始化，防止未初始化时出现非法值
+        self._default_ee_pose_initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._ee_body_idx = self.robot.find_bodies(self.cfg.ee_body_name)[0][0]
+    
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -182,7 +190,29 @@ class TeleopLLAction(ActionTerm):
         scale  = (hi - lo) / 2.0
         offset = (hi + lo) / 2.0
         return torch.tanh(x) * scale + offset
+    
+    @staticmethod
+    def _clamp_range(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:
+        """线性裁剪到 [lo, hi]，不做 tanh 非线性压缩。"""
+        return torch.clamp(x, min=lo, max=hi)
 
+    def _capture_default_ee_pose(self, env_ids: torch.Tensor):
+        """记录指定 env 在 body 系下的当前 EE 位姿，作为后续增量命令的基准。"""
+        if env_ids.numel() == 0:
+            return
+
+        root_quat_w = self.robot.data.root_quat_w[env_ids]            # (n, 4)
+        root_pos_w  = self.robot.data.root_pos_w[env_ids]              # (n, 3)
+        ee_pos_w    = self.robot.data.body_pos_w[env_ids, self._ee_body_idx]   # (n, 3)
+        ee_quat_w   = self.robot.data.body_quat_w[env_ids, self._ee_body_idx]  # (n, 4)
+
+        root_quat_inv = math_utils.quat_inv(root_quat_w)
+        ee_pos_b  = math_utils.quat_apply(root_quat_inv, ee_pos_w - root_pos_w)
+        ee_quat_b = math_utils.quat_mul(root_quat_inv, ee_quat_w)
+
+        self._default_ee_pos_b[env_ids]  = ee_pos_b
+        self._default_ee_quat_b[env_ids] = ee_quat_b
+        self._default_ee_pose_initialized[env_ids] = True
     # ------------------------------------------------------------------
     # process_actions  （核心：直接映射，无累积）
     # ------------------------------------------------------------------
@@ -191,18 +221,24 @@ class TeleopLLAction(ActionTerm):
         self._raw_actions[:] = actions
         r = self.cfg.low_level_command_ranges
 
-        # ── 1. 底盘速度（绝对值，tanh + range mapping） ──────────────
-        self._ll_command[:, 0] = self._tanh_range(actions[:, 0], r.lin_vel_x[0], r.lin_vel_x[1])
-        self._ll_command[:, 1] = self._tanh_range(actions[:, 1], r.lin_vel_y[0], r.lin_vel_y[1])
-        self._ll_command[:, 2] = self._tanh_range(actions[:, 2], r.ang_vel_z[0], r.ang_vel_z[1])
+        # 若有 env 还没记录过 default pose（例如刚创建/还未走过 reset），先补上
+        uninit_ids = (~self._default_ee_pose_initialized).nonzero(as_tuple=False).squeeze(-1)
+        if uninit_ids.numel() > 0:
+            self._capture_default_ee_pose(uninit_ids)
 
-        # ── 2. EE 位置（body系 → world系） ───────────────────────────
-        # 先把 raw action 映射到 body系物理范围，再旋转到 world系
-        ee_pos_b = torch.stack([
-            self._tanh_range(actions[:, 3], r.ee_pos_x[0], r.ee_pos_x[1]),
-            self._tanh_range(actions[:, 4], r.ee_pos_y[0], r.ee_pos_y[1]),
-            self._tanh_range(actions[:, 5], r.ee_pos_z[0], r.ee_pos_z[1]),
+        # ── 1. 底盘速度（绝对值） ──────────────────────────────────
+        self._ll_command[:, 0] = self._clamp_range(actions[:, 0], r.lin_vel_x[0], r.lin_vel_x[1])
+        self._ll_command[:, 1] = self._clamp_range(actions[:, 1], r.lin_vel_y[0], r.lin_vel_y[1])
+        self._ll_command[:, 2] = self._clamp_range(actions[:, 2], r.ang_vel_z[0], r.ang_vel_z[1])
+
+        # ── 2. EE 位置：default_pos_b + 增量 → world系 ──────────────
+        delta_pos_b = torch.stack([
+            self._clamp_range(actions[:, 4], r.ee_pos_x[0], r.ee_pos_x[1]),
+            self._clamp_range(-actions[:, 3], r.ee_pos_y[0], r.ee_pos_y[1]),
+            self._clamp_range(actions[:, 5], r.ee_pos_z[0], r.ee_pos_z[1]),
         ], dim=-1)  # (N, 3)
+
+        ee_pos_b = self._default_ee_pos_b + delta_pos_b
 
         root_quat_w = self.robot.data.root_quat_w  # (N, 4)
         root_pos_w  = self.robot.data.root_pos_w   # (N, 3)
@@ -210,18 +246,26 @@ class TeleopLLAction(ActionTerm):
         target_pos_w[:, 2] = torch.clamp(target_pos_w[:, 2], min=0.0)  # z不低于地面
         self._ll_command[:, 3:6] = target_pos_w
 
-        # ── 3. EE 姿态（body系欧拉角 → world系四元数） ───────────────
-        ee_roll_b  = self._tanh_range(actions[:, 6], -math.pi,        math.pi)
-        ee_pitch_b = self._tanh_range(actions[:, 7], r.ee_pitch[0],   r.ee_pitch[1])
-        ee_yaw_b   = self._tanh_range(actions[:, 8], -math.pi,        math.pi)
+        # ── 3. EE 姿态：default_quat_b ⊗ 增量四元数 → world系 ───────
+        ee_droll_b  = self._clamp_range(-actions[:, 6], -math.pi, math.pi)
+        ee_dpitch_b = self._clamp_range(actions[:, 7], -math.pi, math.pi)
+        ee_dyaw_b   = self._clamp_range(-actions[:, 8], -math.pi, math.pi)
 
-        ee_quat_b = math_utils.quat_from_euler_xyz(ee_roll_b, ee_pitch_b, ee_yaw_b)
+        delta_quat_b = math_utils.quat_from_euler_xyz(ee_droll_b, ee_dpitch_b, ee_dyaw_b)
+        # 增量在 default 姿态的局部系下叠加：先 default，再叠加增量
+        ee_quat_b = math_utils.quat_mul(self._default_ee_quat_b, delta_quat_b)
+        # print(f"ee_droll_b: {ee_droll_b}, ee_dpitch_b: {ee_dpitch_b}, ee_dyaw_b: {ee_dyaw_b}")
         self._ll_command[:, 6:10] = math_utils.quat_mul(root_quat_w, ee_quat_b)
 
-        # ── 4. 机体姿态（直接映射到目标范围） ────────────────────────
-        self._ll_command[:, 10] = self._tanh_range(actions[:, 9],  r.target_height[0], r.target_height[1])
-        self._ll_command[:, 11] = self._tanh_range(actions[:, 10], r.target_pitch[0],  r.target_pitch[1])
-        self._ll_command[:, 12] = self._tanh_range(actions[:, 11], r.target_roll[0],   r.target_roll[1])
+        # ── 4. 机体姿态（直接映射到目标范围，不变） ──────────────────
+        self._ll_command[:, 10] = self._clamp_range(actions[:, 9],  r.target_height[0], r.target_height[1])
+        self._ll_command[:, 11] = self._clamp_range(actions[:, 10], r.target_pitch[0],  r.target_pitch[1])
+        self._ll_command[:, 12] = self._clamp_range(actions[:, 11], r.target_roll[0],   r.target_roll[1])
+        # print(f"[TeleopLLAction] ll_command: ")
+        # print(f"{self._ll_command[:, 0:3]} (vx,vy,wz),")
+        # print(f"{self._ll_command[:, 3:6]} (ee_pos_w), ")
+        # print(f"{self._ll_command[:, 6:10]} (ee_quat_w),")
+        # print(f"{self._ll_command[:, 10:13]} (body_hpr)")
 
     # ------------------------------------------------------------------
     # apply_actions
@@ -235,6 +279,7 @@ class TeleopLLAction(ActionTerm):
                 self.low_level_leg_actions[reset_ids, :]   = 0
                 self.low_level_wheel_actions[reset_ids, :] = 0
                 self.low_level_ee_actions[reset_ids, :]    = 0
+                self._capture_default_ee_pose(reset_ids)
 
         if self._counter % self.cfg.low_level_decimation == 0:
             low_level_obs = self._low_level_obs_manager.compute_group("ll_policy")
@@ -337,10 +382,10 @@ class TeleopLLActionCfg(ActionTermCfg):
 
     @configclass
     class LowLevelCommandRanges:
-        lin_vel_x: tuple[float, float] = (-1.0,  1.0)
+        lin_vel_x: tuple[float, float] = (-5.0,  5.0)
         lin_vel_y: tuple[float, float] = (-1.0,  1.0)
         ang_vel_z: tuple[float, float] = (-1.0,  1.0)
-        ee_pos_x:  tuple[float, float] = (0.4,   0.8)
+        ee_pos_x:  tuple[float, float] = (-0.4,   0.8)
         ee_pos_y:  tuple[float, float] = (-0.4,  0.4)
         ee_pos_z:  tuple[float, float] = (-0.6,  0.6)
         ee_pitch:  tuple[float, float] = (-math.pi / 2, 0.0)
