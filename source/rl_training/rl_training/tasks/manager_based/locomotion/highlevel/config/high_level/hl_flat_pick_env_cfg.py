@@ -450,7 +450,8 @@ class HLFlatPickCommandCfg(HighLevelCommandsCfg):
             o_yaw = (-math.pi, math.pi),
             # 插值时间间隔采样范围
             T_traj = (1.0, 3.0),
-            T_hold = (0.5, 2.0)
+            # T_hold = (0.5, 2.0)
+            orn_cone_min_scale = 0.1,
         ),
     )
     

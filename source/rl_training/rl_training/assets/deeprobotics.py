@@ -149,8 +149,8 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             ".*wheel_joint": 0.0,
             # 机械臂旋转关节
             "arm_joint1": 0.0,       # limit: [-2.618, 2.618]  ✓ 安全
-            "arm_joint2": 3.0,       # limit: [0, 3.14]        ⚠️ 边界改为0.1
-            "arm_joint3": -1.0,      # limit: [-2.697, 0]      ⚠️ 边界改为-0.1
+            "arm_joint2": 0.5,       # limit: [0, 3.14]        ⚠️ 边界改为0.1
+            "arm_joint3": -0.5,      # limit: [-2.697, 0]      ⚠️ 边界改为-0.1
             "arm_joint4": 0.0,       # limit: [-1.832, 1.832]  ✓ 安全
             "arm_joint5": 0.0,       # limit: [-1.22, 1.22]    ✓ 安全
             "arm_joint6": 0.0,       # limit: [-3.14, 3.14]    ✓ 安全
@@ -184,42 +184,53 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             min_delay=0,
             max_delay=5,
         ),
-        # "piper_arm": DelayedPDActuatorCfg(
-        #     joint_names_expr=["arm_joint[1-6]"],
-        #     effort_limit=100.0,       # 根据 Piper 实际力矩限制填写
-        #     velocity_limit=3.0,     # rad/s
-        #     stiffness=400.0, # 20
-        #     damping=80.0, # 0.1
-        #     friction=0.01,
-        #     armature=0.01,
-        #     min_delay=0,
-        #     max_delay=0,
-        # ),
-        "piper_arm": ImplicitActuatorCfg(
+        "piper_arm": DelayedPDActuatorCfg(
             joint_names_expr=["arm_joint[1-6]"],
-            effort_limit_sim=100.0,       # 力矩限制（仿真）
-            velocity_limit_sim=3.0,     # rad/s
+            effort_limit=100.0,       # 根据 Piper 实际力矩限制填写
+            velocity_limit=3.0,     # rad/s
             stiffness=40.0, # 20
-            damping=8.0, # 0.1
+            damping=1, # 0.1
             friction=0.01,
             armature=0.01,
-            # min_delay=0,
-            # max_delay=0,
+            min_delay=0,
+            max_delay=0,
         ),
-
-
-        # 新增：夹爪（如果是位置控制）
-        "piper_gripper": ImplicitActuatorCfg(
+        "piper_gripper": DelayedPDActuatorCfg(
             joint_names_expr=["arm_joint[7-8]"],
-            effort_limit_sim=100.0,
-            velocity_limit_sim=1.0,
-            stiffness=4000.0,
-            damping=200.0,
-            friction=0.0,
-            armature=0.0,
-            # min_delay=0,
-            # max_delay=5,
+            effort_limit=100.0,       # 根据 Piper 实际力矩限制填写
+            velocity_limit=3.0,     # rad/s
+            stiffness=4000.0, # 20
+            damping=200.0, # 0.1
+            friction=0.01,
+            armature=0.01,
+            min_delay=0,
+            max_delay=5,
         ),
+        # "piper_arm": ImplicitActuatorCfg(
+        #     joint_names_expr=["arm_joint[1-6]"],
+        #     effort_limit_sim=100.0,       # 力矩限制（仿真）
+        #     velocity_limit_sim=3.0,     # rad/s
+        #     stiffness=40.0, # 20  # 在ImplicitActuatorCfg不生效，用DelayedPDActuatorCfg在60-100
+        #     damping=8.0, # 0.1  # 用DelayedPDActuatorCfg在0-20
+        #     friction=0.01,
+        #     armature=0.01,
+        #     # min_delay=0,
+        #     # max_delay=4,
+        # ),
+
+
+        # # 新增：夹爪（如果是位置控制）
+        # "piper_gripper": ImplicitActuatorCfg(
+        #     joint_names_expr=["arm_joint[7-8]"],
+        #     effort_limit_sim=100.0,
+        #     velocity_limit_sim=1.0,
+        #     stiffness=4000.0,
+        #     damping=200.0,
+        #     friction=0.0,
+        #     armature=0.0,
+        #     # min_delay=0,
+        #     # max_delay=5,
+        # ),
     },
 )
 

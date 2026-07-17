@@ -32,63 +32,56 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
     cfg: CommandDrivenIKActionCfg
 
     def __init__(self, cfg, env: ManagerBasedRLEnv):
+        
         self._ee_vis_markers: VisualizationMarkers | None = None
         super().__init__(cfg, env)
+        step_dt = self._env.step_dt  # = physics_dt * decimation  # 0.02
+        max_ee_lin_vel = 1.5   # m/s，按你的机械臂/任务合理设定
+        max_ee_ang_vel = 6.0   # rad/s
+
+        self.max_pos_step = max_ee_lin_vel * step_dt
+        self.max_rot_step = max_ee_ang_vel * step_dt
+        
         
 
     def process_actions(self, actions: torch.Tensor):
-        """忽略 policy 输出，直接从 CommandManager 读取目标位姿并转换到 root 系。"""
-        pass
+        command = self._env.command_manager.get_command(self.cfg.command_name)
+        # print(f"CommandDrivenIKAction: command={command}")
+        target_pos_b = command[:, 0:3]
+        target_quat_b = command[:, 3:7]
 
-        # 将世界系目标位姿转换到机器人 root 系
-        # 这对于 floating base（底盘在移动）是必须的！
-        # root_pos_w = self._asset.data.root_pos_w       # (num_envs, 3)
-        # root_quat_w = self._asset.data.root_quat_w     # (num_envs, 4) (w, x, y, z)
+        # 当前末端真实位姿（root系）
+        ee_pos_curr, ee_quat_curr = self._compute_frame_pose()
 
-        # target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
-        #     root_pos_w, root_quat_w,
-        #     target_pos_w, target_quat_w
-        # )
-        # # 打印第一个环境的信息
-        # ee_pos_b, ee_quat_b = self._compute_frame_pose()
-        # error = torch.norm(target_pos_b[0] - ee_pos_b[0]).item()
-        # print(f"IK controlling joints: {self._joint_names}")
-        # print(list(enumerate(self._asset.data.joint_names)))
-        # print(f"joint_ids: {self._joint_ids}")
-        # print(f"target_b: {target_pos_b[0].cpu().numpy().round(3)}, "
-        #     f"ee_b:     {ee_pos_b[0].cpu().numpy().round(3)}, "
-        #     f"error:    {error:.4f}")
-        # print(f"root_pos_w:     {self._asset.data.root_pos_w[0].cpu().numpy().round(3)}")
-        # print(f"arm_link6_pos_w:{self._asset.data.body_pos_w[0, self._body_idx].cpu().numpy().round(3)}")
-        # print(f"body_idx: {self._body_idx}")
-        # print(f"body_name at idx: {self._asset.data.body_names[self._body_idx]}")
-        # 拼接为 (num_envs, 7) 送入 IK controller
-        # use_relative_mode=False 时 set_command 只需要目标位姿，不需要当前 EE 位姿
-        # ik_command = torch.cat([target_pos_b, target_quat_b], dim=-1)
-        # # self._ik_controller.set_command(ik_command)
-        # ee_pos_curr, ee_quat_curr = self._compute_frame_pose()
-        # self._ik_controller.set_command(ik_command, ee_pos_curr, ee_quat_curr)
+        # ---- 位置增量限幅 ----
+        pos_error = target_pos_b - ee_pos_curr
+        pos_error_norm = torch.norm(pos_error, dim=-1, keepdim=True)
+        scale = torch.clamp(self.max_pos_step / (pos_error_norm + 1e-6), max=1.0)
+        clipped_pos_b = ee_pos_curr + pos_error * scale
+        # print(f"{pos_error_norm=}, {scale=}")
+        # print(f"target_pos_b: {target_pos_b}, ee_pos_curr: {ee_pos_curr}, pos_error: {pos_error}")
+
+        # ---- 姿态增量限幅 ----
+        # quat_error 满足: target = quat_error * current
+        quat_error = math_utils.quat_mul(target_quat_b, math_utils.quat_conjugate(ee_quat_curr))
+        # 保证走最短路径（四元数双重覆盖问题）
+        quat_error = torch.where(quat_error[:, 0:1] < 0, -quat_error, quat_error)
+        # print(f"{quat_error=}")
+
+        rotvec = math_utils.axis_angle_from_quat(quat_error)  # 方向=转轴, 模长=角度
+        angle = torch.norm(rotvec, dim=-1, keepdim=True)
+        axis = rotvec / (angle + 1e-6)
+        clipped_angle = torch.clamp(angle, max=self.max_rot_step)
+        clipped_quat_error = math_utils.quat_from_angle_axis(clipped_angle.squeeze(-1), axis)
+        clipped_quat_b = math_utils.quat_mul(clipped_quat_error, ee_quat_curr)
+        # print(f"{clipped_quat_error=}")
+        # ik_command = torch.cat([clipped_pos_b, clipped_quat_b], dim=-1)
+        ik_command = torch.cat([clipped_pos_b, target_quat_b], dim=-1)
+        ik_command = command
+        self._ik_controller.set_command(ik_command, ee_pos_curr, ee_quat_curr)
 
     def apply_actions(self):
         """调用父类的 apply_actions 来执行 IK 控制。"""
-        # 从 CommandManager 读取世界系目标位姿
-        # command shape: (num_envs, 7) -> [x, y, z, qw, qx, qy, qz]
-        command = self._env.command_manager.get_command(self.cfg.command_name)
-
-        self._target_pos_w = command[:, 0:3]
-        self._target_quat_w = command[:, 3:7]  # (w, x, y, z)
-        root_pos_w = self._asset.data.root_pos_w
-        root_quat_w = self._asset.data.root_quat_w
-        
-        target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
-            root_pos_w, root_quat_w,
-            self._target_pos_w, self._target_quat_w
-        )
-        ik_command = torch.cat([target_pos_b, target_quat_b], dim=-1)
-        
-        # 用最新位姿 set_command，然后立即 compute，不存在时序差
-        ee_pos_curr, ee_quat_curr = self._compute_frame_pose()
-        self._ik_controller.set_command(ik_command, ee_pos_curr, ee_quat_curr)
         super().apply_actions()
 
     def _get_ee_pose_world(self) -> tuple[torch.Tensor, torch.Tensor]:

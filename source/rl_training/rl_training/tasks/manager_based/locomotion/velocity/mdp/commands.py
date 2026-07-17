@@ -105,7 +105,6 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         device = env.device
 
         self.pose_end_cart = torch.zeros(num_envs, 7, device=device)
-        self.pose_command_b = torch.zeros(num_envs, 7, device=device)
 
         self.ee_start_pos_sphere = torch.zeros(self.num_envs, 3, device=self.device)
         self.ee_end_pos_sphere = torch.zeros(self.num_envs, 3, device=self.device)
@@ -131,31 +130,82 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         self.max_resample_attempts = cfg.max_resample_attempts
         self.arm_base_link_idx = env.scene["robot"].data.body_names.index(self.cfg.arm_base_link_name)
 
+        # ---- 轨迹插值相关 ----
+        self.T_traj = torch.ones(num_envs, device=device)   # 每个 env 的移动跟踪时长（秒）
+        self.elapsed_time = torch.zeros(num_envs, device=device)  # 距离上一次重采样经过的时间（秒）
+ 
+        self.pose_start_b = torch.zeros(num_envs, 7, device=device)  # 插值起点（重采样瞬间EE位姿）
+        self.pose_end_b = torch.zeros(num_envs, 7, device=device)    # 插值终点（本次重采样得到的目标位姿）
+
 
     def _resample_command(self, env_ids):
+        # 0. 记录插值起点：重采样这一刻实际正在输出的命令，保证轨迹连续不跳变
+        # self.pose_start_b[env_ids] =  self.pose_command_b[env_ids].clone()
+        self.ee_body_idx = self.robot.find_bodies("arm_link6")[0][0]
+        ee_pos_w = self.robot.data.body_pos_w[env_ids, self.ee_body_idx]
+        ee_quat_w = self.robot.data.body_quat_w[env_ids, self.ee_body_idx]
+
+        root_pos_w = self.robot.data.root_pos_w[env_ids]
+        root_quat_w = self.robot.data.root_quat_w[env_ids]
+
+        ee_pos_b, ee_quat_b = math_utils.subtract_frame_transforms(
+            root_pos_w,
+            root_quat_w,
+            ee_pos_w,
+            ee_quat_w,
+        )
+
+        self.pose_start_b[env_ids] = torch.cat(
+            [ee_pos_b, ee_quat_b], dim=-1
+        )
         # 1. 获取当前 height-invariant 坐标系
         origin_pos, quat_yaw = self.get_height_invariant_base_frame(self._env, env_ids)
-
+ 
         # 2. 球坐标采样新目标
         self._resample_ee_goal(env_ids)
-
+ 
         # 3. 转换到当前 root 坐标系
         pos_local = self.pose_end_cart[env_ids, :3]
         quat_local = self.pose_end_cart[env_ids, 3:]
-
+ 
         pos_world = math_utils.quat_apply(quat_yaw, pos_local) + origin_pos
         quat_world = math_utils.quat_mul(quat_yaw, quat_local)
-
+ 
         root_pos_w = self.robot.data.root_pos_w[env_ids]
         root_quat_w = self.robot.data.root_quat_w[env_ids]
         target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
             root_pos_w, root_quat_w, pos_world, quat_world,
         )
-        self.pose_command_b[env_ids] = torch.cat([target_pos_b, target_quat_b], dim=-1)
+        # 本次重采样的目标位姿作为插值终点，而不是直接写入 pose_command_b
+        self.pose_end_b[env_ids] = torch.cat([target_pos_b, target_quat_b], dim=-1)
+        # self.pose_end_b[:,:] = torch.tensor([0.6, 0, 0.1, 0.5,0.5,0.5,0.5],device=self.device)
+ 
+        # 4. 采样本段轨迹的跟踪时长 T_traj，余下时间保持不动 ，并重置计时器
+        n = len(env_ids)
+        self.T_traj[env_ids] = torch.empty(n, device=self.device).uniform_(*self.cfg.ranges.T_traj)
+        self.elapsed_time[env_ids] = 0.0
+        # self.pose_command_b[env_ids]= torch.cat([torch.tensor([[0.8, 0.0, 0.3]], device=self.device), torch.tensor([[0.5, 0.5, 0.5, 0.5]], device=self.device)], dim=-1)
+        # print(f"HeightInvariantEECommand: env_ids={env_ids}, target_pos_b={target_pos_b}, target_quat_b={target_quat_b}")
         
     
     def _update_command(self):
-        pass
+        """
+        对 pose_command_b 按 T_traj 做位置插值，姿态不插值，直接取终点姿态。
+        起点为每次重采样瞬间的位姿 pose_start_b，终点为最新一次重采样得到的 pose_end_b。
+        elapsed_time 超过 T_traj 后 alpha 被 clamp 到 1，即余下时间到达终点后保持不动。
+        """
+        dt = self._env.step_dt
+        self.elapsed_time += dt
+ 
+        alpha = (self.elapsed_time / self.T_traj).clamp(0.0, 1.0).unsqueeze(-1)  # (N, 1)
+ 
+        # 只对位置线性插值
+        self.pose_command_b[:, :3] = (
+            self.pose_start_b[:, :3] + alpha * (self.pose_end_b[:, :3] - self.pose_start_b[:, :3])
+        )
+        # 姿态不插值，直接使用终点姿态
+        self.pose_command_b[:, 3:] = self.pose_end_b[:, 3:]
+        
 
     def collision_check(self, env_ids: torch.Tensor) -> torch.Tensor:
         """
@@ -409,6 +459,8 @@ class HeightInvariantEECommandCfg(mdp.UniformPoseCommandCfg):
         o_pitch: tuple[float,float] = MISSING    # orientation_pitch
 
         o_yaw: tuple[float,float] = MISSING      # orientation_yaw
+
+        T_traj: tuple[float, float] = MISSING    # 插值间隔采样范围
 
         orn_cone_min_scale: float = MISSING      # 锥桶最小收缩范围
 

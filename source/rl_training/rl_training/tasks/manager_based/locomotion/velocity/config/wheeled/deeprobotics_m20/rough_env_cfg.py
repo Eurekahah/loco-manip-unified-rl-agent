@@ -82,7 +82,7 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
             rot=(1.0, 0.0, 0.0, 0.0),  # EE frame 相对于 body frame 的姿态偏移（四元数）
         ),
         scale=1.0,
-        debug_vis=False,
+        debug_vis=True,
     )
 
     # gripper_action = mdp.BinaryJointPositionActionCfg(
@@ -194,20 +194,6 @@ class DeeproboticsM20RewardsWithArmsCfg(DeeproboticsM20RewardsCfg):
 @configclass
 class DeeproboticsM20CurriculumsCfg(CurriculumCfg):
     """Curriculum terms for the MDP."""
-    # arm_weight_curriculum = CurrTerm(
-    #     func=mdp.advance_arm_weight,
-    #     params={
-    #         "max_iterations": 5000,       # 和 RunnerCfg 保持一致
-    #         "num_steps_per_env": 24,
-    #         "ramp_start_frac": 0.0,
-    #         "ramp_end_frac": 0.5,         # iteration=2500 时 max_weight=1.0
-    #         "max_target": 1.0,
-    #         "min_target": 0.8,
-    #         "min_start_frac": 0.5,        # max_weight>0.5 后才推 min
-    #         "initial_max_weight": 0.0,
-    #         "initial_min_weight": 0.0,
-    #     }
-    # )
     pass
 
 @configclass
@@ -252,13 +238,15 @@ class DeeproboticsM20CommandsCfg(CommandsCfg):
         arm_base_link_name="arm_base",  # 采样坐标系xy位置
         ranges=mdp.HeightInvariantEECommandCfg.Ranges(
             # 球坐标位置采样范围
-            p_l= (0.35, 0.62),           # 半径 l
-            p_pitch= (-math.pi/4, 2*math.pi/5),   # pitch p
-            p_yaw = (-3*math.pi/5, 3*math.pi/5),     # yaw y
+            p_l= (0.4, 0.62),           # 半径 l
+            p_pitch= (-math.pi/4, 1*math.pi/5),   # pitch p
+            p_yaw = (-2*math.pi/5, 2*math.pi/5),     # yaw y
             # 姿态采样范围
-            o_roll = (-math.pi / 4, math.pi / 4),
-            o_pitch =(-math.pi / 4, math.pi / 4),
+            o_roll = (-math.pi / 8, math.pi / 8),
+            o_pitch =(-math.pi / 8, math.pi / 8),
             o_yaw = (-math.pi, math.pi),
+            # 插值时间间隔采样范围
+            T_traj = (1.0, 3.0),
             orn_cone_min_scale = 0.1,
         ),
     )
