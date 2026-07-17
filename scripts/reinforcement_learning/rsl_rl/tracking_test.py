@@ -6,12 +6,16 @@
     python play_tracking_test.py \
         --task Flat-Deeprobotics-M20-Piper-WBC-play-v0 \
         --checkpoint logs/rsl_rl/<run>/model_<iter>.pt \
+        --terrain stairs \
         [--num_resample 10] \
         [--resample_interval 5.0] \
         [--env_id 0] \
         [--save_fig tracking_result.png] \
         [--num_envs 1] \
         [--headless]
+
+--terrain 可选值见 TERRAIN_CFGS: flat / stairs / stairs_inv / boxes /
+random_rough / slope / slope_inv / mixed（原始混合地形）。
 """
 
 import argparse
@@ -25,6 +29,14 @@ from isaaclab.app import AppLauncher
 # --------------------------------------------------------------------------- #
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import cli_args  # noqa: E402  （与原始 play.py 相同的本地模块）
+
+# ↓↓↓ 新增：地形名字列表，仅用于 argparse 的 choices ↓↓↓
+# 注意：这里只写死"名字"字符串，不能在 Isaac Sim 启动前 import 真正的
+# TERRAIN_CFGS（因为 terrains.py 里 `import isaaclab.terrains` 依赖 omni.*
+# 扩展，必须等 AppLauncher 把 app 启动之后才能安全 import）。
+# 名字需要和 terrains.py 里 TERRAIN_CFGS 字典的 key 完全一致。
+TERRAIN_NAMES = ["flat", "stairs", "stairs_inv", "boxes",
+                  "random_rough", "slope", "slope_inv", "mixed"]
 
 parser = argparse.ArgumentParser(description="跟踪性能测试脚本")
 # ── 原始 play.py 已有的参数 ──────────────────────────────────────────────────
@@ -45,6 +57,10 @@ parser.add_argument("--env_id", type=int, default=0,
                     help="记录哪个环境的数据（默认 0）")
 parser.add_argument("--save_fig", type=str, default=None,
                     help="图像保存路径（默认根据 checkpoint 路径自动生成 tracking_result.png）")
+# ↓↓↓ 新增：地形选择 flag ↓↓↓
+parser.add_argument("--terrain", type=str, default="flat",
+                    choices=TERRAIN_NAMES,
+                    help=f"测试使用的地形类型，可选: {TERRAIN_NAMES}（默认 flat）")
 # ── RSL-RL CLI 参数（checkpoint 等由此注入）──────────────────────────────────
 cli_args.add_rsl_rl_args(parser)
 # ── AppLauncher 参数（headless、device 等）───────────────────────────────────
@@ -85,6 +101,22 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import rl_training.tasks  # noqa: F401  触发任务注册
 
+# ↓↓↓ 新增：Isaac Sim 启动后再导入真正的地形配置字典 ↓↓↓
+# 按你的实际路径：source/rl_training/rl_training/tasks/manager_based/
+#                locomotion/velocity/mdp/terrains.py
+from rl_training.tasks.manager_based.locomotion.velocity.mdp.terrains import (
+    TERRAIN_CFGS,
+)
+
+# 保险起见做一次一致性检查：防止 TERRAIN_NAMES（argparse choices）和
+# terrains.py 里实际的 TERRAIN_CFGS.keys() 不一致导致 KeyError
+_missing = set(TERRAIN_NAMES) - set(TERRAIN_CFGS.keys())
+if _missing:
+    raise KeyError(
+        f"TERRAIN_NAMES 中的 {_missing} 在 terrains.py 的 TERRAIN_CFGS 里不存在，"
+        f"请检查两边名字是否一致。TERRAIN_CFGS 现有 keys: {list(TERRAIN_CFGS.keys())}"
+    )
+
 
 # --------------------------------------------------------------------------- #
 #  辅助：读取当前命令值
@@ -108,7 +140,7 @@ def get_commands(raw_env, env_id: int):
 # --------------------------------------------------------------------------- #
 #  辅助：读取底盘实际状态
 # --------------------------------------------------------------------------- #
-def get_obs_state(raw_env, env_id: int):
+def get_obs_state(raw_env, env_id: int, feet_ids: list[int]):
     """
     返回:
         vel  : np.ndarray [v_x, v_y, w_z]        body frame
@@ -132,7 +164,10 @@ def get_obs_state(raw_env, env_id: int):
     v_y = lin_vel_b[1].item()
     w_z = ang_vel_b[2].item()
 
-    height = robot.data.root_pos_w[env_id, 2].item()
+    base_h_w = robot.data.root_pos_w[env_id, 2].item()
+    feet_h_w = robot.data.body_pos_w[env_id, feet_ids, 2]   # (num_feet,)
+    ground_ref_h = feet_h_w.mean().item()
+    height = base_h_w - ground_ref_h + 0.09  # 加上 wheel 半径
 
     roll_t, pitch_t, _ = euler_xyz_from_quat(root_quat_w.unsqueeze(0))
     pitch = pitch_t[0].item()
@@ -161,6 +196,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     env_cfg.seed       = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
+    # ↓↓↓ 新增：按 --terrain 选择的地形，替换掉训练时的地形生成器 ↓↓↓
+    selected_terrain_cfg = TERRAIN_CFGS[args_cli.terrain]
+    if env_cfg.scene.terrain.terrain_generator is not None:
+        env_cfg.scene.terrain.terrain_generator = selected_terrain_cfg
+    print(f"[INFO] 本次测试使用地形: '{args_cli.terrain}'")
+
     env_cfg.scene.terrain.max_init_terrain_level = None
     if env_cfg.scene.terrain.terrain_generator is not None:
         env_cfg.scene.terrain.terrain_generator.num_rows = 5
@@ -173,6 +214,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     env_cfg.events.push_robot = None
     if env_cfg.curriculum is not None:
         env_cfg.curriculum.command_levels = None
+    
+    env_cfg.episode_length_s = 5.0  # 根据台阶数量和行走速度估算一次下完楼梯需要的时间
 
     # ── 测试专用：将重采样间隔固定为 dt_segment，防止环境自动打断测试节奏 ────
     for attr_name in dir(env_cfg.commands):
@@ -207,10 +250,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     log_dir = os.path.dirname(resume_path)
     print(f"[INFO] Loading model checkpoint from: {resume_path}")
 
+    # ↓↓↓ 修改：图片文件名带上地形名，避免不同地形测试结果互相覆盖 ↓↓↓
     if args_cli.save_fig is not None:
         save_fig_path = args_cli.save_fig
     else:
-        save_fig_path = os.path.join(os.path.dirname(args_cli.checkpoint), "tracking_result.png")
+        default_name = f"tracking_result_{args_cli.terrain}.png"
+        save_fig_path = os.path.join(os.path.dirname(args_cli.checkpoint), default_name)
     print(f"[INFO] 跟踪结果图像将保存至: {save_fig_path}")
 
     # ── 5. 与原始 play.py 相同：用 Runner 加载模型 ───────────────────────────
@@ -235,6 +280,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     steps_per_segment = max(1, int(dt_segment / sim_dt))
     total_steps       = steps_per_segment * n_resample
 
+    feet_body_names = [".*wheel"]
+    feet_ids, feet_names = raw_env.scene["robot"].find_bodies(feet_body_names)
+    print(f"[INFO] 用于高度参考的足端 body: {feet_names} (ids={feet_ids})")
+
     print(f"[INFO] sim_dt={sim_dt:.4f}s | 每段步数={steps_per_segment} | "
           f"总步数={total_steps} | 总时长={total_steps * sim_dt:.1f}s")
 
@@ -251,7 +300,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
 
     # ── 9. 主采集循环 ─────────────────────────────────────────────────────────
     for seg in range(n_resample):
-        
+
         print(f"[段 {seg+1:02d}/{n_resample}] 开始，时刻={current_time:.2f}s")
 
         for _ in range(steps_per_segment):
@@ -261,7 +310,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
             obs =obs.clone()  # 避免后续被环境修改
 
             # 记录实际状态与命令
-            a_vel, a_pose = get_obs_state(raw_env, env_id)
+            a_vel, a_pose = get_obs_state(raw_env, env_id, feet_ids)
             cmds          = get_commands(raw_env, env_id)
 
             c_vel  = cmds["base_velocity"] if cmds["base_velocity"] is not None \
@@ -296,7 +345,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
 
     # 改为6行1列，每个子图宽度占满
     fig = plt.figure(figsize=(12, 18))  # 宽度12英寸，高度18英寸（6*3）
-    fig.suptitle("机器狗低层控制跟踪性能测试", fontsize=16, fontweight="bold", y=0.995)
+    # ↓↓↓ 修改：标题带上地形名，方便区分不同地形的测试图 ↓↓↓
+    fig.suptitle(f"机器狗低层控制跟踪性能测试 — 地形: {args_cli.terrain}",
+                 fontsize=16, fontweight="bold", y=0.995)
 
     # 重采样时刻竖线
     seg_times = [i * steps_per_segment * sim_dt for i in range(n_resample + 1)]
@@ -308,7 +359,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     # 创建6个子图，垂直排列
     for i in range(6):
         ax = fig.add_subplot(6, 1, i+1)  # 6行1列，第i+1个子图
-        
+
         if i < 3:  # 前3个是速度
             ax.plot(times, cmd_vel[:, i], color="royalblue", linewidth=1.5,
                     label="命令", linestyle="--")
@@ -319,7 +370,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
             ax.set_title(f"底盘速度 — {vel_labels[i]}", fontsize=11, pad=10)
             ax.legend(fontsize=9, loc="upper right")
             ax.grid(True, alpha=0.3)
-            
+
         else:  # 后3个是姿态
             idx = i - 3
             ax.plot(times, cmd_pose[:, idx], color="mediumseagreen", linewidth=1.5,
@@ -331,7 +382,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
             ax.set_title(f"底盘姿态 — {pose_labels[idx]}", fontsize=11, pad=10)
             ax.legend(fontsize=9, loc="upper right")
             ax.grid(True, alpha=0.3)
-        
+
         # 只给最后一个子图设置x轴标签
         if i == 5:
             ax.set_xlabel("时间 (s)", fontsize=10)
@@ -349,7 +400,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     pose_err = np.abs(act_pose - cmd_pose)
 
     print("\n" + "=" * 55)
-    print("          平均跟踪误差统计（MAE）")
+    print(f"          平均跟踪误差统计（MAE） — 地形: {args_cli.terrain}")
     print("=" * 55)
     print(f"  {'通道':<22} {'MAE':>10}")
     print("-" * 55)
