@@ -124,7 +124,7 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         # usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20/usd/M20_assemble.usd",
         # usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20/usd/M20_adjusted.usd",
-        usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20_Piper/urdf/M20_Piper_own/M20_Piper_own.usd",
+        usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20_Piper_own/usd/M20_Piper_own.usd",
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -194,7 +194,7 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             friction=0.01,
             armature=0.01,
             min_delay=0,
-            max_delay=0,
+            max_delay=5,
         ),
         "piper_gripper": DelayedPDActuatorCfg(
             joint_names_expr=["gripper_joint[1-2]"],

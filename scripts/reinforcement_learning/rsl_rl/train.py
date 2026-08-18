@@ -123,6 +123,25 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
 
+    def _disable_debug_vis(cfg_group) -> None:
+        """递归关闭一个 manager config group 下所有 term 的 debug_vis。"""
+        if cfg_group is None:
+            return
+        for name, term_cfg in vars(cfg_group).items():
+            if name.startswith("_"):
+                continue
+            if hasattr(term_cfg, "debug_vis"):
+                term_cfg.debug_vis = False
+
+    if args_cli.headless:
+        for group_name in ("commands", "actions", "scene"):
+            if hasattr(env_cfg, group_name):
+                _disable_debug_vis(getattr(env_cfg, group_name))
+        # 有些 env_cfg 顶层自己也可能有 debug_vis（比如某些 terrain / viewer 相关配置）
+        if hasattr(env_cfg, "debug_vis"):
+            env_cfg.debug_vis = False
+
+
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 

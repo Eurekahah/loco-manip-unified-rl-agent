@@ -989,9 +989,9 @@ class BodyPoseCommand(CommandTerm):
                 self._ref_disc_visualizer = VisualizationMarkers(ref_cfg)
             self._ref_disc_visualizer.set_visibility(True)
         else:
-            if self._tilted_disc_visualizer is not None:
+            if hasattr(self, "_tilted_disc_visualizer"):
                 self._tilted_disc_visualizer.set_visibility(False)
-            if self._ref_disc_visualizer is not None:
+            if hasattr(self, "_ref_disc_visualizer"):
                 self._ref_disc_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
