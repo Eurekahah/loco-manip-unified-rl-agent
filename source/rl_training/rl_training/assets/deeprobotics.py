@@ -122,8 +122,9 @@ DEEPROBOTICS_M20_CFG = ArticulationCfg(
 
 DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        # usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20/M20_usd/M20_assemble.usd",
-        usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20/M20_usd/M20_adjusted.usd",
+        # usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20/usd/M20_assemble.usd",
+        # usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20/usd/M20_adjusted.usd",
+        usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20_Piper/urdf/M20_Piper_own/M20_Piper_own.usd",
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -155,8 +156,8 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             "arm_joint5": 0.0,       # limit: [-1.22, 1.22]    ✓ 安全
             "arm_joint6": 0.0,       # limit: [-3.14, 3.14]    ✓ 安全
             # 夹爪prismatic关节
-            "arm_joint7": 0.0,       # limit: [0, 0.05]        ✓ 夹爪闭合
-            "arm_joint8": 0.0,       # limit: [-0.05, 0]       ✓ 夹爪闭合
+            "gripper_joint1": 0.0,       # limit: [0, 0.05]        ✓ 夹爪闭合
+            "gripper_joint2": 0.0,       # limit: [-0.05, 0]       ✓ 夹爪闭合
         },
         joint_vel={".*": 0.0},
     ),
@@ -188,17 +189,17 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             joint_names_expr=["arm_joint[1-6]"],
             effort_limit=100.0,       # 根据 Piper 实际力矩限制填写
             velocity_limit=3.0,     # rad/s
-            stiffness=40.0, # 20
-            damping=1, # 0.1
+            stiffness=300.0, # 20
+            damping=20, # 0.1
             friction=0.01,
             armature=0.01,
             min_delay=0,
             max_delay=0,
         ),
         "piper_gripper": DelayedPDActuatorCfg(
-            joint_names_expr=["arm_joint[7-8]"],
-            effort_limit=100.0,       # 根据 Piper 实际力矩限制填写
-            velocity_limit=3.0,     # rad/s
+            joint_names_expr=["gripper_joint[1-2]"],
+            effort_limit=10.0,       # 根据 Piper 实际力矩限制填写
+            velocity_limit=1.0,     # rad/s
             stiffness=4000.0, # 20
             damping=200.0, # 0.1
             friction=0.01,
@@ -221,7 +222,7 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
 
         # # 新增：夹爪（如果是位置控制）
         # "piper_gripper": ImplicitActuatorCfg(
-        #     joint_names_expr=["arm_joint[7-8]"],
+        #     joint_names_expr=["gripper_joint[1-2]"],
         #     effort_limit_sim=100.0,
         #     velocity_limit_sim=1.0,
         #     stiffness=4000.0,
@@ -262,8 +263,8 @@ PIPER_CFG = ArticulationCfg(
             "arm_joint5": 0.0,       # limit: [-1.22, 1.22]    ✓ 安全
             "arm_joint6": 0.0,       # limit: [-3.14, 3.14]    ✓ 安全
             # 夹爪prismatic关节
-            "arm_joint7": 0.0,       # limit: [0, 0.05]        ✓ 夹爪闭合
-            "arm_joint8": 0.0,       # limit: [-0.05, 0]       ✓ 夹爪闭合
+            "gripper_joint1": 0.0,       # limit: [0, 0.05]        ✓ 夹爪闭合
+            "gripper_joint2": 0.0,       # limit: [-0.05, 0]       ✓ 夹爪闭合
         },
         joint_vel={".*": 0.0},
     ),
@@ -284,7 +285,7 @@ PIPER_CFG = ArticulationCfg(
 
         # 新增：夹爪（如果是位置控制）
         "piper_gripper": ImplicitActuatorCfg(
-            joint_names_expr=["arm_joint[7-8]"],
+            joint_names_expr=["gripper_joint[1-2]"],
             effort_limit=100.0,
             velocity_limit=1.0,
             stiffness=4000.0,

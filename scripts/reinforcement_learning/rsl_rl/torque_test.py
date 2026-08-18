@@ -16,7 +16,7 @@
         [--leg_joint_types hipx,hipy,knee,wheel] \
         [--leg_joint_regex ".*_(hipx|hipy|knee|wheel)_joint"] \
         [--arm_joint_regex "arm_joint[1-6]$"] \
-        [--gripper_joint_regex "arm_joint[7-8]"] \
+        [--gripper_joint_regex "gripper_joint[1-2]"] \
         [--save_fig joint_torque.png] \
         [--save_data joint_torque_log.npz] \
         [--headless]
@@ -76,8 +76,8 @@ parser.add_argument("--leg_joint_regex", type=str, default=".*_(hipx|hipy|knee|w
                          "默认 .*_(hipx|hipy|knee|wheel)_joint")
 parser.add_argument("--arm_joint_regex", type=str, default="arm_joint[1-6]$",
                     help="机械臂 6 个关节的正则，默认 arm_joint[1-6]$")
-parser.add_argument("--gripper_joint_regex", type=str, default="arm_joint[7-8]",
-                    help="夹爪关节的正则，默认 arm_joint[7-8]")
+parser.add_argument("--gripper_joint_regex", type=str, default="gripper_joint[1-2]",
+                    help="夹爪关节的正则，默认 gripper_joint[1-2]")
 parser.add_argument("--save_fig", type=str, default=None, help="力矩图保存路径")
 parser.add_argument("--save_data", type=str, default=None, help="原始力矩数据保存路径(.npz)")
 parser.add_argument("--terrain", type=str, default="flat", choices=TERRAIN_NAMES,

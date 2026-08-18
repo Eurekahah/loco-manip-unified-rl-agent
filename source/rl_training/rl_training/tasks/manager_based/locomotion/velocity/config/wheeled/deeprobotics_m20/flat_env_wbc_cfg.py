@@ -106,7 +106,7 @@ class WBCObservationsCfg(DeeproboticsM20ObservationsCfg):
         # 对应 randomize_rigid_body_mass（非base_link, scale）
         end_effector_payload = ObsTerm(
             func=mdp.privileged_end_effector_payload,
-            params={"asset_cfg": SceneEntityCfg("robot", body_names="arm_link6")},
+            params={"asset_cfg": SceneEntityCfg("robot", body_names="gripper_base")},
         )
         # 对应 randomize_com_positions（base_link）
         # base_com_offset = ObsTerm(
@@ -390,9 +390,9 @@ class FlatEnvWBCConfig_PLAY(FlatEnvWBCConfig):
         self.curriculum.body_pose_height_range_s2 = None
         self.curriculum.body_pose_pitch_range_s3 = None
         self.curriculum.body_pose_roll_range_s3 = None
-        self.commands.base_velocity.ranges.lin_vel_x = (-5.0, 5.0)
-        self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
-        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.lin_vel_x = (-0.0, 0.0)
+        self.commands.base_velocity.ranges.lin_vel_y = (-0.0, 0.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (-0.0, 0.0)
         self.commands.body_pose.height_range = (0.33, 0.6)
         self.commands.body_pose.pitch_range = (-0.35, 0.35)
         self.commands.body_pose.roll_range = (-0.25, 0.25)

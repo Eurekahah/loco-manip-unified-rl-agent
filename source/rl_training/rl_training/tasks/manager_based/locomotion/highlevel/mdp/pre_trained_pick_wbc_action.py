@@ -65,7 +65,7 @@ class PreTrainedPickWBCAction(ActionTerm):
     ]
 
     gripper_joint_names = [
-        "arm_joint7", "arm_joint8",
+        "gripper_joint1", "gripper_joint2",
     ]
     joint_names = leg_joint_names + wheel_joint_names + arm_joint_names
 
@@ -496,7 +496,7 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
     delta_body_roll_max: float = 0.05
     """每个高层 step body roll 增量的最大幅度（弧度），tanh 后乘以此值。"""
 
-    ee_body_name: str = "arm_link6"
+    ee_body_name: str = "gripper_base"
     @configclass
     class LowLevelCommandRanges:
         # base_velocity ranges，对应 CommandsCfg.base_velocity.ranges

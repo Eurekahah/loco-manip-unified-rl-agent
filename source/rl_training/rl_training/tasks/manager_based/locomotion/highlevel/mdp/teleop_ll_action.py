@@ -58,7 +58,7 @@ class TeleopLLAction(ActionTerm):
         "arm_joint4", "arm_joint5", "arm_joint6",
     ]
     gripper_joint_names = [
-        "arm_joint7", "arm_joint8",
+        "gripper_joint1", "gripper_joint2",
     ]
     joint_names = leg_joint_names + wheel_joint_names + arm_joint_names
 
@@ -157,6 +157,8 @@ class TeleopLLAction(ActionTerm):
         self._default_ee_quat_b[:, 0] = 1.0  # 单位四元数初始化，防止未初始化时出现非法值
         self._default_ee_pose_initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._ee_body_idx = self.robot.find_bodies(self.cfg.ee_body_name)[0][0]
+        
+        self.arm_link_ids = self.robot.find_bodies(["arm.*"])[0]
     
 
     # ------------------------------------------------------------------
@@ -194,6 +196,7 @@ class TeleopLLAction(ActionTerm):
     @staticmethod
     def _clamp_range(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:
         """线性裁剪到 [lo, hi]，不做 tanh 非线性压缩。"""
+        # 角度应该是normalize到[-pi, pi]，位置应该是直接裁剪到范围
         return torch.clamp(x, min=lo, max=hi)
 
     def _capture_default_ee_pose(self, env_ids: torch.Tensor):
@@ -245,6 +248,7 @@ class TeleopLLAction(ActionTerm):
         target_pos_w = math_utils.quat_apply(root_quat_w, ee_pos_b) + root_pos_w
         target_pos_w[:, 2] = torch.clamp(target_pos_w[:, 2], min=0.0)  # z不低于地面
         self._ll_command[:, 3:6] = target_pos_w
+        self._ll_command[:, 3:6] = ee_pos_b  # debug: 直接使用 body系位置，绕过旋转变换
 
         # ── 3. EE 姿态：default_quat_b ⊗ 增量四元数 → world系 ───────
         ee_droll_b  = self._clamp_range(-actions[:, 6], -math.pi, math.pi)
@@ -255,7 +259,11 @@ class TeleopLLAction(ActionTerm):
         # 增量在 default 姿态的局部系下叠加：先 default，再叠加增量
         ee_quat_b = math_utils.quat_mul(self._default_ee_quat_b, delta_quat_b)
         # print(f"ee_droll_b: {ee_droll_b}, ee_dpitch_b: {ee_dpitch_b}, ee_dyaw_b: {ee_dyaw_b}")
-        self._ll_command[:, 6:10] = math_utils.quat_mul(root_quat_w, ee_quat_b)
+        self._ll_command[:, 6:10] = ee_quat_b # math_utils.quat_mul(root_quat_w, ee_quat_b)
+        self._default_ee_pos_b = ee_pos_b  # debug: 每步更新 default_pos_b
+        self._default_ee_quat_b = ee_quat_b  # debug: 每步更新 default_quat_b
+
+        # self._ll_command[:, 6:10] = torch.tensor([[0.0, 0.0, 0.0, 1.0]], device=self.device).expand(self.num_envs, -1)  # debug: 直接使用 body系四元数，绕过旋转变换
 
         # ── 4. 机体姿态（直接映射到目标范围，不变） ──────────────────
         self._ll_command[:, 10] = self._clamp_range(actions[:, 9],  r.target_height[0], r.target_height[1])
@@ -266,7 +274,9 @@ class TeleopLLAction(ActionTerm):
         # print(f"{self._ll_command[:, 3:6]} (ee_pos_w), ")
         # print(f"{self._ll_command[:, 6:10]} (ee_quat_w),")
         # print(f"{self._ll_command[:, 10:13]} (body_hpr)")
-
+        # print(f"{self._asset.root_physx_view.get_masses()[:, self.arm_link_ids].to(self._env.device)}")
+        # 角度给1000，调整位置
+        
     # ------------------------------------------------------------------
     # apply_actions
     # ------------------------------------------------------------------
@@ -289,7 +299,8 @@ class TeleopLLAction(ActionTerm):
             self.low_level_wheel_actions[:] = policy_output[:, self._joint_pos_dim:self._joint_pos_dim + self._wheel_vel_dim]
             self.low_level_ee_actions[:]    = policy_output[:, self._joint_pos_dim + self._wheel_vel_dim:self._joint_pos_dim + self._wheel_vel_dim + self._ee_ik_dim]
 
-            self._ee_command_term.pose_command_w[:] = self._ll_command[:, 3:10]
+            # self._ee_command_term.pose_command_w[:] = self._ll_command[:, 3:10]
+            self._ee_command_term.pose_command_b[:] = self._ll_command[:, 3:10]
 
             self._joint_pos_action_term.process_actions(self.low_level_leg_actions)
             self._wheel_vel_action_term.process_actions(self.low_level_wheel_actions)
@@ -376,7 +387,7 @@ class TeleopLLActionCfg(ActionTermCfg):
     low_level_observations: ObservationGroupCfg = MISSING
     ee_command_name: str = "ee_pose"
     debug_vis: bool = False
-    ee_body_name: str = "arm_link6"
+    ee_body_name: str = "gripper_base"
 
     # delta_* 字段全部移除
 

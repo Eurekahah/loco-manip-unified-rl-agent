@@ -161,18 +161,18 @@ def object_pose_in_ee_frame(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg,
-    ee_link_name: str = "arm_link6",
+    ee_link_name: str = "gripper_base",
     ee_offset_z: float = 0.135,
 ) -> torch.Tensor:
     """
     物体位姿相对于 EE frame 的表达。
-    EE frame = arm_link6 沿其自身 z 轴方向偏移 ee_offset_z 处的虚拟帧。
+    EE frame = gripper_base 沿其自身 z 轴方向偏移 ee_offset_z 处的虚拟帧。
 
     Returns shape (N, 7): [x, y, z, qw, qx, qy, qz] in EE frame.
     """
     robot: Articulation = env.scene[robot_cfg.name]
 
-    # ── 1. 获取 arm_link6 在世界系下的位姿 ──────────────────────────────
+    # ── 1. 获取 gripper_base 在世界系下的位姿 ──────────────────────────────
     link_idx = robot.find_bodies(ee_link_name)[0][0]          # int 或 List[int]
     # body_pos_w / body_quat_w shape: (N, num_bodies, 3/4)
     link_pos_w  = robot.data.body_pos_w[:, link_idx, :]   # (N, 3)

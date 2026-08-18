@@ -41,7 +41,7 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
     # ee_ik = mdp.DifferentialInverseKinematicsActionCfg(
     #     asset_name="robot",
     #     joint_names=["arm_joint[1-6]"],  # 只包含机械臂关节
-    #     body_name="arm_link6",     # 末端link名
+    #     body_name="gripper_base",     # 末端link名
     #     debug_vis=True,
     #     controller=DifferentialIKControllerCfg(
     #         command_type="pose",       # "pose"=位姿, "position"=仅位置
@@ -54,7 +54,7 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
     # ee_ik = mdp.DifferentialInverseKinematicsActionCfg(
     #     asset_name="robot",
     #     joint_names=["arm_joint[1-6]"],  # 只包含机械臂关节
-    #     body_name="arm_link6",     # 末端link名
+    #     body_name="gripper_base",     # 末端link名
     #     debug_vis=True,
     #     controller=DifferentialIKControllerCfg(
     #         command_type="pose",       # "pose"=位姿, "position"=仅位置
@@ -69,16 +69,21 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
     ee_ik = mdp.CommandDrivenIKActionCfg(
         asset_name="robot",
         joint_names=["arm_joint[1-6]"],
-        body_name="arm_link6",
-        command_name="ee_pose",
+        body_name="gripper_base",
+        command_name="ee_pose",  # wxyz四元数 or xyzw
         controller=DifferentialIKControllerCfg(
-            command_type="pose",
+            command_type="pose", # 这里先改成position
             use_relative_mode=False,  # 接收绝对位姿
             ik_method="dls",
-            ik_params={"lambda_val": 0.01}
+            ik_params={"lambda_val": 0.01}  # 先测试角度的误差精度可以容许特别大，只迭代位置
+            # ik_method="pinv",
+            # ik_method="svd",    
+            # ik_method="trans",  # trans方法最差，其他三种方法差不多，dls鲁棒性可能更强
+
+
         ),
         body_offset=mdp.DifferentialInverseKinematicsActionCfg.OffsetCfg(
-            pos=(0.0, 0.0, 0.135),  # EE frame 相对于 body frame 的位置偏移
+            pos=(0.0, 0.0, 0.0),  # EE frame 相对于 body frame 的位置偏移
             rot=(1.0, 0.0, 0.0, 0.0),  # EE frame 相对于 body frame 的姿态偏移（四元数）
         ),
         scale=1.0,
@@ -87,9 +92,9 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
 
     # gripper_action = mdp.BinaryJointPositionActionCfg(
     #     asset_name="robot",
-    #     joint_names=["arm_joint7", "arm_joint8"],
-    #     open_command_expr={"arm_joint7": 0.04, "arm_joint8": 0.04},
-    #     close_command_expr={"arm_joint7": 0.0, "arm_joint8": 0.0},
+    #     joint_names=["gripper_joint1", "gripper_joint2"],
+    #     open_command_expr={"gripper_joint1": 0.04, "gripper_joint2": 0.04},
+    #     close_command_expr={"gripper_joint1": 0.0, "gripper_joint2": 0.0},
     # )
 
 
@@ -129,7 +134,7 @@ class DeeproboticsM20RewardsWithArmsCfg(DeeproboticsM20RewardsCfg):
         weight=2.0,
         params={
             "command_name": "ee_pose",
-            "ee_frame_name": "arm_link6",
+            "ee_frame_name": "gripper_base",
             "std": 0.15,
             "arm_weight_command_name": "arm_weight", 
         },
@@ -141,7 +146,7 @@ class DeeproboticsM20RewardsWithArmsCfg(DeeproboticsM20RewardsCfg):
         weight=1.0,
         params={
             "command_name": "ee_pose",
-            "ee_frame_name": "arm_link6",
+            "ee_frame_name": "gripper_base",
             "std": 0.5,
             "arm_weight_command_name": "arm_weight", 
         },
@@ -153,7 +158,7 @@ class DeeproboticsM20RewardsWithArmsCfg(DeeproboticsM20RewardsCfg):
         weight=5.0,
         params={
             "command_name": "ee_pose",
-            "ee_frame_name": "arm_link6",
+            "ee_frame_name": "gripper_base",
             "pos_threshold": 0.05,
             "angle_threshold": 0.2,
             "arm_weight_command_name": "arm_weight", 
@@ -195,7 +200,7 @@ class DeeproboticsM20RewardsWithArmsCfg(DeeproboticsM20RewardsCfg):
 class DeeproboticsM20CurriculumsCfg(CurriculumCfg):
     """Curriculum terms for the MDP."""
     pass
-
+from rl_training.assets import ISAACLAB_ASSETS_DATA_DIR
 @configclass
 class DeeproboticsM20CommandsCfg(CommandsCfg):
     """Command specifications for the MDP."""
@@ -231,14 +236,14 @@ class DeeproboticsM20CommandsCfg(CommandsCfg):
     # EE位姿
     ee_pose = mdp.HeightInvariantEECommandCfg(
         asset_name="robot",
-        body_name="arm_link6",
+        body_name="gripper_base",
         resampling_time_range=(5.0, 5.0),
         debug_vis=True,
         sampled_height=0.6,  # 采样坐标系的固定高度
-        arm_base_link_name="arm_base",  # 采样坐标系xy位置
+        arm_base_link_name="arm_base_link",  # 采样坐标系xy位置
         ranges=mdp.HeightInvariantEECommandCfg.Ranges(
             # 球坐标位置采样范围
-            p_l= (0.4, 0.62),           # 半径 l
+            p_l= (0.3, 0.52),           # 半径 l
             p_pitch= (-math.pi/4, 1*math.pi/5),   # pitch p
             p_yaw = (-2*math.pi/5, 2*math.pi/5),     # yaw y
             # 姿态采样范围
@@ -250,6 +255,24 @@ class DeeproboticsM20CommandsCfg(CommandsCfg):
             orn_cone_min_scale = 0.1,
         ),
     )
+    
+    # ee_pose=mdp.FKReachableEECommandCfg(
+    #     asset_name="robot",
+    #     body_name="gripper_base",
+    #     ee_link_name="gripper_base",
+    #     resampling_time_range=(5.0, 5.0),
+    #     debug_vis=True,
+    #     arm_base_link_name="arm_base_link", 
+    #     urdf_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20_Piper/urdf/M20_Piper_own.urdf",
+    #     ranges=mdp.UniformPoseCommandCfg.Ranges(
+    #         pos_x=(-0.3, 0.3),
+    #         pos_y=(-0.3, 0.3),
+    #         pos_z=(-0.1, 0.1),
+    #         roll=(-math.pi / 8, math.pi / 8),
+    #         pitch=(-math.pi / 8, math.pi / 8),
+    #         yaw=(-math.pi, math.pi),
+    #     ),
+    # )
 
     arm_weight = mdp.ArmWeightCommandCfg(
         resampling_time_range=(10.0, 10.0),
@@ -296,7 +319,7 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
     ]
 
     gripper_joint_names = [
-        "arm_joint7", "arm_joint8",
+        "gripper_joint1", "gripper_joint2",
     ]
     joint_names = leg_joint_names + wheel_joint_names + arm_joint_names
     # fmt: on
@@ -361,7 +384,7 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.events.randomize_rigid_body_mass.params["asset_cfg"].body_names = [
             f"^(?!.*{self.base_link_name}).*"
         ]
-        self.events.randomize_rigid_body_mass_end_effector.params["asset_cfg"].body_names = ["arm_link6"]
+        self.events.randomize_rigid_body_mass_end_effector.params["asset_cfg"].body_names = ["gripper_base"]
         self.events.randomize_com_positions.params["asset_cfg"].body_names = [self.base_link_name]
         self.events.randomize_apply_external_force_torque.params["asset_cfg"].body_names = [self.base_link_name]
 

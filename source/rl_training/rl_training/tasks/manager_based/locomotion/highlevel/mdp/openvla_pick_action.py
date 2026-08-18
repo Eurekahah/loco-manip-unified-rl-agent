@@ -160,9 +160,9 @@ class VLAPickAction(ActionTerm):
         
         gripper_cfg = BinaryJointPositionActionCfg(
             asset_name=cfg.asset_name,
-            joint_names=["arm_joint7", "arm_joint8"],
-            open_command_expr={"arm_joint7": 0.04, "arm_joint8": 0.04},
-            close_command_expr={"arm_joint7": 0.0,  "arm_joint8": 0.0},
+            joint_names=["gripper_joint1", "gripper_joint2"],
+            open_command_expr={"gripper_joint1": 0.04, "gripper_joint2": 0.04},
+            close_command_expr={"gripper_joint1": 0.0,  "gripper_joint2": 0.0},
         )
         self._gripper_action_term: ActionTerm = gripper_cfg.class_type(gripper_cfg, env)
 
@@ -362,7 +362,7 @@ class VLAPickActionCfg(ActionTermCfg):
 
     # ── 机器人场景 ───────────────────────────────────────────────────────
     asset_name: str = MISSING
-    ee_body_name: str = "arm_link6"         # ← 改成你的实际 EE body 名
+    ee_body_name: str = "gripper_base"         # ← 改成你的实际 EE body 名
     camera_sensor_name: str = "arm_camera"
     ee_command_name: str = "ee_pose"
     debug_vis: bool = True

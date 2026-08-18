@@ -40,7 +40,7 @@ class HLFlatOpenvlaActionsCfg(HighLevelActionsCfg):
     openvla_ee_action: mdp.VLAPickActionCfg = mdp.VLAPickActionCfg(
         asset_name="robot",
         policy_path=f"logs/rsl_rl/deeprobotics_m20_flat/2026-03-18_18-06-34/exported/policy.pt",
-        ee_body_name="arm_link6",            
+        ee_body_name="gripper_base",            
         camera_sensor_name="arm_camera",
         low_level_decimation=4,
         low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
@@ -118,8 +118,8 @@ class HLFlatOpenvlaRewardsCfg(HighLevelRewardsCfg):
     """
     抓取任务奖励配置
     - 机器人类型：移动底盘 + 机械臂
-    - 末端执行器：arm_link6
-    - 夹爪：arm_link7, arm_link8
+    - 末端执行器：gripper_base
+    - 夹爪：gripper_link1, gripper_link2
     - 目标：抓取桌面物体并抬起
     """
 
@@ -164,14 +164,14 @@ class HLFlatOpenvlaRewardsCfg(HighLevelRewardsCfg):
     # 阶段二：末端执行器精确接近物体
     # =========================================================
 
-    # 核心密集奖励：arm_link6（EE）到物体距离，高斯核塑形
+    # 核心密集奖励：gripper_base（EE）到物体距离，高斯核塑形
     reach_object_ee = RewTerm(
         func=mdp.object_ee_distance,
         weight=3.0,                          # 权重高于底盘接近，引导手臂精细运动
         params={
             "std": 0.1,                      # 高斯核宽度，越小精度要求越高
             "object_cfg": SceneEntityCfg("object"),
-            "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
+            "ee_frame_cfg": SceneEntityCfg("robot", body_names="gripper_base"),
         },
     )
 
@@ -179,7 +179,7 @@ class HLFlatOpenvlaRewardsCfg(HighLevelRewardsCfg):
     # 阶段三：夹爪对准物体
     # =========================================================
 
-    # 夹爪朝向对准：arm_link7/8 两指到物体的距离之和最小化
+    # 夹爪朝向对准：gripper_link1/2 两指到物体的距离之和最小化
     # 鼓励物体处于两指正中间（对称抓取）
     gripper_alignment = RewTerm(
         func=mdp.object_ee_distance,
@@ -187,7 +187,7 @@ class HLFlatOpenvlaRewardsCfg(HighLevelRewardsCfg):
         params={
             "std": 0.05,                     # 更小的核，要求更精确的对准
             "object_cfg": SceneEntityCfg("object"),
-            "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link7"),
+            "ee_frame_cfg": SceneEntityCfg("robot", body_names="gripper_link1"),
         },
     )
 
@@ -197,7 +197,7 @@ class HLFlatOpenvlaRewardsCfg(HighLevelRewardsCfg):
         params={
             "std": 0.05,
             "object_cfg": SceneEntityCfg("object"),
-            "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link8"),
+            "ee_frame_cfg": SceneEntityCfg("robot", body_names="gripper_link2"),
         },
     )
 
@@ -208,7 +208,7 @@ class HLFlatOpenvlaRewardsCfg(HighLevelRewardsCfg):
         params={
             "sensor_cfg": SceneEntityCfg(
                 "arm_contact_forces",
-                body_names="arm_link7",
+                body_names="gripper_link1",
             ),
             "threshold": 0.5,               # 最小接触力阈值（N），低于此不奖励
         },
@@ -220,7 +220,7 @@ class HLFlatOpenvlaRewardsCfg(HighLevelRewardsCfg):
         params={
             "sensor_cfg": SceneEntityCfg(
                 "arm_contact_forces",
-                body_names="arm_link8",
+                body_names="gripper_link2",
             ),
             "threshold": 0.5,
         },
@@ -247,7 +247,7 @@ class HLFlatOpenvlaRewardsCfg(HighLevelRewardsCfg):
         params={
             "std": 0.08,
             "object_cfg": SceneEntityCfg("object"),
-            "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
+            "ee_frame_cfg": SceneEntityCfg("robot", body_names="gripper_base"),
         },
     )
 
@@ -289,11 +289,11 @@ class HLFlatOpenvlaTerminationsCfg(HighLevelTerminationsCfg):
 class HLFlatOpenvlaCommandCfg(HighLevelCommandsCfg):
      ee_pose = HeightInvariantEECommandCfg(
         asset_name="robot",
-        body_name="arm_link6",
+        body_name="gripper_base",
         resampling_time_range=(5.0, 5.0),
         debug_vis=True,
         sampled_height=0.6,  # 采样坐标系的固定高度
-        arm_base_link_name="arm_base",  # 采样坐标系xy位置
+        arm_base_link_name="arm_base_link",  # 采样坐标系xy位置
         ranges=HeightInvariantEECommandCfg.Ranges(
             # 球坐标位置采样范围
             p_l= (0.4, 0.7),           # 半径 l

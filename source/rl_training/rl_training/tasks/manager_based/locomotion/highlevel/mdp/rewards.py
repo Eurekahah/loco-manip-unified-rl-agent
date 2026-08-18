@@ -323,7 +323,7 @@ def gripper_object_contact(
     # ✅ 用 sensor 内部局部索引，而不是全局 body_ids
     # contact_sensor.body_names 是 sensor 追踪的 body 列表
     # 找到目标 body 在 sensor 内部的索引
-    target_body_name = sensor_cfg.body_names  # 例如 "arm_link7"
+    target_body_name = sensor_cfg.body_names  # 例如 "gripper_link1"
     if isinstance(target_body_name, str):
         target_body_name = [target_body_name]
     
@@ -413,8 +413,8 @@ def delta_action_l2_near_target(
     # ---------------------------
     object_pos_w = object_asset.data.root_pos_w[:, :3]  # (N, 3)
 
-    # 默认用 EE（arm_link6）
-    ee_pos = env.scene["robot"].data.body_pos_w[:, env.scene["robot"].data.body_names.index("arm_link6"), :]
+    # 默认用 EE（gripper_base）
+    ee_pos = env.scene["robot"].data.body_pos_w[:, env.scene["robot"].data.body_names.index("gripper_base"), :]
 
     dist = torch.norm(ee_pos - object_pos_w, dim=-1)  # (N,)
 
@@ -558,9 +558,9 @@ def _measure_ee_offset(robot):
     
     # ---- 获取 body indices ----
     # IsaacLab 2.3.0 用 find_bodies 返回 (indices, names)
-    link6_indices, _  = robot.find_bodies("arm_link6")
-    link7_indices, _  = robot.find_bodies("arm_link7")
-    link8_indices, _  = robot.find_bodies("arm_link8")
+    link6_indices, _  = robot.find_bodies("gripper_base")
+    link7_indices, _  = robot.find_bodies("gripper_link1")
+    link8_indices, _  = robot.find_bodies("gripper_link2")
 
     link6_idx = link6_indices[0]
     link7_idx = link7_indices[0]
@@ -1079,7 +1079,7 @@ def gripper_contact_symmetric_grasp_progress(
 def cmd_pos_tracking_penalty(
     env: ManagerBasedRLEnv,
     action_term_name: str = "pre_trained_pick_action",
-    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="arm_link6"),
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="gripper_base"),
     sensitivity: float = 20.0,
     gate_dist: float = 1.0,         # cmd 距物体超过此值时不惩罚（底盘阶段 cmd 乱飘是正常的）
     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),

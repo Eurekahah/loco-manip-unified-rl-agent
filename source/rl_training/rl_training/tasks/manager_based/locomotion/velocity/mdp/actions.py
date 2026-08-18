@@ -53,32 +53,36 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
         # 当前末端真实位姿（root系）
         ee_pos_curr, ee_quat_curr = self._compute_frame_pose()
 
-        # ---- 位置增量限幅 ----
-        pos_error = target_pos_b - ee_pos_curr
-        pos_error_norm = torch.norm(pos_error, dim=-1, keepdim=True)
-        scale = torch.clamp(self.max_pos_step / (pos_error_norm + 1e-6), max=1.0)
-        clipped_pos_b = ee_pos_curr + pos_error * scale
-        # print(f"{pos_error_norm=}, {scale=}")
-        # print(f"target_pos_b: {target_pos_b}, ee_pos_curr: {ee_pos_curr}, pos_error: {pos_error}")
+        # # ---- 位置增量限幅 ----
+        # pos_error = target_pos_b - ee_pos_curr
+        # pos_error_norm = torch.norm(pos_error, dim=-1, keepdim=True)
+        # scale = torch.clamp(self.max_pos_step / (pos_error_norm + 1e-6), max=1.0)
+        # clipped_pos_b = ee_pos_curr + pos_error * scale
+        # # print(f"{pos_error_norm=}, {scale=}")
+        # # print(f"target_pos_b: {target_pos_b}, ee_pos_curr: {ee_pos_curr}, pos_error: {pos_error}")
 
-        # ---- 姿态增量限幅 ----
-        # quat_error 满足: target = quat_error * current
-        quat_error = math_utils.quat_mul(target_quat_b, math_utils.quat_conjugate(ee_quat_curr))
-        # 保证走最短路径（四元数双重覆盖问题）
-        quat_error = torch.where(quat_error[:, 0:1] < 0, -quat_error, quat_error)
-        # print(f"{quat_error=}")
+        # # ---- 姿态增量限幅 ----
+        # # quat_error 满足: target = quat_error * current
+        # quat_error = math_utils.quat_mul(target_quat_b, math_utils.quat_conjugate(ee_quat_curr))
+        # # 保证走最短路径（四元数双重覆盖问题）
+        # quat_error = torch.where(quat_error[:, 0:1] < 0, -quat_error, quat_error)
+        # # print(f"{quat_error=}")
 
-        rotvec = math_utils.axis_angle_from_quat(quat_error)  # 方向=转轴, 模长=角度
-        angle = torch.norm(rotvec, dim=-1, keepdim=True)
-        axis = rotvec / (angle + 1e-6)
-        clipped_angle = torch.clamp(angle, max=self.max_rot_step)
-        clipped_quat_error = math_utils.quat_from_angle_axis(clipped_angle.squeeze(-1), axis)
-        clipped_quat_b = math_utils.quat_mul(clipped_quat_error, ee_quat_curr)
-        # print(f"{clipped_quat_error=}")
-        # ik_command = torch.cat([clipped_pos_b, clipped_quat_b], dim=-1)
-        ik_command = torch.cat([clipped_pos_b, target_quat_b], dim=-1)
-        ik_command = command
+        # rotvec = math_utils.axis_angle_from_quat(quat_error)  # 方向=转轴, 模长=角度
+        # angle = torch.norm(rotvec, dim=-1, keepdim=True)
+        # axis = rotvec / (angle + 1e-6)
+        # clipped_angle = torch.clamp(angle, max=self.max_rot_step)
+        # clipped_quat_error = math_utils.quat_from_angle_axis(clipped_angle.squeeze(-1), axis)
+        # clipped_quat_b = math_utils.quat_mul(clipped_quat_error, ee_quat_curr)
+        # # print(f"{clipped_quat_error=}")
+        # # ik_command = torch.cat([clipped_pos_b, clipped_quat_b], dim=-1)
+        # ik_command = torch.cat([clipped_pos_b, target_quat_b], dim=-1)
+        ik_command =  command # target_pos_b #
         self._ik_controller.set_command(ik_command, ee_pos_curr, ee_quat_curr)
+
+    @property
+    def action_dim(self) -> int:
+        return 7  # 这里需要删掉的，临时debug设置
 
     def apply_actions(self):
         """调用父类的 apply_actions 来执行 IK 控制。"""
@@ -90,8 +94,8 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
             ee_pos_w  : (num_envs, 3)  EE 位置，世界坐标系
             ee_quat_w : (num_envs, 4)  EE 姿态，世界坐标系，wxyz 格式
         """
-        # 1. arm_link6 在世界坐标系下的位姿
-        #    self._body_idx 由父类 __init__ 解析（body_name="arm_link6"）
+        # 1. gripper_base 在世界坐标系下的位姿
+        #    self._body_idx 由父类 __init__ 解析（body_name="gripper_base"）
         body_pos_w  = self._asset.data.body_pos_w[:, self._body_idx, :]   # (N,3)
         body_quat_w = self._asset.data.body_quat_w[:, self._body_idx, :]  # (N,4) wxyz
 

@@ -45,9 +45,9 @@ class HLFlatPickActionsCfg(HighLevelActionsCfg):
 
     gripper_action = mdp.BinaryJointPositionActionCfg(
         asset_name="robot",
-        joint_names=["arm_joint7", "arm_joint8"],
-        open_command_expr={"arm_joint7": 0.04, "arm_joint8": -0.04},
-        close_command_expr={"arm_joint7": 0.0, "arm_joint8": 0.0},
+        joint_names=["gripper_joint1", "gripper_joint2"],
+        open_command_expr={"gripper_joint1": 0.04, "gripper_joint2": -0.04},
+        close_command_expr={"gripper_joint1": 0.0, "gripper_joint2": 0.0},
     )
 
 @configclass
@@ -116,7 +116,7 @@ class CriticCfg(HighLevelObservationsCfg.CriticCfg):
         params={
             "object_cfg":   SceneEntityCfg("object"),
             "robot_cfg":    SceneEntityCfg("robot"),
-            "ee_link_name": "arm_link6",   # 可按需改
+            "ee_link_name": "gripper_base",   # 可按需改
             "ee_offset_z":  0.135,
         },
     )
@@ -139,7 +139,7 @@ class TeacherCfg(HighLevelObservationsCfg.PolicyCfg):
         params={
             "object_cfg":   SceneEntityCfg("object"),
             "robot_cfg":    SceneEntityCfg("robot"),
-            "ee_link_name": "arm_link6",   # 可按需改
+            "ee_link_name": "gripper_base",   # 可按需改
             "ee_offset_z":  0.135,
         },
     )
@@ -228,8 +228,8 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     """
     抓取任务奖励配置
     - 机器人类型：移动底盘 + 机械臂
-    - 末端执行器：arm_link6
-    - 夹爪：arm_link7, arm_link8
+    - 末端执行器：gripper_base
+    - 夹爪：gripper_link1, gripper_link2
     - 目标：抓取桌面物体并抬起
     """
 
@@ -276,15 +276,15 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
     # 阶段三：夹爪对准物体
     # =========================================================
 
-    # 夹爪朝向对准：arm_link7/8 两指到物体的距离之和最小化
+    # 夹爪朝向对准：gripper_link1/2 两指到物体的距离之和最小化
     gripper_alignment_symmetric = RewTerm(
         func=mdp.object_ee_symmetric_alignment_progress,
         weight=1.0,
         params={
             "min_finger_dist":       0.04,
             "object_cfg":            SceneEntityCfg("object"),
-            "ee_frame_cfg_finger1":  SceneEntityCfg("robot", body_names="arm_link7"),
-            "ee_frame_cfg_finger2":  SceneEntityCfg("robot", body_names="arm_link8"),
+            "ee_frame_cfg_finger1":  SceneEntityCfg("robot", body_names="gripper_link1"),
+            "ee_frame_cfg_finger2":  SceneEntityCfg("robot", body_names="gripper_link2"),
             "sensitivity":           10.0,
         },
     )
@@ -294,23 +294,23 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         weight=0.1,
         params={
             "object_cfg":   SceneEntityCfg("object"),
-            "ee_frame_cfg": SceneEntityCfg("robot", body_names="arm_link6"),
+            "ee_frame_cfg": SceneEntityCfg("robot", body_names="gripper_base"),
             "dist_gate": 0.01,
         },
     )
 
 
-    # 夹爪同步接触奖励：arm_link7/8 两指同时接触物体时给予奖励
+    # 夹爪同步接触奖励：gripper_link1/2 两指同时接触物体时给予奖励
     # grasp_contact_symmetric = RewTerm(
     #     func=mdp.gripper_contact_symmetric_grasp_progress,
     #     weight=5.0,  
     #     params={
     #         "threshold": 0.5,
-    #         "sensor_cfg_finger1": SceneEntityCfg("arm_link7_contact_forces", body_names="arm_link7"),
-    #         "sensor_cfg_finger2": SceneEntityCfg("arm_link8_contact_forces", body_names="arm_link8"),
+    #         "sensor_cfg_finger1": SceneEntityCfg("gripper_link1_contact_forces", body_names="gripper_link1"),
+    #         "sensor_cfg_finger2": SceneEntityCfg("gripper_link2_contact_forces", body_names="gripper_link2"),
     #         "object_cfg": SceneEntityCfg("object"),
-    #         "ee_frame_cfg_finger1": SceneEntityCfg("robot", body_names="arm_link7"),
-    #         "ee_frame_cfg_finger2": SceneEntityCfg("robot", body_names="arm_link8"),
+    #         "ee_frame_cfg_finger1": SceneEntityCfg("robot", body_names="gripper_link1"),
+    #         "ee_frame_cfg_finger2": SceneEntityCfg("robot", body_names="gripper_link2"),
     #         "gripper_action_name": "gripper_action",
     #         "min_finger_dist": 0.02,
     #         "cmd_proximity_gate": 0.2,  # 新增：只有当 cmd_pos 距离物体小于20cm时，接触奖励才生效
@@ -352,7 +352,7 @@ class HLFlatPickRewardsCfg(HighLevelRewardsCfg):
         params={
             "sensor_cfg": SceneEntityCfg(
                 "arm_contact_forces",
-                body_names=["arm_link[1-6]", "camera_link"],
+                body_names=["arm_link[1-6]"],
             ),
             "threshold": 1.0,
         },
@@ -434,11 +434,11 @@ class HLFlatPickTerminationsCfg_PLAY(HLFlatPickTerminationsCfg):
 class HLFlatPickCommandCfg(HighLevelCommandsCfg):
      ee_pose = HeightInvariantEECommandCfg(
         asset_name="robot",
-        body_name="arm_link6",
+        body_name="gripper_base",
         resampling_time_range=(5.0, 5.0),
         debug_vis=True,
         sampled_height=0.6,  # 采样坐标系的固定高度
-        arm_base_link_name="arm_base",  # 采样坐标系xy位置
+        arm_base_link_name="arm_base_link",  # 采样坐标系xy位置
         ranges=HeightInvariantEECommandCfg.Ranges(
             # 球坐标位置采样范围
             p_l= (0.4, 0.7),           # 半径 l

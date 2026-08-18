@@ -160,20 +160,20 @@ class HighLevelSceneCfg(MySceneCfg):
             convention="ros",
         ),
     )
-    arm_link7_contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/piper_camera/arm_link7", 
+    gripper_link1_contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/gripper_link1", 
         history_length=3, 
         track_air_time=True,
         filter_prim_paths_expr=["{ENV_REGEX_NS}/Object",],
     )
-    arm_link8_contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/piper_camera/arm_link8", 
+    gripper_link2_contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/gripper_link2", 
         history_length=3, 
         track_air_time=True,
         filter_prim_paths_expr=["{ENV_REGEX_NS}/Object",],
     )
     arm_contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/piper_camera/.*",  # 负向前瞻正则，匹配除了arm_link7和arm_link8以外的所有链接
+        prim_path="{ENV_REGEX_NS}/Robot/arm_link[1-6]",  # 负向前瞻正则，匹配除了gripper_link1和gripper_link2以外的所有链接
         history_length=3, 
         track_air_time=True,
     )

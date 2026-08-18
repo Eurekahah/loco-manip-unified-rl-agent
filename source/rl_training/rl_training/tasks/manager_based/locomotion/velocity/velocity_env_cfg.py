@@ -131,7 +131,7 @@ class ActionsCfg:
     
     joint_pos = mdp.JointPositionActionCfg(
         asset_name="robot", 
-        joint_names=["(?!arm_joint[1-8]).*"],  # 排除机械臂关节，只保留底盘关节 
+        joint_names=[""],  
         scale=0.5, 
         use_default_offset=True, 
         clip=None, 

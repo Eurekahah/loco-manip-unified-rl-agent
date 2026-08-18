@@ -40,7 +40,7 @@ def ee_position_tracking(
     env: ManagerBasedRLEnv,
     command_name: str,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    ee_frame_name: str = "arm_link6",
+    ee_frame_name: str = "gripper_base",
     std: float = 0.15,
     arm_weight_command_name: str | None = None,
 ) -> torch.Tensor:
@@ -80,7 +80,7 @@ def ee_orientation_tracking(
     env: ManagerBasedRLEnv,
     command_name: str,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    ee_frame_name: str = "arm_link6",
+    ee_frame_name: str = "gripper_base",
     std: float = 0.5,
     arm_weight_command_name: str | None = None,
 ) -> torch.Tensor:
@@ -113,7 +113,7 @@ def ee_goal_reached(
     env: ManagerBasedRLEnv,
     command_name: str,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    ee_frame_name: str = "arm_link6",
+    ee_frame_name: str = "gripper_base",
     pos_threshold: float = 0.05,      # 5cm
     angle_threshold: float = 0.2,     # ~11.5°
     arm_weight_command_name: str | None = None,
@@ -147,7 +147,7 @@ def grasp_success(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    ee_frame_name: str = "arm_link6",
+    ee_frame_name: str = "gripper_base",
     grasp_distance_threshold: float = 0.08,   # EE到物体的距离阈值
     lift_height_threshold: float = 0.05,       # 物体抬升高度阈值
     arm_weight_command_name: str | None = None,
@@ -181,7 +181,7 @@ def ee_approach_object(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    ee_frame_name: str = "arm_link6",
+    ee_frame_name: str = "gripper_base",
     std: float = 0.1,
     arm_weight_command_name: str | None = None,
 ) -> torch.Tensor:

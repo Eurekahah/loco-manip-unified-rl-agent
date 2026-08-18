@@ -10,7 +10,7 @@ from rl_training.assets.deeprobotics import DEEPROBOTICS_M20_PIPER_CFG
 @configclass
 class HighLevelRoughEnvCfg(HighLevelEnvCfg):
 
-    arm_camera_link_name: str = "piper_camera/camera_link/arm_camera"
+    arm_camera_link_name: str = "arm_camera"
     nav_camera_link_name: str = "base_link/nav_camera"
     base_link_name: str = "base_link"
 

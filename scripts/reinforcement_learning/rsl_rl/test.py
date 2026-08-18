@@ -287,7 +287,7 @@ class TrackingMetricsRecorder:
     #  方案三：末端位姿跟踪
     # ------------------------------------------------------------------
 
-    EE_BODY_NAME = "arm_link6"
+    EE_BODY_NAME = "gripper_base"
 
     def _record_scheme3(self, base_env, robot):
         cmd = base_env.command_manager.get_command("ee_pose")

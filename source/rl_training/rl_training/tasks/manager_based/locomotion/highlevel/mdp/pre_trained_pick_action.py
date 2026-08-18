@@ -61,7 +61,7 @@ class PreTrainedPickAction(ActionTerm):
     ]
 
     gripper_joint_names = [
-        "arm_joint7", "arm_joint8",
+        "gripper_joint1", "gripper_joint2",
     ]
     joint_names = leg_joint_names + wheel_joint_names + arm_joint_names
 
@@ -465,7 +465,7 @@ class PreTrainedPickActionCfg(ActionTermCfg):
     delta_pitch_max: float = 0.1
     """每个高层 step EE pitch 增量的最大幅度（弧度），tanh 后乘以此值。"""
 
-    ee_body_name: str = "arm_link6"
+    ee_body_name: str = "gripper_base"
 
     ee_pos_world_x: tuple[float, float] = (0.0, 3.0)
     ee_pos_world_y: tuple[float, float] = (-2.0, 2.0)

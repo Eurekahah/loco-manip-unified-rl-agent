@@ -35,8 +35,8 @@ def main():
         height_sensitivity=1.0,
         pitch_sensitivity=1.0,
         roll_sensitivity=1.0,
-        ee_pos_sensitivity=1.0,
-        ee_orn_sensitivity=1.0,
+        ee_pos_sensitivity=0.05,
+        ee_orn_sensitivity=0.05,
     )
     teleop_interface = Se2KeyboardFull(device_cfg)
     print(teleop_interface)
@@ -107,13 +107,13 @@ def main():
                         .expand(args.num_envs, -1)
                         .clone()
                     )   # (num_envs, 13)
-                    print(
-                        f"[Teleop] chassis=({cmd13[0]:.2f},{cmd13[1]:.2f},{cmd13[2]:.2f}) "
-                        f"ee_pos=({cmd13[3]:.3f},{cmd13[4]:.3f},{cmd13[5]:.3f}) "
-                        f"ee_orn=({cmd13[6]:.3f},{cmd13[7]:.3f},{cmd13[8]:.3f}) "
-                        f"body=({cmd13[9]:.3f},{cmd13[10]:.3f},{cmd13[11]:.3f}) "
-                        f"grip={int(cmd13[12])}"
-                    )
+                    # print(
+                    #     f"[Teleop] chassis=({cmd13[0]:.2f},{cmd13[1]:.2f},{cmd13[2]:.2f}) "
+                    #     f"ee_pos=({cmd13[3]:.3f},{cmd13[4]:.3f},{cmd13[5]:.3f}) "
+                    #     f"ee_orn=({cmd13[6]:.3f},{cmd13[7]:.3f},{cmd13[8]:.3f}) "
+                    #     f"body=({cmd13[9]:.3f},{cmd13[10]:.3f},{cmd13[11]:.3f}) "
+                    #     f"grip={int(cmd13[12])}"
+                    # )
                     env.step(actions)
                 else:
                     env.sim.render()

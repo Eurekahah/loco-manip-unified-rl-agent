@@ -61,7 +61,7 @@ class PreTrainedPolicyAction(ActionTerm):
     ]
 
     gripper_joint_names = [
-        "arm_joint7", "arm_joint8",
+        "gripper_joint1", "gripper_joint2",
     ]
     joint_names = leg_joint_names + wheel_joint_names + arm_joint_names
 

@@ -64,7 +64,7 @@ def object_dropped(
 def action_target_too_far(
     env: ManagerBasedRLEnv,
     action_term_name: str = "pre_trained_pick_action",
-    ee_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="arm_link6"),
+    ee_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="gripper_base"),
     distance_threshold: float = 0.3,
 ) -> torch.Tensor:
     """Terminate if the policy target position (raw_action[:, 3:6]) is too far from current EE position.

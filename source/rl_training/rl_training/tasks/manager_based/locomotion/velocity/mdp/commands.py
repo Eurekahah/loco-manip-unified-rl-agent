@@ -136,12 +136,12 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
  
         self.pose_start_b = torch.zeros(num_envs, 7, device=device)  # 插值起点（重采样瞬间EE位姿）
         self.pose_end_b = torch.zeros(num_envs, 7, device=device)    # 插值终点（本次重采样得到的目标位姿）
+        self.ee_body_idx = self.robot.find_bodies("gripper_base")[0][0]
 
 
     def _resample_command(self, env_ids):
         # 0. 记录插值起点：重采样这一刻实际正在输出的命令，保证轨迹连续不跳变
         # self.pose_start_b[env_ids] =  self.pose_command_b[env_ids].clone()
-        self.ee_body_idx = self.robot.find_bodies("arm_link6")[0][0]
         ee_pos_w = self.robot.data.body_pos_w[env_ids, self.ee_body_idx]
         ee_quat_w = self.robot.data.body_quat_w[env_ids, self.ee_body_idx]
 
@@ -205,6 +205,7 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         )
         # 姿态不插值，直接使用终点姿态
         self.pose_command_b[:, 3:] = self.pose_end_b[:, 3:]
+        # self.pose_command_b[:, :] = self.pose_end_b[:, :]  # debug: 直接使用终点姿态，绕过插值
         
 
     def collision_check(self, env_ids: torch.Tensor) -> torch.Tensor:
@@ -472,7 +473,252 @@ class HeightInvariantEECommandCfg(mdp.UniformPoseCommandCfg):
     num_collision_check_samples: int = 10    # 路径插值采样点数
     max_resample_attempts: int = 10          # 最大重采样次数
    
-    
+import pytorch_kinematics as pk
+
+
+class FKReachableEECommand(mdp.UniformPoseCommand):
+    """通过正向运动学(FK)在关节空间采样，保证末端执行器目标位姿运动学可达。
+
+    与 HeightInvariantEECommand 的区别：
+    - HeightInvariantEECommand 在任务空间（球坐标）直接采样EE目标点，
+      只做碰撞/地下检测，不保证目标在机械臂的可达工作空间内，姿态也是
+      靠"锥形收缩"硬凑出来的近似可达范围。
+    - 本类改为在关节空间按各关节限位均匀采样关节角，再用FK计算EE位姿。
+      只要关节角在限位内，结果天然运动学可达；姿态也不再需要单独采样，
+      直接是FK给出的结果。
+
+    暂不做轨迹插值：目标在 _resample_command 里直接写入 pose_command_b，
+    _update_command 是空操作。
+    """
+
+    cfg: "FKReachableEECommandCfg"
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        num_envs = env.num_envs
+        device = env.device
+
+        # ---- 构建正向运动学链 ----
+        with open(cfg.urdf_path, "rb") as f:
+            urdf_str = f.read()
+        if isinstance(urdf_str, str):
+            urdf_str = urdf_str.encode('utf-8')
+        self.fk_chain = pk.build_serial_chain_from_urdf(
+            urdf_str, cfg.ee_link_name, root_link_name=cfg.arm_base_link_name
+        ).to(dtype=torch.float32, device=device)
+
+        self.joint_names = self.fk_chain.get_joint_parameter_names()
+        self.num_joints = len(self.joint_names)
+
+        # ---- 关节限位：优先从仿真中的 articulation 读取，保证和实际一致 ----
+        robot_joint_names = list(env.scene["robot"].data.joint_names)
+        try:
+            joint_ids = [robot_joint_names.index(n) for n in self.joint_names]
+        except ValueError as e:
+            raise ValueError(
+                f"FK 链中的关节名称与机器人 articulation 的关节名称不匹配: {e}。"
+                "请确认 URDF 关节命名与仿真机器人资产一致，"
+                "或在 cfg.joint_limits_override 中手动指定限位。"
+            ) from e
+        joint_limits = env.scene["robot"].data.joint_pos_limits[0, joint_ids].clone()  # (num_joints, 2)
+
+        if cfg.joint_limits_override is not None:
+            for i, name in enumerate(self.joint_names):
+                if name in cfg.joint_limits_override:
+                    lo, hi = cfg.joint_limits_override[name]
+                    joint_limits[i, 0] = lo
+                    joint_limits[i, 1] = hi
+
+        self.joint_lower = joint_limits[:, 0].contiguous()
+        self.joint_upper = joint_limits[:, 1].contiguous()
+
+        # ---- 状态缓存 ----
+        self.sampled_joint_pos = torch.zeros(num_envs, self.num_joints, device=device)
+        self.ee_end_pos_cart = torch.zeros(num_envs, 3, device=device)   # 相对 arm_base_link
+        self.ee_end_orn_quat = torch.zeros(num_envs, 4, device=device)
+        self.pose_end_cart = torch.zeros(num_envs, 7, device=device)
+
+        # ---- 碰撞盒（沿用原来的定义，只检测终点，不做路径检测） ----
+        self.collision_lower_limits = torch.tensor(cfg.collision_lower_limits, dtype=torch.float32, device=device)
+        self.collision_upper_limits = torch.tensor(cfg.collision_upper_limits, dtype=torch.float32, device=device)
+        self.underground_limit = cfg.underground_limit
+        self.max_resample_attempts = cfg.max_resample_attempts
+
+        self.arm_base_link_idx = env.scene["robot"].data.body_names.index(cfg.arm_base_link_name)
+
+    # ------------------------------------------------------------------
+    def _resample_command(self, env_ids: torch.Tensor):
+        n_total = len(env_ids)
+        
+        # 获取 arm_base_link 在世界坐标系中的位姿
+        arm_base_pos_w = self.robot.data.body_pos_w[env_ids, self.arm_base_link_idx]
+        arm_base_quat_w = self.robot.data.body_quat_w[env_ids, self.arm_base_link_idx]
+
+        final_joint_pos = torch.zeros(n_total, self.num_joints, device=self.device)
+        final_pos_arm_base = torch.zeros(n_total, 3, device=self.device)  # 相对 arm_base_link
+        final_quat_arm_base = torch.zeros(n_total, 4, device=self.device)
+
+        remaining_idx = torch.arange(n_total, device=self.device)  # env_ids 内部的局部下标
+
+        for _ in range(self.max_resample_attempts):
+            if len(remaining_idx) == 0:
+                break
+
+            n = len(remaining_idx)
+            u = torch.rand(n, self.num_joints, device=self.device)
+            joint_pos = self.joint_lower + u * (self.joint_upper - self.joint_lower)
+
+            # FK 计算末端相对 arm_base_link 的位姿
+            pos_arm_base, quat_arm_base = self._forward_kinematics(joint_pos)
+
+            final_joint_pos[remaining_idx] = joint_pos
+            final_pos_arm_base[remaining_idx] = pos_arm_base
+            final_quat_arm_base[remaining_idx] = quat_arm_base
+
+            if not self.cfg.check_collision:
+                break
+
+            # 转换到世界坐标进行碰撞检测
+            pos_world = math_utils.quat_apply(
+                arm_base_quat_w[remaining_idx], pos_arm_base
+            ) + arm_base_pos_w[remaining_idx]
+            
+            collision_mask = self._check_point_collision(pos_world)
+            remaining_idx = remaining_idx[collision_mask]
+            # 注意：若 max_resample_attempts 次都没采到无碰撞的解，
+            # 剩余 env 会保留最后一次（有碰撞）的采样结果，这点和原实现的行为一致。
+
+        # 保存相对 arm_base_link 的位姿
+        self.sampled_joint_pos[env_ids] = final_joint_pos
+        self.ee_end_pos_cart[env_ids] = final_pos_arm_base
+        self.ee_end_orn_quat[env_ids] = final_quat_arm_base
+        self.pose_end_cart[env_ids] = torch.cat([final_pos_arm_base, final_quat_arm_base], dim=-1)
+
+        # ---- 转换为相对 root 坐标系的目标命令 ----
+        # 1. 计算末端在世界坐标系中的位姿
+        pos_world = math_utils.quat_apply(arm_base_quat_w, final_pos_arm_base) + arm_base_pos_w
+        quat_world = math_utils.quat_mul(arm_base_quat_w, final_quat_arm_base)
+
+        # 2. 获取 root 在世界坐标系中的位姿
+        root_pos_w = self.robot.data.root_pos_w[env_ids]
+        root_quat_w = self.robot.data.root_quat_w[env_ids]
+
+        # 3. 计算末端相对 root 的位姿（这才是最终的控制命令）
+        target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
+            root_pos_w, root_quat_w, pos_world, quat_world,
+        )
+        self.pose_command_b[env_ids] = torch.cat([target_pos_b, target_quat_b], dim=-1)
+
+    def _update_command(self):
+        """暂不做插值，目标已在 _resample_command 中直接写入 pose_command_b。"""
+        pass
+
+    # ------------------------------------------------------------------
+    def _forward_kinematics(self, joint_pos: torch.Tensor):
+        """批量FK：joint_pos (N, num_joints) -> (pos (N,3), quat_wxyz (N,4))，相对 arm_base_link。"""
+        fk_result = self.fk_chain.forward_kinematics(joint_pos)
+        mat = fk_result.get_matrix()  # (N, 4, 4)
+        pos = mat[:, :3, 3]
+        quat = self._matrix_to_quat_wxyz(mat[:, :3, :3])
+        return pos, quat
+
+    @staticmethod
+    def _matrix_to_quat_wxyz(R: torch.Tensor) -> torch.Tensor:
+        """旋转矩阵 (N,3,3) -> 四元数 (N,4)，wxyz 顺序（数值稳定实现，四种分支）。"""
+        n = R.shape[0]
+        m00, m01, m02 = R[:, 0, 0], R[:, 0, 1], R[:, 0, 2]
+        m10, m11, m12 = R[:, 1, 0], R[:, 1, 1], R[:, 1, 2]
+        m20, m21, m22 = R[:, 2, 0], R[:, 2, 1], R[:, 2, 2]
+
+        trace = m00 + m11 + m22
+        quat = torch.zeros(n, 4, device=R.device, dtype=R.dtype)
+
+        cond1 = trace > 0
+        cond2 = (~cond1) & (m00 > m11) & (m00 > m22)
+        cond3 = (~cond1) & (~cond2) & (m11 > m22)
+        cond4 = (~cond1) & (~cond2) & (~cond3)
+
+        if cond1.any():
+            s = torch.sqrt(trace[cond1] + 1.0) * 2
+            quat[cond1, 0] = 0.25 * s
+            quat[cond1, 1] = (m21[cond1] - m12[cond1]) / s
+            quat[cond1, 2] = (m02[cond1] - m20[cond1]) / s
+            quat[cond1, 3] = (m10[cond1] - m01[cond1]) / s
+        if cond2.any():
+            s = torch.sqrt(1.0 + m00[cond2] - m11[cond2] - m22[cond2]) * 2
+            quat[cond2, 0] = (m21[cond2] - m12[cond2]) / s
+            quat[cond2, 1] = 0.25 * s
+            quat[cond2, 2] = (m01[cond2] + m10[cond2]) / s
+            quat[cond2, 3] = (m02[cond2] + m20[cond2]) / s
+        if cond3.any():
+            s = torch.sqrt(1.0 + m11[cond3] - m00[cond3] - m22[cond3]) * 2
+            quat[cond3, 0] = (m02[cond3] - m20[cond3]) / s
+            quat[cond3, 1] = (m01[cond3] + m10[cond3]) / s
+            quat[cond3, 2] = 0.25 * s
+            quat[cond3, 3] = (m12[cond3] + m21[cond3]) / s
+        if cond4.any():
+            s = torch.sqrt(1.0 + m22[cond4] - m00[cond4] - m11[cond4]) * 2
+            quat[cond4, 0] = (m10[cond4] - m01[cond4]) / s
+            quat[cond4, 1] = (m02[cond4] + m20[cond4]) / s
+            quat[cond4, 2] = (m12[cond4] + m21[cond4]) / s
+            quat[cond4, 3] = 0.25 * s
+
+        return math_utils.normalize(quat)
+
+    def _check_point_collision(self, points_world: torch.Tensor) -> torch.Tensor:
+        """单点碰撞盒/地下检测（无路径插值，只查终点）。返回 True = 碰撞，需要重采样。"""
+        upper = self.collision_upper_limits
+        lower = self.collision_lower_limits
+
+        if upper.dim() == 1:
+            in_box = torch.logical_and(
+                torch.all(points_world < upper, dim=-1),
+                torch.all(points_world > lower, dim=-1),
+            )
+        else:
+            pts = points_world.unsqueeze(1)  # (N, 1, 3)
+            in_box = torch.logical_and(
+                torch.all(pts < upper, dim=-1),
+                torch.all(pts > lower, dim=-1),
+            )
+            in_box = torch.any(in_box, dim=-1)
+
+        underground = points_world[..., 2] < self.underground_limit
+        return in_box | underground
+
+    # ------------------------------------------------------------------
+    @property
+    def command(self) -> torch.Tensor:
+        return self.pose_command_b
+
+    @property
+    def command_local(self) -> torch.Tensor:
+        return self.pose_command_b
+
+
+@configclass
+class FKReachableEECommandCfg(mdp.UniformPoseCommandCfg):
+
+    class_type: type = FKReachableEECommand
+
+    urdf_path: str = MISSING
+    """机械臂 URDF 文件路径，用于构建FK链。"""
+
+    ee_link_name: str = MISSING
+    """URDF 中末端执行器 link 名称（FK 链末端）。"""
+
+    arm_base_link_name: str = MISSING
+    """URDF 中机械臂基座 link 名称（FK 链根节点，也用于 height-invariant 坐标系原点）。"""
+
+    joint_limits_override: dict | None = None
+    """可选：手动覆盖某些关节的采样限位，例如缩小某关节范围避免奇异位形。
+    格式: {"joint_name": (lo, hi), ...}"""
+
+    collision_lower_limits: list = field(default_factory=lambda: [-0.3, -0.3, 0.0])
+    collision_upper_limits: list = field(default_factory=lambda: [ 0.3,  0.3, 0.5])
+    underground_limit: float = 0.05
+    max_resample_attempts: int = 10
+    check_collision: bool = True
 
 class DiscreteCommandController(CommandTerm):
     """
