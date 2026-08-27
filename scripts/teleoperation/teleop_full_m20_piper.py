@@ -32,9 +32,9 @@ def main():
         v_x_sensitivity=0.6,
         v_y_sensitivity=0.4,
         omega_z_sensitivity=0.8,
-        height_sensitivity=1.0,
-        pitch_sensitivity=1.0,
-        roll_sensitivity=1.0,
+        height_sensitivity=0.05,
+        pitch_sensitivity=0.05,
+        roll_sensitivity=0.05,
         ee_pos_sensitivity=0.05,
         ee_orn_sensitivity=0.05,
     )

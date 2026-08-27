@@ -157,6 +157,9 @@ class TeleopLLAction(ActionTerm):
         self._default_ee_quat_b[:, 0] = 1.0  # 单位四元数初始化，防止未初始化时出现非法值
         self._default_ee_pose_initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._ee_body_idx = self.robot.find_bodies(self.cfg.ee_body_name)[0][0]
+        # default 身体姿态缓存（height, pitch, roll），reset 时恢复到初始值
+        self._default_body_pose: torch.Tensor = torch.zeros(self.num_envs, 3, device=self.device)
+        self._default_body_pose[:, 0] = 0.51  # height 默认 0.51，pitch/roll 默认 0
         
         self.arm_link_ids = self.robot.find_bodies(["arm.*"])[0]
     
@@ -216,6 +219,14 @@ class TeleopLLAction(ActionTerm):
         self._default_ee_pos_b[env_ids]  = ee_pos_b
         self._default_ee_quat_b[env_ids] = ee_quat_b
         self._default_ee_pose_initialized[env_ids] = True
+
+    def _reset_default_body_pose(self, env_ids: torch.Tensor):
+        """reset 时把身体姿态默认值恢复为初始值 (0.51, 0, 0)。"""
+        if env_ids.numel() == 0:
+            return
+        self._default_body_pose[env_ids, 0] = 0.51
+        self._default_body_pose[env_ids, 1] = 0.0
+        self._default_body_pose[env_ids, 2] = 0.0
     # ------------------------------------------------------------------
     # process_actions  （核心：直接映射，无累积）
     # ------------------------------------------------------------------
@@ -224,58 +235,83 @@ class TeleopLLAction(ActionTerm):
         self._raw_actions[:] = actions
         r = self.cfg.low_level_command_ranges
 
-        # 若有 env 还没记录过 default pose（例如刚创建/还未走过 reset），先补上
         uninit_ids = (~self._default_ee_pose_initialized).nonzero(as_tuple=False).squeeze(-1)
         if uninit_ids.numel() > 0:
             self._capture_default_ee_pose(uninit_ids)
 
-        # ── 1. 底盘速度（绝对值） ──────────────────────────────────
+        # ── 1. 底盘速度（绝对量） ──────────────
         self._ll_command[:, 0] = self._clamp_range(actions[:, 0], r.lin_vel_x[0], r.lin_vel_x[1])
         self._ll_command[:, 1] = self._clamp_range(actions[:, 1], r.lin_vel_y[0], r.lin_vel_y[1])
         self._ll_command[:, 2] = self._clamp_range(actions[:, 2], r.ang_vel_z[0], r.ang_vel_z[1])
 
-        # ── 2. EE 位置：default_pos_b + 增量 → world系 ──────────────
+        # ── 2. EE 位置：先叠加增量，再对叠加后的绝对位置 clamp ──────
         delta_pos_b = torch.stack([
-            self._clamp_range(actions[:, 4], r.ee_pos_x[0], r.ee_pos_x[1]),
-            self._clamp_range(-actions[:, 3], r.ee_pos_y[0], r.ee_pos_y[1]),
-            self._clamp_range(actions[:, 5], r.ee_pos_z[0], r.ee_pos_z[1]),
-        ], dim=-1)  # (N, 3)
+            actions[:, 3],
+            actions[:, 4],
+            actions[:, 5],
+        ], dim=-1)  # 原始增量，先不 clamp
 
-        ee_pos_b = self._default_ee_pos_b + delta_pos_b
+        ee_pos_b_raw = self._default_ee_pos_b + delta_pos_b
 
-        root_quat_w = self.robot.data.root_quat_w  # (N, 4)
-        root_pos_w  = self.robot.data.root_pos_w   # (N, 3)
-        target_pos_w = math_utils.quat_apply(root_quat_w, ee_pos_b) + root_pos_w
-        target_pos_w[:, 2] = torch.clamp(target_pos_w[:, 2], min=0.0)  # z不低于地面
-        self._ll_command[:, 3:6] = target_pos_w
-        self._ll_command[:, 3:6] = ee_pos_b  # debug: 直接使用 body系位置，绕过旋转变换
+        current_body_height = self._default_body_pose[:, 0]  # (N,)
+ 
+        # 把“离地间隙 / 相对身体最大可达高度”反解到 body 系下的动态区间
+        ee_z_lo_dyn = r.ee_ground_clearance - current_body_height
+        ee_z_hi_dyn = r.ee_max_reach_above_ground - current_body_height
+ 
+        # 再与固定的 body 系区间 r.ee_pos_z 取交集，得到最终上下界
+        ee_z_lo = torch.maximum(
+            torch.full_like(current_body_height, r.ee_pos_z[0]), ee_z_lo_dyn
+        )
+        ee_z_hi = torch.minimum(
+            torch.full_like(current_body_height, r.ee_pos_z[1]), ee_z_hi_dyn
+        )
+        # 极端情况下（身体高度超出常规范围）可能出现 lo > hi，排序兜底避免异常/报错
+        ee_z_lo, ee_z_hi = torch.minimum(ee_z_lo, ee_z_hi), torch.maximum(ee_z_lo, ee_z_hi)
+ 
 
-        # ── 3. EE 姿态：default_quat_b ⊗ 增量四元数 → world系 ───────
-        ee_droll_b  = self._clamp_range(-actions[:, 6], -math.pi, math.pi)
-        ee_dpitch_b = self._clamp_range(actions[:, 7], -math.pi, math.pi)
-        ee_dyaw_b   = self._clamp_range(-actions[:, 8], -math.pi, math.pi)
+        ee_pos_b = torch.stack([
+            self._clamp_range(ee_pos_b_raw[:, 0], r.ee_pos_x[0], r.ee_pos_x[1]),
+            self._clamp_range(ee_pos_b_raw[:, 1], r.ee_pos_y[0], r.ee_pos_y[1]),
+            torch.clamp(ee_pos_b_raw[:, 2], min=ee_z_lo, max=ee_z_hi),
+        ], dim=-1)  # (N, 3) 对结果 clamp，保证真正意义上的工作空间限制
+        # 注意：原代码这里下面还有一行 
+        self._ll_command[:, 3:6] = ee_pos_b
+        # 会把刚算好的 world 系坐标覆盖成 body 系坐标，如果不是故意 debug，建议删掉
+
+        # ── 3. EE 姿态：四元数是乘法叠加，本身不存在"clamp增量"的问题，
+        #     但如果你想限制姿态的最终偏离范围，也应该在叠加之后、
+        #     对结果（相对 default 的角度）做限制，而不是限制输入的 delta 角 ──
+        ee_droll_b  = -actions[:, 6]
+        ee_dpitch_b = actions[:, 7]
+        ee_dyaw_b   = actions[:, 8]
 
         delta_quat_b = math_utils.quat_from_euler_xyz(ee_droll_b, ee_dpitch_b, ee_dyaw_b)
-        # 增量在 default 姿态的局部系下叠加：先 default，再叠加增量
         ee_quat_b = math_utils.quat_mul(self._default_ee_quat_b, delta_quat_b)
-        # print(f"ee_droll_b: {ee_droll_b}, ee_dpitch_b: {ee_dpitch_b}, ee_dyaw_b: {ee_dyaw_b}")
-        self._ll_command[:, 6:10] = ee_quat_b # math_utils.quat_mul(root_quat_w, ee_quat_b)
-        self._default_ee_pos_b = ee_pos_b  # debug: 每步更新 default_pos_b
-        self._default_ee_quat_b = ee_quat_b  # debug: 每步更新 default_quat_b
+        self._ll_command[:, 6:10] = ee_quat_b
+        # 更新 default（若确实想做“相对上一步”的积分式控制，这里没问题；
+        # 但要清楚：这意味着 r.ee_pos_x 等范围现在保护的是"绝对位置"而不是"单步增量"，
+        # 正是靠这次修复的 clamp 顺序来生效的）
+        self._default_ee_pos_b  = ee_pos_b
+        self._default_ee_quat_b = ee_quat_b
 
-        # self._ll_command[:, 6:10] = torch.tensor([[0.0, 0.0, 0.0, 1.0]], device=self.device).expand(self.num_envs, -1)  # debug: 直接使用 body系四元数，绕过旋转变换
+        # ── 4. 机体姿态：与 EE 位置同理，先叠加增量，再对叠加后的绝对值 clamp ──────
+        delta_body_pose = torch.stack([
+            actions[:, 9],
+            actions[:, 10],
+            actions[:, 11],
+        ], dim=-1)  # (N, 3) 增量：height, pitch, roll
 
-        # ── 4. 机体姿态（直接映射到目标范围，不变） ──────────────────
-        self._ll_command[:, 10] = self._clamp_range(actions[:, 9],  r.target_height[0], r.target_height[1])
-        self._ll_command[:, 11] = self._clamp_range(actions[:, 10], r.target_pitch[0],  r.target_pitch[1])
-        self._ll_command[:, 12] = self._clamp_range(actions[:, 11], r.target_roll[0],   r.target_roll[1])
-        # print(f"[TeleopLLAction] ll_command: ")
-        # print(f"{self._ll_command[:, 0:3]} (vx,vy,wz),")
-        # print(f"{self._ll_command[:, 3:6]} (ee_pos_w), ")
-        # print(f"{self._ll_command[:, 6:10]} (ee_quat_w),")
-        # print(f"{self._ll_command[:, 10:13]} (body_hpr)")
-        # print(f"{self._asset.root_physx_view.get_masses()[:, self.arm_link_ids].to(self._env.device)}")
-        # 角度给1000，调整位置
+        body_pose_raw = self._default_body_pose + delta_body_pose
+
+        body_pose = torch.stack([
+            self._clamp_range(body_pose_raw[:, 0], r.target_height[0], r.target_height[1]),
+            self._clamp_range(body_pose_raw[:, 1], r.target_pitch[0],  r.target_pitch[1]),
+            self._clamp_range(body_pose_raw[:, 2], r.target_roll[0],   r.target_roll[1]),
+        ], dim=-1)
+
+        self._ll_command[:, 10:13] = body_pose
+        self._default_body_pose = body_pose  # 更新 default，供下一步继续累加
         
     # ------------------------------------------------------------------
     # apply_actions
@@ -290,6 +326,7 @@ class TeleopLLAction(ActionTerm):
                 self.low_level_wheel_actions[reset_ids, :] = 0
                 self.low_level_ee_actions[reset_ids, :]    = 0
                 self._capture_default_ee_pose(reset_ids)
+                self._reset_default_body_pose(reset_ids)
 
         if self._counter % self.cfg.low_level_decimation == 0:
             low_level_obs = self._low_level_obs_manager.compute_group("ll_policy")
@@ -396,9 +433,13 @@ class TeleopLLActionCfg(ActionTermCfg):
         lin_vel_x: tuple[float, float] = (-5.0,  5.0)
         lin_vel_y: tuple[float, float] = (-1.0,  1.0)
         ang_vel_z: tuple[float, float] = (-1.0,  1.0)
-        ee_pos_x:  tuple[float, float] = (-0.4,   0.8)
+        ee_pos_x:  tuple[float, float] = ( 0.2,  0.8)
         ee_pos_y:  tuple[float, float] = (-0.4,  0.4)
         ee_pos_z:  tuple[float, float] = (-0.6,  0.6)
+        #   ee_ground_clearance: 允许 EE 距离脚下地面的最小高度（避免蹭地）
+        #   ee_max_reach_above_ground: 允许 EE 距离脚下地面的最大高度（机械臂实际可达上限）
+        ee_ground_clearance: float = 0.135
+        ee_max_reach_above_ground: float = 1.2
         ee_pitch:  tuple[float, float] = (-math.pi / 2, 0.0)
         target_height: tuple[float, float] = (0.33, 0.6)
         target_pitch:  tuple[float, float] = (-0.35, 0.35)

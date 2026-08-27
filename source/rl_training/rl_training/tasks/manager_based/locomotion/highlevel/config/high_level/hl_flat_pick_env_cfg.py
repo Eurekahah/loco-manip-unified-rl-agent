@@ -574,7 +574,7 @@ class TeleopEnvCfg(HLFlatPickTeacherEnvCfg):
     actions: TeleopActionsCfg = TeleopActionsCfg()
     def __post_init__(self):
         super().__post_init__()
-
+        self.decimation = 4  # 设置为和底层控制器相同的decimation, 去掉延迟
         if self.__class__.__name__ == "TeleopEnvCfg":
             self.disable_zero_weight_rewards()
 
