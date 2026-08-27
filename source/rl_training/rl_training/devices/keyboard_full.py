@@ -332,7 +332,7 @@ class Se2KeyboardFull(DeviceBase):
             "NUMPAD_3"      : _v(6, -eo),
             # Δee_pitch  (index 7) : Numpad 0 / .
             "NUMPAD_0"      : _v(7,  eo),
-            "NUMPAD_PERIOD" : _v(7, -eo),
+            "NUMPAD_DEL" : _v(7, -eo),
             # Δee_yaw    (index 8) : Numpad + / -
             "NUMPAD_ADD"      : _v(8,  eo),
             "NUMPAD_SUBTRACT" : _v(8, -eo),
