@@ -303,9 +303,10 @@ class Se2VRExtended(DeviceBase):
 
             if hand == "right":
                 self._update_arm(delta_pos, r_diff, trigger)
+                self._update_yaw_from_thumbstick(goal)
             elif hand == "left":
                 self._update_body(delta_pos, r_diff, trigger)
-                self._update_chassis_from_thumbstick(goal, r_diff)
+                self._update_chassis_from_thumbstick(goal)
 
     # ------------------------------------------------------------------
     # Command updaters
@@ -350,6 +351,14 @@ class Se2VRExtended(DeviceBase):
         # --- gripper ---
         self._command[12] = 1.0 if trigger > 0.5 else -1.0
 
+    def _update_yaw_from_thumbstick(self, goal):
+        """Map right thumbstick left/right axis to chassis yaw rate (wz)."""
+        if not (goal.metadata and "thumbstick" in goal.metadata):
+            return
+        stick = goal.metadata["thumbstick"]
+        stick_x = float(stick.get("x", 0.0))
+        self._command[2] = stick_x * self.omega_z_sensitivity
+
     def _update_body(self, delta_pos: np.ndarray, r_diff: R, trigger: float):
         """Write body height / pitch / roll deltas from left controller."""
         # height: Z-component of position delta, trigger raises/lowers
@@ -367,7 +376,7 @@ class Se2VRExtended(DeviceBase):
         self._command[11] = euler[1] * self.roll_sensitivity    # roll  (X)
         print(f"Body rotation delta (radians): pitch={euler[1]:.3f}, roll={euler[0]:.3f}")
 
-    def _update_chassis_from_thumbstick(self, goal, r_diff):
+    def _update_chassis_from_thumbstick(self, goal):
         """Map left thumbstick axes to (vx, vy, wz)."""
         if not (goal.metadata and "thumbstick" in goal.metadata):
             return
@@ -375,14 +384,9 @@ class Se2VRExtended(DeviceBase):
         # Typical VR thumbstick: x=horizontal, y=vertical (forward)
         stick_x = float(stick.get("x", 0.0))
         stick_y = float(stick.get("y", 0.0))
-        # twist   = float(stick.get("twist", 0.0))  # quest3s doesn't have twist
-
-        euler = r_diff.as_euler("XYZ", degrees=False)
 
         self._command[0] = - stick_y * self.v_x_sensitivity
         self._command[1] = stick_x * self.v_y_sensitivity
-        self._command[2] = euler[2] * self.omega_z_sensitivity
-        # print(f"v_x = {self._command[0]:.3f}, v_y = {self._command[1]:.3f}, w_z = {self._command[2]:.3f}")
 
 
     # ------------------------------------------------------------------
