@@ -120,6 +120,8 @@ class Se2VRExtended(DeviceBase):
         self.roll_sensitivity    = cfg.roll_sensitivity
         self.arm_pos_sensitivity = cfg.arm_pos_sensitivity
         self.arm_rot_sensitivity = cfg.arm_rot_sensitivity
+        self.pos_deadzone        = cfg.pos_deadzone
+        self.rot_deadzone        = cfg.rot_deadzone
 
         # ---- state flags ----
         self._started      = False
@@ -149,10 +151,15 @@ class Se2VRExtended(DeviceBase):
         self._additional_callbacks: dict[str, Callable] = {}
 
         # ---- command buffer [13] ----
+        # 第 9~11 维是"相对标定原点的手柄偏移"，初始全 0。
+        # 注意：不再把 default_body_height 写进第 9 维——那是"绝对目标"语义的残留，
+        # 在增量/偏移语义下会导致机身高度一步顶到上限。
         self._command = np.zeros(13, dtype=np.float64)
-        self._command[9] = cfg.default_body_height
-        # Arm rotation slot initialised to identity quaternion
-        # self._command[9:13] = _IDENTITY_QUAT
+        # 扳机积分出的机身高度偏移（按住 trigger 持续升高），标定/reset 时归零
+        self._body_height_offset = 0.0
+        # 相邻 VR 数据包间隔，用于把扳机"速度"积分成高度偏移
+        self._dt = 0.0
+        self._last_packet_time = time.time()
 
         # ---- previous calibrated pose for delta computation ----
         self._prev_arm_pos:  np.ndarray | None = None
@@ -205,7 +212,7 @@ class Se2VRExtended(DeviceBase):
     def reset(self):
         """Reset all buffers and VR origins."""
         self._command[:] = 0.0
-        self._command[9] = self._cfg.default_body_height
+        self._body_height_offset = 0.0
         self._vr_origin = {
             "left":  {"pos": None, "rot": None},
             "right": {"pos": None, "rot": None},
@@ -214,11 +221,13 @@ class Se2VRExtended(DeviceBase):
         self._prev_arm_pos  = None
         self._prev_arm_rot  = None
         self._prev_body_rot = None
+        self._last_packet_time = time.time()
 
     def add_callback(self, key: str, func: Callable):
         """Register a zero-argument callable for a named event key.
 
-        Supported keys: ``"R"`` (reset/fail), ``"N"`` (reset/success).
+        Supported keys: ``"S"`` (start control + recalibrate),
+        ``"R"`` (reset/fail), ``"N"`` (reset/success).
         """
         self._additional_callbacks[key] = func
 
@@ -272,6 +281,11 @@ class Se2VRExtended(DeviceBase):
             if goal.arm == "headset":
                 continue
 
+            # 记录相邻包间隔，供扳机高度积分使用
+            now = time.time()
+            self._dt = min(max(now - self._last_packet_time, 0.0), 0.1)
+            self._last_packet_time = now
+
             # --- buttons ---
             if goal.metadata and "buttons" in goal.metadata:
                 self._check_buttons(goal.metadata["buttons"], goal.metadata.get("hand", goal.arm))
@@ -322,31 +336,25 @@ class Se2VRExtended(DeviceBase):
         # Sim frame:  x=forward, y=left,  z=up
         # EE  frame:  z=forward, x=left,  y=up
         #
-        # Mapping:  EE_x =  sim_y  (left)
-        #           EE_y =  sim_z  (up)
-        #           EE_z =  sim_x  (forward)
+        # 当前实现：identity 映射（sim_x→EE_x, sim_y→EE_y, sim_z→EE_z），
+        # 未做轴交换。如手感不对（机械臂方向与手柄不符），改这里即可：
+        #   EE_x = sim_y, EE_y = sim_z, EE_z = sim_x
         # ------------------------------------------------------------------
-        ee_dx =  delta_pos[0]   #  sim_y  → EE x (left)
-        ee_dy =  delta_pos[1]   #  sim_z  → EE y (up)
-        ee_dz =  delta_pos[2]   #  sim_x  → EE z (forward)
+        ee_dx = self._apply_deadzone(delta_pos[0], self.pos_deadzone)
+        ee_dy = self._apply_deadzone(delta_pos[1], self.pos_deadzone)
+        ee_dz = self._apply_deadzone(delta_pos[2], self.pos_deadzone)
 
         self._command[3] = ee_dx * self.arm_pos_sensitivity
         self._command[4] = ee_dy * self.arm_pos_sensitivity
         self._command[5] = ee_dz * self.arm_pos_sensitivity
 
-        # Rotation: extract Euler in EE frame (XYZ = roll/pitch/yaw relative to EE axes)
-        # Apply the same axis remap to the rotation euler angles
+        # Rotation: 与位置一致，当前为 identity 映射（sim 系欧拉角直接写 EE 旋转通道）
         euler_sim = r_diff.as_euler("XYZ", degrees=False)
         # euler_sim: [rot_around_sim_x, rot_around_sim_y, rot_around_sim_z]
         #            = [roll,           pitch,            yaw           ]
-        #
-        # EE axes remapped:
-        #   rot around EE_x (left)    = rot around sim_y  → euler_sim[1]
-        #   rot around EE_y (up)      = rot around sim_z  → euler_sim[2]
-        #   rot around EE_z (forward) = rot around sim_x  → euler_sim[0]
-        self._command[6] =  euler_sim[0] * self.arm_rot_sensitivity  # EE roll  (around EE x)
-        self._command[7] =  euler_sim[1] * self.arm_rot_sensitivity  # EE pitch (around EE y)
-        self._command[8] =  euler_sim[2] * self.arm_rot_sensitivity  # EE yaw   (around EE z)
+        self._command[6] = self._apply_deadzone(euler_sim[0], self.rot_deadzone) * self.arm_rot_sensitivity
+        self._command[7] = self._apply_deadzone(euler_sim[1], self.rot_deadzone) * self.arm_rot_sensitivity
+        self._command[8] = self._apply_deadzone(euler_sim[2], self.rot_deadzone) * self.arm_rot_sensitivity
 
         # --- gripper ---
         self._command[12] = 1.0 if trigger > 0.5 else -1.0
@@ -356,25 +364,33 @@ class Se2VRExtended(DeviceBase):
         if not (goal.metadata and "thumbstick" in goal.metadata):
             return
         stick = goal.metadata["thumbstick"]
-        stick_x = float(stick.get("x", 0.0))
+        stick_x = -float(stick.get("x", 0.0))
         self._command[2] = stick_x * self.omega_z_sensitivity
 
     def _update_body(self, delta_pos: np.ndarray, r_diff: R, trigger: float):
-        """Write body height / pitch / roll deltas from left controller."""
-        # height: Z-component of position delta, trigger raises/lowers
+        """Write body height / pitch / roll offsets from left controller.
+
+        输出的是"相对标定原点"的纯偏移（不再混入 default_body_height 绝对量），
+        由执行端在 absolute_commands 模式下叠加到标定基准上。
+        """
+        # height: Z 偏移 + 扳机积分（按住持续升高，松手保持，标定/reset 归零）
+        if trigger > 0.5:
+            self._body_height_offset += self.height_sensitivity * self._dt
+            self._body_height_offset = float(np.clip(self._body_height_offset, -0.5, 0.5))
         self._command[9] = (
-            self._cfg.default_body_height
-            + delta_pos[2] * self.height_sensitivity
-            + trigger * self.height_sensitivity
+            self._apply_deadzone(delta_pos[2], self.pos_deadzone) * self.height_sensitivity
+            + self._body_height_offset
         )
 
         # pitch / roll from rotation delta (Euler XYZ in sim frame)
         euler = r_diff.as_euler("XYZ", degrees=False)
-        
-        # print(f"Body height delta: {self._command[9]:.3f}")
-        self._command[10] = - euler[0] * self.pitch_sensitivity   # pitch (Y)
-        self._command[11] = euler[1] * self.roll_sensitivity    # roll  (X)
-        print(f"Body rotation delta (radians): pitch={euler[1]:.3f}, roll={euler[0]:.3f}")
+        self._command[10] = -self._apply_deadzone(euler[0], self.rot_deadzone) * self.pitch_sensitivity
+        self._command[11] =  self._apply_deadzone(euler[1], self.rot_deadzone) * self.roll_sensitivity
+
+    @staticmethod
+    def _apply_deadzone(v: float, threshold: float) -> float:
+        """小于阈值的偏移直接置 0，抑制 VR 手柄抖动产生的微小漂移。"""
+        return 0.0 if abs(v) < threshold else float(v)
 
     def _update_chassis_from_thumbstick(self, goal):
         """Map left thumbstick axes to (vx, vy, wz)."""
@@ -386,7 +402,7 @@ class Se2VRExtended(DeviceBase):
         stick_y = float(stick.get("y", 0.0))
 
         self._command[0] = - stick_y * self.v_x_sensitivity
-        self._command[1] = stick_x * self.v_y_sensitivity
+        self._command[1] = - stick_x * self.v_y_sensitivity
 
 
     # ------------------------------------------------------------------
@@ -442,13 +458,19 @@ class Se2VRExtended(DeviceBase):
     def _on_button_press(self, btn: str, hand: str):
         if btn == "b":
             print("🟢 [VR] Button B → START + Calibrate")
-            self._started     = True
-            self._reset_state = False
+            self._started           = True
+            self._reset_state       = False
+            # 重新标定：清空命令缓冲与扳机高度积分，避免旧偏移残留到新标定
+            self._command[:]        = 0.0
+            self._body_height_offset = 0.0
             self._calibration_triggered["left"]  = True
             self._calibration_triggered["right"] = True
+            if "S" in self._additional_callbacks:
+                self._additional_callbacks["S"]()
 
         elif btn == "x":
             print("🔴 [VR] Button X → RESET (Fail)")
+            # 重置没有生效
             self._started     = False
             self._reset_state = True
             self.reset()
@@ -557,6 +579,12 @@ class Se2VRExtendedCfg(DeviceCfg):
     """Arm Cartesian delta scale (right controller position)."""
     arm_rot_sensitivity: float = 1.0
     """Arm rotation delta scale applied to the rotation-vector magnitude."""
+
+    # -- deadzone --
+    pos_deadzone: float = 0.004
+    """手柄位置偏移死区（m），小于该值的偏移视为 0，抑制抖动。"""
+    rot_deadzone: float = 0.006
+    """手柄旋转偏移死区（rad），小于该值的旋转视为 0，抑制抖动。"""
 
     # Required by DeviceCfg
     class_type: type[DeviceBase] = Se2VRExtended

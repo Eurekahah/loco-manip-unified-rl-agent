@@ -15,6 +15,7 @@ from isaaclab.utils.assets import check_file_path, read_file
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
 from isaaclab.managers import SceneEntityCfg
 from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.flat_env_wbc_cfg import WBCObservationsCfg
+from rl_training.tasks.manager_based.locomotion.velocity.mdp.utils import compute_base_height_rel_to_feet
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -220,6 +221,36 @@ class TeleopLLAction(ActionTerm):
         self._default_ee_quat_b[env_ids] = ee_quat_b
         self._default_ee_pose_initialized[env_ids] = True
 
+    def recalibrate(self, env_ids: torch.Tensor | None = None):
+        """把标定基准重锚到机器人当前状态（EE 位姿 + 机身高度/pitch/roll）。
+
+        ``absolute_commands=True`` 时，每次按 B（重新标定）或环境 reset 后调用：
+        之后"手柄偏移 = 0"时，目标正好等于机器人当前位姿，手柄偏移精确映射为目标偏移，
+        不再做滚动累加。
+        """
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        else:
+            env_ids = env_ids.to(self.device)
+        if env_ids.numel() == 0:
+            return
+
+        # EE 基准（body 系位置 + 四元数）
+        self._capture_default_ee_pose(env_ids)
+
+        # 机身基准：height 与 WBC 奖励同约定（相对足端高度），pitch/roll 取 root 欧拉角
+        feet_cfg = SceneEntityCfg("robot", body_names=".*wheel")
+        feet_cfg.resolve(self._env.scene)
+        height = compute_base_height_rel_to_feet(
+            self._env, SceneEntityCfg("robot"), feet_cfg
+        )[env_ids]
+        roll, pitch, _ = math_utils.euler_xyz_from_quat(
+            self.robot.data.root_quat_w[env_ids]
+        )
+        self._default_body_pose[env_ids, 0] = height
+        self._default_body_pose[env_ids, 1] = pitch
+        self._default_body_pose[env_ids, 2] = roll
+
     def _reset_default_body_pose(self, env_ids: torch.Tensor):
         """reset 时把身体姿态默认值恢复为初始值 (0.51, 0, 0)。"""
         if env_ids.numel() == 0:
@@ -244,6 +275,21 @@ class TeleopLLAction(ActionTerm):
         self._ll_command[:, 1] = self._clamp_range(actions[:, 1], r.lin_vel_y[0], r.lin_vel_y[1])
         self._ll_command[:, 2] = self._clamp_range(actions[:, 2], r.ang_vel_z[0], r.ang_vel_z[1])
 
+        # ── 4(提前). 机体姿态：先叠加增量/偏移，再对叠加后的绝对值 clamp ──────
+        delta_body_pose = torch.stack([
+            actions[:, 9],
+            actions[:, 10],
+            actions[:, 11],
+        ], dim=-1)  # (N, 3) 增量/偏移：height, pitch, roll
+
+        body_pose_raw = self._default_body_pose + delta_body_pose
+
+        body_pose = torch.stack([
+            self._clamp_range(body_pose_raw[:, 0], r.target_height[0], r.target_height[1]),
+            self._clamp_range(body_pose_raw[:, 1], r.target_pitch[0],  r.target_pitch[1]),
+            self._clamp_range(body_pose_raw[:, 2], r.target_roll[0],   r.target_roll[1]),
+        ], dim=-1)
+
         # ── 2. EE 位置：先叠加增量，再对叠加后的绝对位置 clamp ──────
         delta_pos_b = torch.stack([
             actions[:, 3],
@@ -253,7 +299,8 @@ class TeleopLLAction(ActionTerm):
 
         ee_pos_b_raw = self._default_ee_pos_b + delta_pos_b
 
-        current_body_height = self._default_body_pose[:, 0]  # (N,)
+        # 用"本步"的机身目标高度反解 EE 在 body 系下的动态可达区间
+        current_body_height = body_pose[:, 0]  # (N,)
  
         # 把“离地间隙 / 相对身体最大可达高度”反解到 body 系下的动态区间
         ee_z_lo_dyn = r.ee_ground_clearance - current_body_height
@@ -275,13 +322,9 @@ class TeleopLLAction(ActionTerm):
             self._clamp_range(ee_pos_b_raw[:, 1], r.ee_pos_y[0], r.ee_pos_y[1]),
             torch.clamp(ee_pos_b_raw[:, 2], min=ee_z_lo, max=ee_z_hi),
         ], dim=-1)  # (N, 3) 对结果 clamp，保证真正意义上的工作空间限制
-        # 注意：原代码这里下面还有一行 
         self._ll_command[:, 3:6] = ee_pos_b
-        # 会把刚算好的 world 系坐标覆盖成 body 系坐标，如果不是故意 debug，建议删掉
 
-        # ── 3. EE 姿态：四元数是乘法叠加，本身不存在"clamp增量"的问题，
-        #     但如果你想限制姿态的最终偏离范围，也应该在叠加之后、
-        #     对结果（相对 default 的角度）做限制，而不是限制输入的 delta 角 ──
+        # ── 3. EE 姿态：四元数乘法叠加（相对标定基准/上一步 default）──
         ee_droll_b  = -actions[:, 6]
         ee_dpitch_b = actions[:, 7]
         ee_dyaw_b   = actions[:, 8]
@@ -289,29 +332,18 @@ class TeleopLLAction(ActionTerm):
         delta_quat_b = math_utils.quat_from_euler_xyz(ee_droll_b, ee_dpitch_b, ee_dyaw_b)
         ee_quat_b = math_utils.quat_mul(self._default_ee_quat_b, delta_quat_b)
         self._ll_command[:, 6:10] = ee_quat_b
-        # 更新 default（若确实想做“相对上一步”的积分式控制，这里没问题；
-        # 但要清楚：这意味着 r.ee_pos_x 等范围现在保护的是"绝对位置"而不是"单步增量"，
-        # 正是靠这次修复的 clamp 顺序来生效的）
-        self._default_ee_pos_b  = ee_pos_b
-        self._default_ee_quat_b = ee_quat_b
-
-        # ── 4. 机体姿态：与 EE 位置同理，先叠加增量，再对叠加后的绝对值 clamp ──────
-        delta_body_pose = torch.stack([
-            actions[:, 9],
-            actions[:, 10],
-            actions[:, 11],
-        ], dim=-1)  # (N, 3) 增量：height, pitch, roll
-
-        body_pose_raw = self._default_body_pose + delta_body_pose
-
-        body_pose = torch.stack([
-            self._clamp_range(body_pose_raw[:, 0], r.target_height[0], r.target_height[1]),
-            self._clamp_range(body_pose_raw[:, 1], r.target_pitch[0],  r.target_pitch[1]),
-            self._clamp_range(body_pose_raw[:, 2], r.target_roll[0],   r.target_roll[1]),
-        ], dim=-1)
 
         self._ll_command[:, 10:13] = body_pose
-        self._default_body_pose = body_pose  # 更新 default，供下一步继续累加
+
+        # ── 5. 基准更新策略 ──
+        #   absolute_commands=True（VR 遥操）：_default_* 是"标定基准"，只在
+        #   recalibrate()/reset 时更新，本步不滚动 → 手柄静止时目标恒定，
+        #   微小偏移不会被积分放大到极限。
+        #   absolute_commands=False（键盘遥操）：保持"相对上一步"的滚动积分语义。
+        if not self.cfg.absolute_commands:
+            self._default_ee_pos_b  = ee_pos_b
+            self._default_ee_quat_b = ee_quat_b
+            self._default_body_pose = body_pose
         
     # ------------------------------------------------------------------
     # apply_actions
@@ -325,8 +357,13 @@ class TeleopLLAction(ActionTerm):
                 self.low_level_leg_actions[reset_ids, :]   = 0
                 self.low_level_wheel_actions[reset_ids, :] = 0
                 self.low_level_ee_actions[reset_ids, :]    = 0
-                self._capture_default_ee_pose(reset_ids)
-                self._reset_default_body_pose(reset_ids)
+                if self.cfg.absolute_commands:
+                    # VR 绝对目标语义：reset 后把标定基准重锚到初始位姿
+                    self.recalibrate(reset_ids)
+                else:
+                    # 键盘增量语义：保持原有重置行为
+                    self._capture_default_ee_pose(reset_ids)
+                    self._reset_default_body_pose(reset_ids)
 
         if self._counter % self.cfg.low_level_decimation == 0:
             low_level_obs = self._low_level_obs_manager.compute_group("ll_policy")
@@ -425,6 +462,9 @@ class TeleopLLActionCfg(ActionTermCfg):
     ee_command_name: str = "ee_pose"
     debug_vis: bool = False
     ee_body_name: str = "gripper_base"
+    absolute_commands: bool = False
+    """True：把 raw_actions 当作"相对标定基准的偏移"，目标 = 标定基准 + 偏移，不滚动累加（VR 遥操用）。
+    False：保持"相对上一步"的滚动积分增量语义（键盘遥操用）。"""
 
     # delta_* 字段全部移除
 
