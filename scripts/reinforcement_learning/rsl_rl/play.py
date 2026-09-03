@@ -16,6 +16,12 @@
 import argparse
 import os
 import sys
+# 预加载 osqp，避免 Isaac Sim 扩展并行导入时触发原生崩溃（Windows）
+try:
+    import osqp  # noqa: F401
+except ImportError:
+    print("[WARNING] Failed to import osqp. If you are on Windows, this may cause a crash in Isaac Sim.")
+    pass
 
 from isaaclab.app import AppLauncher
 
