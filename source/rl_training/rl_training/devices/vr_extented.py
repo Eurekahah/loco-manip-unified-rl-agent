@@ -122,6 +122,10 @@ class Se2VRExtended(DeviceBase):
         self.arm_rot_sensitivity = cfg.arm_rot_sensitivity
         self.pos_deadzone        = cfg.pos_deadzone
         self.rot_deadzone        = cfg.rot_deadzone
+        # 手柄局部轴 -> EE roll/pitch/yaw 通道的固定映射表（由单轴实验确定）
+        self.arm_rot_axis_map    = cfg.arm_rot_axis_map
+        # sim/房间系位移 -> EE x/y/z 通道的固定映射表
+        self.arm_pos_axis_map    = cfg.arm_pos_axis_map
 
         # ---- state flags ----
         self._started      = False
@@ -310,13 +314,16 @@ class Se2VRExtended(DeviceBase):
 
             delta_pos = sim_pos - self._vr_origin[hand]["pos"]
             r_diff    = r_sim * self._vr_origin[hand]["rot"].inv()
+            # 手柄自身坐标系下的相对旋转：转轴固定在手柄上，不随标定时手势漂移
+            # （r_diff 是世界/sim 系的，纯俯仰会投影成多个轴的分量）
+            r_diff_local = self._vr_origin[hand]["rot"].inv() * r_sim
 
             trigger = 0.0
             if goal.metadata and "trigger" in goal.metadata:
                 trigger = float(goal.metadata["trigger"])
 
             if hand == "right":
-                self._update_arm(delta_pos, r_diff, trigger)
+                self._update_arm(delta_pos, r_diff_local, trigger)
                 self._update_yaw_from_thumbstick(goal)
             elif hand == "left":
                 self._update_body(delta_pos, r_diff, trigger)
@@ -328,33 +335,35 @@ class Se2VRExtended(DeviceBase):
 
     def _update_arm(self,
                 delta_pos: np.ndarray,
-                r_diff: R,
+                r_diff_local: R,
                 trigger: float):
         # ------------------------------------------------------------------
-        # Remap sim-frame delta → EE-frame delta
+        # 位置增量：sim/房间系位移 -> EE x/y/z 通道
         #
-        # Sim frame:  x=forward, y=left,  z=up
-        # EE  frame:  z=forward, x=left,  y=up
+        # delta_pos 是手柄相对标定点的位移（sim 系）。位置不像姿态那样需要
+        # “手柄局部系”：上/下/左/右是房间方向，与手柄自身朝向无关，所以只要
+        # 一个固定的轴约定映射即可，由 arm_pos_axis_map 决定。
         #
-        # 当前实现：identity 映射（sim_x→EE_x, sim_y→EE_y, sim_z→EE_z），
-        # 未做轴交换。如手感不对（机械臂方向与手柄不符），改这里即可：
-        #   EE_x = sim_y, EE_y = sim_z, EE_z = sim_x
+        # 注意：执行端把该增量加到 body 系基准上，因此实际手感是“相对机器人
+        # 当前朝向”；若以后想改成“相对房间方向”，需先把增量按机身偏航旋转。
         # ------------------------------------------------------------------
-        ee_dx = self._apply_deadzone(delta_pos[0], self.pos_deadzone)
-        ee_dy = self._apply_deadzone(delta_pos[1], self.pos_deadzone)
-        ee_dz = self._apply_deadzone(delta_pos[2], self.pos_deadzone)
+        for i, (src, sgn) in enumerate(self.arm_pos_axis_map):
+            v = self._apply_deadzone(sgn * delta_pos[src], self.pos_deadzone)
+            self._command[3 + i] = v * self.arm_pos_sensitivity
 
-        self._command[3] = ee_dx * self.arm_pos_sensitivity
-        self._command[4] = ee_dy * self.arm_pos_sensitivity
-        self._command[5] = ee_dz * self.arm_pos_sensitivity
+        # ------------------------------------------------------------------
+        # Rotation：使用“手柄局部系”的相对旋转（r_diff_local），而不是世界系
+        # 的 r_diff。世界系分解会把“纯俯仰”拆成 roll+pitch 多个分量（耦合），
+        # 且耦合方式随 B 标定时手势变化；局部系则“俯仰就是俯仰”，与标定手势无关。
+        #
+        # 局部系欧拉角 -> EE 通道的轴映射由 self.arm_rot_axis_map 决定，
+        # 每项 (src, sgn) 表示 command[6+i] = sgn * euler_local[src]。
+        # ------------------------------------------------------------------
+        euler_local = r_diff_local.as_euler("XYZ", degrees=False)
 
-        # Rotation: 与位置一致，当前为 identity 映射（sim 系欧拉角直接写 EE 旋转通道）
-        euler_sim = r_diff.as_euler("XYZ", degrees=False)
-        # euler_sim: [rot_around_sim_x, rot_around_sim_y, rot_around_sim_z]
-        #            = [roll,           pitch,            yaw           ]
-        self._command[6] = self._apply_deadzone(euler_sim[0], self.rot_deadzone) * self.arm_rot_sensitivity
-        self._command[7] = self._apply_deadzone(euler_sim[1], self.rot_deadzone) * self.arm_rot_sensitivity
-        self._command[8] = self._apply_deadzone(euler_sim[2], self.rot_deadzone) * self.arm_rot_sensitivity
+        for i, (src, sgn) in enumerate(self.arm_rot_axis_map):
+            v = self._apply_deadzone(sgn * euler_local[src], self.rot_deadzone)
+            self._command[6 + i] = v * self.arm_rot_sensitivity
 
         # --- gripper ---
         self._command[12] = 1.0 if trigger > 0.5 else -1.0
@@ -470,7 +479,6 @@ class Se2VRExtended(DeviceBase):
 
         elif btn == "x":
             print("🔴 [VR] Button X → RESET (Fail)")
-            # 重置没有生效
             self._started     = False
             self._reset_state = True
             self.reset()
@@ -579,6 +587,30 @@ class Se2VRExtendedCfg(DeviceCfg):
     """Arm Cartesian delta scale (right controller position)."""
     arm_rot_sensitivity: float = 1.0
     """Arm rotation delta scale applied to the rotation-vector magnitude."""
+
+    arm_rot_axis_map: tuple = (
+        (1, +1.0),  # command[6] = EE roll  <- 手柄局部 pitch（初始猜测，实验后改）
+        (0, -1.0),  # command[7] = EE pitch <- 手柄局部 roll（初始猜测，实验后改）
+        (2, +1.0),  # command[8] = EE yaw   <- 手柄局部 yaw
+    )
+    """手柄局部轴 -> EE roll/pitch/yaw 通道映射，每项 (euler_local下标, 符号)。
+
+    下标含义：0=手柄局部 roll(x)，1=手柄局部 pitch(y)，2=手柄局部 yaw(z)。
+    单轴实验方法：按 B 标定后，每次只做一种纯旋转（俯仰/偏航/滚转），
+    看 euler_local 哪个分量被激活、末端实际绕哪根轴转，再把 (下标, 符号)
+    填到对应 command 通道。初始值是按位置通道的 (x,y,z)->(y,-x,z) 映射猜的。
+    """
+
+    arm_pos_axis_map: tuple = (
+        (1, +1.0),  # command[3] = EE x  <- delta_pos.y
+        (0, -1.0),  # command[4] = EE y  <- -delta_pos.x
+        (2, +1.0),  # command[5] = EE z  <- delta_pos.z
+    )
+    """sim/房间系位移 -> EE x/y/z 通道映射，每项 (delta_pos下标, 符号)。
+
+    下标：0=sim x，1=sim y，2=sim z。默认值保持当前已验证的手感；
+    若某个方向错位或反向，改对应 (下标, 符号) 即可，无需动逻辑。
+    """
 
     # -- deadzone --
     pos_deadzone: float = 0.004

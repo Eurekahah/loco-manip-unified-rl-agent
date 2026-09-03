@@ -35,58 +35,29 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
         
         self._ee_vis_markers: VisualizationMarkers | None = None
         super().__init__(cfg, env)
-        step_dt = self._env.step_dt  # = physics_dt * decimation  # 0.02
-        max_ee_lin_vel = 1.5   # m/s，按你的机械臂/任务合理设定
-        max_ee_ang_vel = 6.0   # rad/s
-
-        self.max_pos_step = max_ee_lin_vel * step_dt
-        self.max_rot_step = max_ee_ang_vel * step_dt
-        
-        
 
     def process_actions(self, actions: torch.Tensor):
         command = self._env.command_manager.get_command(self.cfg.command_name)
-        # print(f"CommandDrivenIKAction: command={command}")
-        target_pos_b = command[:, 0:3]
-        target_quat_b = command[:, 3:7]
-
         # 当前末端真实位姿（root系）
         ee_pos_curr, ee_quat_curr = self._compute_frame_pose()
 
-        # # ---- 位置增量限幅 ----
-        # pos_error = target_pos_b - ee_pos_curr
-        # pos_error_norm = torch.norm(pos_error, dim=-1, keepdim=True)
-        # scale = torch.clamp(self.max_pos_step / (pos_error_norm + 1e-6), max=1.0)
-        # clipped_pos_b = ee_pos_curr + pos_error * scale
-        # # print(f"{pos_error_norm=}, {scale=}")
-        # # print(f"target_pos_b: {target_pos_b}, ee_pos_curr: {ee_pos_curr}, pos_error: {pos_error}")
+        self._ik_controller.set_command(command, ee_pos_curr, ee_quat_curr)
 
-        # # ---- 姿态增量限幅 ----
-        # # quat_error 满足: target = quat_error * current
-        # quat_error = math_utils.quat_mul(target_quat_b, math_utils.quat_conjugate(ee_quat_curr))
-        # # 保证走最短路径（四元数双重覆盖问题）
-        # quat_error = torch.where(quat_error[:, 0:1] < 0, -quat_error, quat_error)
-        # # print(f"{quat_error=}")
-
-        # rotvec = math_utils.axis_angle_from_quat(quat_error)  # 方向=转轴, 模长=角度
-        # angle = torch.norm(rotvec, dim=-1, keepdim=True)
-        # axis = rotvec / (angle + 1e-6)
-        # clipped_angle = torch.clamp(angle, max=self.max_rot_step)
-        # clipped_quat_error = math_utils.quat_from_angle_axis(clipped_angle.squeeze(-1), axis)
-        # clipped_quat_b = math_utils.quat_mul(clipped_quat_error, ee_quat_curr)
-        # # print(f"{clipped_quat_error=}")
-        # # ik_command = torch.cat([clipped_pos_b, clipped_quat_b], dim=-1)
-        # ik_command = torch.cat([clipped_pos_b, target_quat_b], dim=-1)
-        ik_command =  command # target_pos_b #
-        self._ik_controller.set_command(ik_command, ee_pos_curr, ee_quat_curr)
-
-    @property
-    def action_dim(self) -> int:
-        return 7  # 这里需要删掉的，临时debug设置
-
-    def apply_actions(self):
-        """调用父类的 apply_actions 来执行 IK 控制。"""
-        super().apply_actions()
+    def _compute_frame_jacobian(self):
+        jacobian = self.jacobian_b
+        if self.cfg.body_offset is not None:
+            # 当前 EE（含 offset）在 root 系下的姿态
+            _, ee_quat_b = self._compute_frame_pose()
+            # 关键修复：把 body 系 offset 旋转到 root 系
+            r_offset_b = math_utils.quat_apply(ee_quat_b, self._offset_pos)
+            jacobian[:, 0:3, :] += torch.bmm(
+                -math_utils.skew_symmetric_matrix(r_offset_b), jacobian[:, 3:, :]
+            )
+            # 旋转部分保持官方约定（offset rot 为 identity 时不变）
+            jacobian[:, 3:, :] = torch.bmm(
+                math_utils.matrix_from_quat(self._offset_rot), jacobian[:, 3:, :]
+            )
+        return jacobian
 
     def _get_ee_pose_world(self) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -112,10 +83,6 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
         )
         return ee_pos_w, ee_quat_w
 
-    # ------------------------------------------------------------------ #
-    #  方式一：IsaacLab Debug Vis 框架（坐标轴 Marker）                    #
-    # ------------------------------------------------------------------ #
-
     def _set_debug_vis_impl(self, debug_vis: bool):
         """框架回调：开关 VisualizationMarkers。"""
         if debug_vis:
@@ -140,7 +107,6 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
 
         scales = torch.tensor([[0.2, 0.2, 0.2]], device=ee_pos_w.device).expand(self.num_envs, -1)
     
-
         self._ee_vis_markers.visualize(
             translations=ee_pos_w,    # (N,3)
             orientations=ee_quat_w,   # (N,4) wxyz
