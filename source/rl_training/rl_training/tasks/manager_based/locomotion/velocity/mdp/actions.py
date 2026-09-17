@@ -43,6 +43,10 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
 
         self._ik_controller.set_command(command, ee_pos_curr, ee_quat_curr)
 
+    @property
+    def action_dim(self) -> int:
+        return 0
+
     def _compute_frame_jacobian(self):
         jacobian = self.jacobian_b
         if self.cfg.body_offset is not None:
