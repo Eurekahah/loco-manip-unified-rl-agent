@@ -36,7 +36,7 @@ class UniformThresholdVelocityCommand(mdp.UniformVelocityCommand):
         super()._resample_command(env_ids)
         # set small commands to zero
         # 小线速度指令设置为0
-        self.vel_command_b[env_ids, :2] *= (torch.norm(self.vel_command_b[env_ids, :2], dim=1) > 0.0).unsqueeze(1)
+        self.vel_command_b[env_ids, :2] *= (torch.norm(self.vel_command_b[env_ids, :2], dim=1) > 0.1).unsqueeze(1)
     
     def _update_metrics(self):
         super()._update_metrics()
