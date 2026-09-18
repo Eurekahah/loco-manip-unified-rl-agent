@@ -63,6 +63,16 @@ class DeeproboticsM20WBCFlatPPORunnerCfg(DeeproboticsM20RoughPPORunnerCfg):
         self.max_iterations = 20000
         self.experiment_name = "deeprobotics_m20_wbc_flat"
 
+@configclass
+class DeeproboticsM20ArmFlatPPORunnerCfg(DeeproboticsM20RoughPPORunnerCfg):
+    """策略直接控制机械臂（关节空间）的 runner 配置。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.max_iterations = 20000
+        self.experiment_name = "deeprobotics_m20_arm_flat"
+
 from dataclasses import MISSING
 
 @configclass

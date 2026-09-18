@@ -125,3 +125,33 @@ def override_value(env, env_ids, data, value, num_steps):
     if env.common_step_counter > num_steps:
         return value
     return modify_term_cfg.NO_CHANGE  # 不触发则不写回
+
+
+def ramp_reward_weight(
+    env: ManagerBasedRLEnv,
+    env_ids: Sequence[int],
+    term_name: str,
+    start_weight: float,
+    end_weight: float,
+    num_steps: int,
+) -> float:
+    """把某个 reward term 的权重从 ``start_weight`` 线性升到 ``end_weight``。
+
+    与官方 ``modify_reward_weight``（到达阈值后一次性跳变）不同，这里是线性爬升，
+    适合"先学走路、再逐步加入手臂跟踪"这类课程。
+
+    注意：curriculum 在 episode reset 时被调用（``common_step_counter`` 按 env step 计），
+    所以实际更新频率 ≈ 1 / max_episode_length，对 2e4 步量级的爬升足够平滑。
+
+    Args:
+        term_name: reward term 名（与 RewardsCfg 里的属性名一致）。
+        start_weight / end_weight: 起始与结束权重。
+        num_steps: 爬升长度（env step）。
+    """
+    progress = min(max(env.common_step_counter / max(num_steps, 1), 0.0), 1.0)
+    weight = start_weight + (end_weight - start_weight) * progress
+    term_cfg = env.reward_manager.get_term_cfg(term_name)
+    if abs(term_cfg.weight - weight) > 1e-12:
+        term_cfg.weight = weight
+        env.reward_manager.set_term_cfg(term_name, term_cfg)
+    return weight

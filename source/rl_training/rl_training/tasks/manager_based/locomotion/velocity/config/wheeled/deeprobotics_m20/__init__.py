@@ -89,6 +89,31 @@ gym.register(
     },
 )
 
+# ==========================================
+# 策略直接控制机械臂（关节空间）的隔离环境
+#   - 去掉 ee_ik 动作项，新增 arm_joint_pos(6 维)
+#   - 臂奖励不再受 arm_weight 门控，改由 ramp_reward_weight 课程逐步加入
+# ==========================================
+gym.register(
+    id="Flat-Deeprobotics-M20-Piper-Arm-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_arm_cfg:DeeproboticsM20ArmEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:DeeproboticsM20ArmFlatPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Flat-Deeprobotics-M20-Piper-Arm-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_arm_cfg:DeeproboticsM20ArmEnvCfg_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:DeeproboticsM20ArmFlatPPORunnerCfg",
+    },
+)
+
 gym.register(
     id="History-Adaptation-Deeprobotics-M20-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",

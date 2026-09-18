@@ -31,6 +31,36 @@ def _get_arm_weight(env: ManagerBasedRLEnv, command_name: str | None) -> torch.T
     return env.command_manager.get_command(command_name)[:, 0]  # (N,)
 
 
+# EE body 索引缓存：find_bodies() 只依赖机器人资产，没必要每个 step、每个 reward term 都做一次正则匹配
+_EE_BODY_IDX_CACHE_ATTR = "_arm_reward_ee_body_idx_cache"
+
+
+def _get_ee_body_idx(robot: Articulation, ee_frame_name: str) -> int:
+    """按名字取 EE body 索引（按资产缓存）。"""
+    cache = getattr(robot, _EE_BODY_IDX_CACHE_ATTR, None)
+    if cache is None:
+        cache = {}
+        setattr(robot, _EE_BODY_IDX_CACHE_ATTR, cache)
+    if ee_frame_name not in cache:
+        cache[ee_frame_name] = robot.find_bodies(ee_frame_name)[0][0]
+    return cache[ee_frame_name]
+
+
+def _ee_pose_root_frame(robot: Articulation, body_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """把 EE 的世界系位姿转到 root 系。
+
+    ``ee_pose`` 命令存的是 ``pose_command_b``（root 系位姿，IK 版本也按这个坐标系消费），
+    所以奖励必须和目标在同一坐标系下比较，否则机器人转个弯/yaw 不为 0 时误差就是错的。
+
+    注：姿态误差取"两姿态的相对旋转"，本身与参考系无关；这里一并转换只是为了语义统一。
+    """
+    ee_pos_w = robot.data.body_pos_w[:, body_idx, :]
+    ee_quat_w = robot.data.body_quat_w[:, body_idx, :]
+    return subtract_frame_transforms(
+        robot.data.root_pos_w, robot.data.root_quat_w, ee_pos_w, ee_quat_w
+    )
+
+
 
 # =============================================================================
 # 1. 位置跟踪奖励
@@ -54,22 +84,16 @@ def ee_position_tracking(
     robot: Articulation = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)  # (N, 7): pos(3) + quat(4)
 
-    # 获取EE在世界坐标系下的位姿
-    body_idx = robot.find_bodies(ee_frame_name)[0][0]
-    ee_pos_w = robot.data.body_pos_w[:, body_idx, :]      # (N, 3)
-    ee_quat_w = robot.data.body_quat_w[:, body_idx, :]    # (N, 4)
+    # EE 位姿转到 root 系：ee_pose 命令存的是 pose_command_b（KB 版本、IK 版本都用这个坐标系）
+    body_idx = _get_ee_body_idx(robot, ee_frame_name)
+    ee_pos_b, _ = _ee_pose_root_frame(robot, body_idx)    # (N, 3)
 
-    # 目标位姿（世界系）
-    target_pos_w = command[:, :3]
-    
-    # 计算位置误差
-    pos_error = torch.norm(target_pos_w - ee_pos_w, dim=-1)  # (N,)
+    # 位置误差（root 系）
+    pos_error = torch.norm(command[:, :3] - ee_pos_b, dim=-1)  # (N,)
     reward = torch.exp(-pos_error**2 / (2 * std**2))  # (N,)
     weight = _get_arm_weight(env, arm_weight_command_name)
     # print(f"Position tracking reward: mean={reward.mean().item():.4f}, "f"pos_error: mean={pos_error.mean().item():.4f}, "f"arm_weight: mean={weight.mean().item():.4f}")
     return reward * weight
-    
-    return torch.exp(-pos_error**2 / (2 * std**2)) * _get_arm_weight(env, arm_weight_command_name)
 
 
 # =============================================================================
@@ -94,13 +118,13 @@ def ee_orientation_tracking(
     robot: Articulation = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
 
-    body_idx = robot.find_bodies(ee_frame_name)[0][0]
-    ee_quat_w = robot.data.body_quat_w[:, body_idx, :]    # (N, 4) wxyz
+    body_idx = _get_ee_body_idx(robot, ee_frame_name)
+    _, ee_quat_b = _ee_pose_root_frame(robot, body_idx)   # (N, 4) wxyz
 
-    target_quat_w = command[:, 3:7]                        # (N, 4) wxyz
+    target_quat_b = command[:, 3:7]                       # (N, 4) wxyz
 
     # 计算最小旋转角误差（弧度）
-    angle_error = quat_error_magnitude(ee_quat_w, target_quat_w)  # (N,)
+    angle_error = quat_error_magnitude(ee_quat_b, target_quat_b)  # (N,)
 
     return torch.exp(-angle_error**2 / (2 * std**2)) * _get_arm_weight(env, arm_weight_command_name)
 
@@ -125,15 +149,14 @@ def ee_goal_reached(
     robot: Articulation = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
 
-    body_idx = robot.find_bodies(ee_frame_name)[0][0]
-    ee_pos_w   = robot.data.body_pos_w[:, body_idx, :]
-    ee_quat_w  = robot.data.body_quat_w[:, body_idx, :]
+    body_idx = _get_ee_body_idx(robot, ee_frame_name)
+    ee_pos_b, ee_quat_b = _ee_pose_root_frame(robot, body_idx)
 
-    target_pos_w  = command[:, :3]
-    target_quat_w = command[:, 3:7]
+    target_pos_b  = command[:, :3]
+    target_quat_b = command[:, 3:7]
 
-    pos_error   = torch.norm(target_pos_w - ee_pos_w, dim=-1)
-    angle_error = quat_error_magnitude(ee_quat_w, target_quat_w)
+    pos_error   = torch.norm(target_pos_b - ee_pos_b, dim=-1)
+    angle_error = quat_error_magnitude(ee_quat_b, target_quat_b)
 
     reached = (pos_error < pos_threshold) & (angle_error < angle_threshold)
     return reached.float() * _get_arm_weight(env, arm_weight_command_name)
