@@ -194,6 +194,16 @@ class PreTrainedPickAction(ActionTerm):
         self._delta_pos_w = torch.zeros_like(self._target_pos_w)
         self._delta_yaw = torch.zeros(self.num_envs, 1, device=self.device)
         self._delta_action = torch.zeros(self.num_envs, 4, device=self.device)  # (delta_pos_w, delta_yaw)
+
+        # ── ll_command：给外部（奖励项 / 低层观测 / IK）读的"高层下发的命令" ──
+        # 语义统一成与 PreTrainedPickWBCAction / TeleopLLAction 一致：
+        #   [vx, vy, wz, ee_pos_b(3), ee_quat_b(4)]      ← root 系（规范形式）
+        # 另外维护一份世界系副本供需要世界系的消费者使用（奖励项里要和物体世界坐标比较）：
+        #   [vx, vy, wz, ee_pos_w(3), ee_quat_w(4)]
+        # 本类内部的位置增量目前仍在世界系里累积（见 _target_pos_w），
+        # root 系那一份在每次 process_actions 末尾由世界系目标换算得到。
+        self._ll_command = torch.zeros(self.num_envs, 10, device=self.device)
+        self._ll_command_w = torch.zeros(self.num_envs, 10, device=self.device)
     """
     Properties.
     """
@@ -212,6 +222,42 @@ class PreTrainedPickAction(ActionTerm):
     @property
     def processed_actions(self) -> torch.Tensor:
         return self.raw_actions
+
+    @property
+    def ll_command(self) -> torch.Tensor:
+        """高层下发给低层的命令，**root 系**（规范形式）。
+
+        形状 ``(N, 10)``：``[vx, vy, wz, ee_pos_b(3), ee_quat_b(4)]``。
+        与 ``PreTrainedPickWBCAction`` / ``TeleopLLAction`` 的 ``ll_command`` 前 10 维同义，
+        便于低层观测与 IK 直接使用（IK 吃 root 系目标）。
+        """
+        return self._ll_command
+
+    @property
+    def ll_command_w(self) -> torch.Tensor:
+        """同一命令的**世界系**副本，形状 ``(N, 10)``。
+
+        奖励项里需要拿 EE 目标位置和物体的世界坐标比较时用它
+        （``ll_command[:, 3:6]`` 是 root 系，直接和世界坐标比会算错）。
+        """
+        return self._ll_command_w
+
+    def _update_ll_command(self):
+        """从本步的世界系目标换算 root 系命令，并刷新两份缓冲区。"""
+        root_pos_w = self.robot.data.root_pos_w
+        root_quat_w = self.robot.data.root_quat_w
+        pos_b, quat_b = math_utils.subtract_frame_transforms(
+            root_pos_w, root_quat_w, self._target_pos_w, self._target_quat_w
+        )
+
+        # 线/角速度指令与坐标系无关
+        self._ll_command[:, 0:3] = self._raw_actions[:, 0:3]
+        self._ll_command_w[:, 0:3] = self._raw_actions[:, 0:3]
+        # EE 目标：root 系（规范）与世界系副本
+        self._ll_command[:, 3:6] = pos_b
+        self._ll_command[:, 6:10] = quat_b
+        self._ll_command_w[:, 3:6] = self._target_pos_w
+        self._ll_command_w[:, 6:10] = self._target_quat_w
 
     """
     Operations.
@@ -327,6 +373,8 @@ class PreTrainedPickAction(ActionTerm):
         self._raw_actions[:, 3:6]  = self._target_pos_w
         self._raw_actions[:, 6:10] = self._target_quat_w
         # 位置直接保留 step 3 写入的 world 坐标，无需再变换
+        # 刷新 ll_command（root 系规范 + 世界系副本）
+        self._update_ll_command()
         
 
     def apply_actions(self):

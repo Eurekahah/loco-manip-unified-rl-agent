@@ -89,6 +89,9 @@ class PreTrainedPickWBCAction(ActionTerm):
 
         self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)     # [vx, vy, wz,  Δx, Δy, Δz,  Δr, Δp, Δy,      Δbody_height, Δbody_pitch, Δbody_roll]
         self._ll_command = torch.zeros(self.num_envs, self.action_dim + 1, device=self.device)  # [vx, vy, wz,  x, y, z,     qw, qx, qy, qz,  body_height, body_pitch, body_roll]
+        # 同一命令的世界系副本（EE 目标的世界坐标/四元数），供需要世界系的奖励项使用；
+        # _ll_command 本身统一为 root 系（见 ll_command_world() 的说明）
+        self._ll_command_w = torch.zeros_like(self._ll_command)
 
         # 分别初始化三个 low level action term
         self._joint_pos_action_term: ActionTerm = cfg.low_level_leg_actions.class_type(
@@ -217,6 +220,11 @@ class PreTrainedPickWBCAction(ActionTerm):
     def ll_command(self) -> torch.Tensor:
         return self._ll_command
 
+    @property
+    def ll_command_w(self) -> torch.Tensor:
+        """``ll_command`` 的世界系副本（``[vx,vy,wz, ee_pos_w(3), ee_quat_w(4), h,p,r]``）。"""
+        return self._ll_command_w
+
     """
     Operations.
     """
@@ -299,7 +307,8 @@ class PreTrainedPickWBCAction(ActionTerm):
         root_pos_w  = self.robot.data.root_pos_w
         target_pos_w = math_utils.quat_apply(root_quat_w, self._target_ee_pos_b) + root_pos_w
         target_pos_w[:, 2] = torch.clamp(target_pos_w[:, 2], min=0.0)  # 再次 clamp 确保世界坐标系下 z 不低于地面
-        self._ll_command[:, 3:6] = target_pos_w
+        # 世界系副本先记下来（奖励项要拿它和物体的世界坐标比较）
+        self._ll_command_w[:, 3:6] = target_pos_w
 
          # ── 5. 叠加 EE 姿态rpy增量 ───────────────────────────────────────────────
         delta_ee_orn_rpy_b = torch.tanh(self._raw_actions[:, 6:9]) * self.cfg.delta_ee_orn_max
@@ -309,7 +318,8 @@ class PreTrainedPickWBCAction(ActionTerm):
             self._target_ee_orn_rpy_b[:, 1],  # pitch
             self._target_ee_orn_rpy_b[:, 2],  # yaw
         )
-        self._ll_command[:, 6:10] = math_utils.quat_mul(root_quat_w, ee_quat_b)
+        target_quat_w = math_utils.quat_mul(root_quat_w, ee_quat_b)
+        self._ll_command_w[:, 6:10] = target_quat_w
 
         # -- 6. 叠加机体姿态height， pitch，roll增量
         delta_height = torch.tanh(actions[:, 9]) * self.cfg.delta_body_height_max  # (N,)
@@ -336,6 +346,18 @@ class PreTrainedPickWBCAction(ActionTerm):
         self._ll_command[:, 10] = self._target_body_height
         self._ll_command[:, 11] = self._target_body_pitch
         self._ll_command[:, 12] = self._target_body_roll
+
+        # ── 7. 把 EE 目标统一成 root 系（规范形式，供低层 obs 的 ee_goal 与 IK 使用），
+        #       世界系副本保留在 _ll_command_w 里给奖励项用 ────────────────
+        #   必要性：低层训练时 ee_goal 观测来自 HeightInvariantEECommand.pose_command_b
+        #   （root 系），回放侧若塞世界系值，低层 policy 收到的输入与训练分布不符。
+        target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
+            root_pos_w, root_quat_w, target_pos_w, target_quat_w
+        )
+        self._ll_command[:, 3:6] = target_pos_b
+        self._ll_command[:, 6:10] = target_quat_b
+        self._ll_command_w[:, 0:3] = self._ll_command[:, 0:3]
+        self._ll_command_w[:, 10:13] = self._ll_command[:, 10:13]  # 机身姿态与坐标系无关
         # print(self.ll_command)
         
 

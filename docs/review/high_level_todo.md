@@ -8,7 +8,33 @@
 
 ## P0 — 会导致任务跑不起来，或训练信号本身就是错的
 
-### 1. `PreTrainedPickAction` 没有 `ll_command`，普通 pick teacher 第一步就崩
+### 1. `[已修]` `PreTrainedPickAction` 没有 `ll_command`，普通 pick teacher 第一步就崩
+
+> 修复于 `codex/hl-fix-ll-command`（方案 A + O1 接口）。修法：给
+> `PreTrainedPickAction` 补上与 `PreTrainedPickWBCAction` / `TeleopLLAction` 同义的
+> `ll_command`（**root 系**规范形式，`[vx,vy,wz, ee_pos_b(3), ee_quat_b(4)]`）
+> 与 `ll_command_w`（世界系副本）。
+>
+> 顺带（必须一起做，否则会留下**静默算错**的奖励）：新增
+> `low_level_replay.ll_command_world()`，把 8 处"拿命令位置和物体世界坐标比较"的
+> 奖励项（`forward_velocity_penalty` / `object_is_lifted[_progress]` /
+> `cmd_pos_to_object_reward[_progress]` / `cmd_pos_tracking_penalty` /
+> `gripper_contact_symmetric_grasp[_progress]`）从 `action_term.ll_command[:, 3:6]`
+> 改为 `ll_command_world(action_term)[:, 3:6]`。对 WBC/teleop 而言取值与原来**完全一致**
+> （实测：三任务 `train.py --num_envs 64 --max_iterations 2` 的 reward 与修改前逐位相同），
+> 因此本分支只修 bug、不改训练语义。
+>
+> 实测（`Isaac-Deeprobotics-High-Level-Pick-Flat-Teacher-v0`，修复前第一次
+> `env.step()` 就 `AttributeError: 'PreTrainedPickAction' object has no attribute 'll_command'`）：
+>
+> | 检查 | 结果 |
+> |---|---|
+> | `train.py --num_envs 64 --max_iterations 2` | **EXIT=0**，reward 0.78 → 0.88 |
+> | `--task ...Pick-WBC-Flat-Teacher-v0`（回归） | EXIT=0，0.87 → 1.08（与修改前一致） |
+> | `--task Isaac-M20-Piper-Teleop-v0`（回归） | EXIT=0，0.12 → 0.18（与修改前一致） |
+> | 坐标系与独立复算一致（8 envs, root yaw ∈ [-0.28, 0.27]） | `|root − 独立复算| pos=0.000e+00 quat=0.000e+00` |
+> | 两种坐标系确实不同（对照项） | `|world − root| pos=8.90` |
+> | `ll_command_w` == 本 term 内部世界系目标 | `0.000e+00` |
 
 - 读取处：`highlevel/mdp/rewards.py:1139` → `action_term.ll_command[:, 0]`
 - 常开项：`HLFlatPickRewardsCfg.base_vel_cmd_action_l1_near_object`（`config/high_level/hl_flat_pick_env_cfg.py:260`，weight=1e-5，非 0 → 不会被 `disable_zero_weight_rewards` 清理）
@@ -202,6 +228,7 @@
 | 新增 A：`actions` 观测宽度少 7 维 | `codex/hl-replay-layout` | `dc45d0e` |
 | 新增 B：`joint_pos` 轮关节掩码索引空间 | `codex/hl-replay-layout` | `dc45d0e` |
 | 新增 C：L2 布局推导（默认）+ 低层 `ee_goal` 恢复 | `codex/hl-replay-l2` / `codex/ll-keep-ee-goal` | `9d52fac` |
+| ① `PreTrainedPickAction` 缺 `ll_command`（+ 奖励项改用 `ll_command_w`） | `codex/hl-fix-ll-command` | `__LLCMD__` |
 
 ---
 

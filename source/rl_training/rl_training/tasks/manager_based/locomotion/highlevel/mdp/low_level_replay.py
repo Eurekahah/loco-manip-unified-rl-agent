@@ -389,6 +389,37 @@ def checkpoint_dims(policy) -> tuple[int, int]:
     return int(linears[0].weight.shape[1]), int(linears[-1].weight.shape[0])
 
 
+def ll_command_world(action_term) -> torch.Tensor:
+    """取 action term 的「世界系」高层命令（``[vx,vy,wz, ee_pos_w(3), ee_quat_w(4)]``）。
+
+    为什么要这个 helper
+    -------------------
+    按（已确认的）O1 方案，高层 action term 的 ``ll_command`` 统一存 **root 系**
+    （低层观测 ``ee_goal`` 与 IK 都要 root 系）。而奖励项里判断"命令目标离物体有多远"
+    需要 **世界系**（`object.data.root_pos_w` 是世界坐标）——直接拿 root 系去比会算错。
+
+    所以：
+
+    * 已迁移的 term（``PreTrainedPickAction`` / ``PreTrainedPickWBCAction`` /
+      ``TeleopLLAction``）额外提供 ``ll_command_w``，本函数优先用它；
+    * 尚未迁移的 term（``PreTrainedNavAction`` / ``VLAPickAction`` /
+      ``PreTrainedPolicyAction``，见清单 ⑤ 的 R1 步骤）连 ``ll_command`` 都没有 ——
+      这里给出明确报错，而不是让上游抛一个难懂的 AttributeError。
+    """
+    world = getattr(action_term, "ll_command_w", None)
+    if world is not None:
+        return world
+    root = getattr(action_term, "ll_command", None)
+    if root is not None:
+        # 还没区分 root/world 的旧实现：历史上它们的 ll_command[:, 3:6] 就是世界系
+        return root
+    raise RuntimeError(
+        f"{type(action_term).__name__} 没有 ll_command / ll_command_w，"
+        "无法给奖励项提供世界系命令。"
+        "（该 action term 尚未迁移到 low_level_replay 的统一接口，见清单 ⑤ 的 R1 步骤）"
+    )
+
+
 def read_policy_layout(policy_path: str) -> dict | None:
     """读取导出产物旁边的 ``policy_layout.json``（由 export_deploy_policy.py 写出）。
 

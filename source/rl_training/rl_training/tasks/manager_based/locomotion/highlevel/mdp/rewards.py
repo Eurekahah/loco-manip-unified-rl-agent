@@ -20,6 +20,7 @@ from isaaclab.utils.math import (
 )
 
 from .utils import robot_root_pos_w, robot_root_quat_w, object_root_pos_w
+from .low_level_replay import ll_command_world
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -534,7 +535,7 @@ def forward_velocity_penalty(
     gate_cmd = torch.ones_like(vx)                 # 默认全惩罚（无 target_cfg 时退化）
     if target_cfg is not None:
         object_pos_w = object_root_pos_w(env, target_cfg)
-        cmd_pos_w    = action_term.ll_command[:, 3:6]          # HL 下发的目标位置
+        cmd_pos_w    = ll_command_world(action_term)[:, 3:6]          # HL 下发的目标位置
         cmd_dist     = torch.norm(cmd_pos_w - object_pos_w, dim=-1)
         gate_cmd     = (cmd_dist < cmd_proximity_gate).float() # 接近目标点时 = 1
 
@@ -708,7 +709,7 @@ def gripper_contact_symmetric_grasp(
 
     # ----cmd_pos 到物体距离门控 ----
     action_term = env.action_manager.get_term(action_term_name)
-    cmd_pos_w = action_term.ll_command[:, 3:6]                        # [N, 3]
+    cmd_pos_w = ll_command_world(action_term)[:, 3:6]                        # [N, 3]
     obj_pos_w = env.scene[object_cfg.name].data.root_pos_w             # [N, 3]  ← 需在参数里加 object_cfg
     cmd_dist  = torch.norm(cmd_pos_w - obj_pos_w, dim=-1)              # [N,]
     gate_close_cmd  = (cmd_dist < cmd_proximity_gate).float()                # [N,]
@@ -760,7 +761,7 @@ def object_is_lifted(
 
     # ----cmd_pos 到物体距离门控 ----
     action_term = env.action_manager.get_term(action_term_name)
-    cmd_pos_w = action_term.ll_command[:, 3:6]                        # [N, 3]
+    cmd_pos_w = ll_command_world(action_term)[:, 3:6]                        # [N, 3]
     obj_pos_w = env.scene[object_cfg.name].data.root_pos_w             # [N, 3]  ← 需在参数里加 object_cfg
     cmd_dist  = torch.norm(cmd_pos_w - obj_pos_w, dim=-1)              # [N,]
     gate_close_cmd  = (cmd_dist < cmd_proximity_gate).float()                # [N,]
@@ -780,7 +781,7 @@ def cmd_pos_to_object_reward(
     use_shaped: bool = True,
 ) -> torch.Tensor:
     action_term = env.action_manager.get_term(action_term_name)
-    cmd_pos_w = action_term.ll_command[:, 3:6]
+    cmd_pos_w = ll_command_world(action_term)[:, 3:6]
     
     obj: RigidObject = env.scene[object_cfg.name]
     obj_pos_w = obj.data.root_pos_w
@@ -932,7 +933,7 @@ def cmd_pos_to_object_reward_progress(
     只有 cmd_pos 比历史最近更接近物体时给正奖励。
     """
     action_term = env.action_manager.get_term(action_term_name)
-    cmd_pos_w   = action_term.ll_command[:, 3:6]                  # (N, 3)
+    cmd_pos_w   = ll_command_world(action_term)[:, 3:6]                  # (N, 3)
 
     obj: RigidObject = env.scene[object_cfg.name]
     obj_pos_w = obj.data.root_pos_w                                # (N, 3)
@@ -1046,7 +1047,7 @@ def gripper_contact_symmetric_grasp_progress(
     gate_open = (finger_span > min_finger_dist).float()
 
     action_term = env.action_manager.get_term(action_term_name)
-    cmd_pos_w = action_term.ll_command[:, 3:6]
+    cmd_pos_w = ll_command_world(action_term)[:, 3:6]
     obj_pos_w = env.scene[object_cfg.name].data.root_pos_w
     cmd_dist  = torch.norm(cmd_pos_w - obj_pos_w, dim=-1)
     gate_close_cmd = (cmd_dist < cmd_proximity_gate).float()
@@ -1100,7 +1101,7 @@ def cmd_pos_tracking_penalty(
 
     # ---- cmd_pos ----
     action_term = env.action_manager.get_term(action_term_name)
-    cmd_pos_w   = action_term.ll_command[:, 3:6]                      # (N, 3)
+    cmd_pos_w   = ll_command_world(action_term)[:, 3:6]                      # (N, 3)
 
     # ---- 跟踪误差 ----
     tracking_err = torch.norm(cmd_pos_w - ee_pos_w, dim=-1)            # (N,)
@@ -1204,7 +1205,7 @@ def object_is_lifted_progress(
 
     # cmd 门控
     action_term = env.action_manager.get_term(action_term_name)
-    cmd_pos_w = action_term.ll_command[:, 3:6]
+    cmd_pos_w = ll_command_world(action_term)[:, 3:6]
     obj_pos_w = env.scene[object_cfg.name].data.root_pos_w
     cmd_dist  = torch.norm(cmd_pos_w - obj_pos_w, dim=-1)
     gate_close_cmd = (cmd_dist < cmd_proximity_gate).float()

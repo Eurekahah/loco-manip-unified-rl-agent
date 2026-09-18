@@ -85,6 +85,9 @@ class TeleopLLAction(ActionTerm):
         self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
         # ll_command: [vx, vy, wz, x_w, y_w, z_w, qw, qx, qy, qz, height, pitch, roll]
         self._ll_command = torch.zeros(self.num_envs, 13, device=self.device)
+        # 同一命令的世界系副本（EE 目标的世界坐标/四元数），供需要世界系的奖励项使用；
+        # _ll_command 本身是 root 系（低层 obs 的 ee_goal 与 IK 都用它）
+        self._ll_command_w = torch.zeros_like(self._ll_command)
 
         # 初始化三个 low-level action term
         self._joint_pos_action_term: ActionTerm = cfg.low_level_leg_actions.class_type(
@@ -200,6 +203,14 @@ class TeleopLLAction(ActionTerm):
     @property
     def ll_command(self) -> torch.Tensor:
         return self._ll_command
+
+    @property
+    def ll_command_w(self) -> torch.Tensor:
+        """``ll_command`` 的世界系副本（``[vx,vy,wz, ee_pos_w(3), ee_quat_w(4), h,p,r]``）。
+
+        奖励项里要拿 EE 目标和物体的世界坐标比较，root 系直接比会算错。
+        """
+        return self._ll_command_w
 
     # ------------------------------------------------------------------
     # Helpers
@@ -349,6 +360,18 @@ class TeleopLLAction(ActionTerm):
         self._ll_command[:, 6:10] = ee_quat_b
 
         self._ll_command[:, 10:13] = body_pose
+
+        # 世界系副本：奖励项（例如 object_is_lifted_progress）要拿 EE 目标和物体的
+        # 世界坐标比较；root 系直接比会算错。
+        root_pos_w = self.robot.data.root_pos_w
+        root_quat_w = self.robot.data.root_quat_w
+        ee_pos_w, ee_quat_w = math_utils.combine_frame_transforms(
+            root_pos_w, root_quat_w, self._ll_command[:, 3:6], self._ll_command[:, 6:10]
+        )
+        self._ll_command_w[:, 0:3] = self._ll_command[:, 0:3]
+        self._ll_command_w[:, 3:6] = ee_pos_w
+        self._ll_command_w[:, 6:10] = ee_quat_w
+        self._ll_command_w[:, 10:13] = body_pose
 
         # ── 5. 基准更新策略 ──
         #   absolute_commands=True（VR 遥操）：_default_* 是"标定基准"，只在
