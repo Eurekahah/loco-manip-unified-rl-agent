@@ -18,6 +18,12 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import check_file_path, read_file
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
 from isaaclab.managers import SceneEntityCfg
+from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import (
+    build_low_level_observation_group,
+    check_low_level_action_cfgs,
+    default_layout,
+    verify_low_level_layout,
+)
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -89,11 +95,22 @@ class PreTrainedPickAction(ActionTerm):
             cfg.low_level_ee_actions, env
         )
 
-        # 各自的动作维度
-        self._joint_pos_dim = self._joint_pos_action_term.action_dim
-        self._wheel_vel_dim = self._wheel_vel_action_term.action_dim
-        self._ee_ik_dim = self._ee_ik_action_term.action_dim
-        
+        # ── 低层 replay 布局（清单 ④⑤⑥⑯）──────────────────────────────
+        # 布局描述「产生该 checkpoint 的那次低层训练」的动作分块与观测列顺序。
+        # scale / clip / 关节名单的唯一来源是低层 action cfg（cfg.low_level_*_actions），
+        # 这里只做一致性校验，不再手抄，也不再事后给 action term 赋值
+        # （JointAction 在 __init__ 里就把 cfg 编译成内部张量，事后赋值无效）。
+        self._layout = default_layout(ee_action_dim=cfg.ee_action_dim)
+        check_low_level_action_cfgs(
+            tag=type(self).__name__,
+            layout=self._layout,
+            leg_cfg=cfg.low_level_leg_actions,
+            wheel_cfg=cfg.low_level_wheel_actions,
+        )
+
+        self._joint_pos_dim = self._layout.leg_dim
+        self._wheel_vel_dim = self._layout.wheel_dim
+        self._ee_ik_dim = self._layout.ee_action_dim
 
         self.low_level_leg_actions = torch.zeros(
             self.num_envs, self._joint_pos_dim, device=self.device
@@ -105,13 +122,6 @@ class PreTrainedPickAction(ActionTerm):
             self.num_envs, self._ee_ik_dim, device=self.device
         )
 
-        self._joint_pos_action_term.scale = {".*_hipx_joint": 0.125, '^(?!.*_hipx_joint)(?!.*arm_joint).*': 0.25}
-        self._wheel_vel_action_term.scale = 20.0
-        self._joint_pos_action_term.clip = {".*": (-100.0, 100.0)}
-        self._wheel_vel_action_term.clip = {".*": (-100.0, 100.0)}
-        self._joint_pos_action_term.joint_names = self.leg_joint_names 
-        self._wheel_vel_action_term.joint_names = self.wheel_joint_names
-
         def last_action():
             if hasattr(env, "episode_length_buf"):
                 reset_mask = env.episode_length_buf == 0
@@ -119,34 +129,33 @@ class PreTrainedPickAction(ActionTerm):
                 self.low_level_wheel_actions[reset_mask, :] = 0
                 self.low_level_ee_actions[reset_mask, :] = 0
                 self._raw_actions[reset_mask, :] = 0
-            # 拼接两个 action term 的输出，供 low-level obs 使用
-            return torch.cat([self.low_level_leg_actions, self.low_level_wheel_actions, self.low_level_ee_actions], dim=-1)
+            # 低层 policy 训练时的 actions 观测 = 完整动作向量 [leg | wheel | ee_ik]，
+            # 必须逐维对齐（含不再被 IK 消费的 ee_ik 槽位），见 low_level_replay.py
+            return torch.cat(
+                [self.low_level_leg_actions, self.low_level_wheel_actions, self.low_level_ee_actions],
+                dim=-1,
+            )
 
-        cfg.low_level_observations.actions.func = lambda dummy_env: last_action()
-        cfg.low_level_observations.actions.params = dict()
-
-        cfg.low_level_observations.velocity_commands.func = lambda dummy_env: self._raw_actions[:, :3]
-        cfg.low_level_observations.velocity_commands.params = dict()
-
-        cfg.low_level_observations.ee_goal.func = lambda dummy_env: self._raw_actions[:, 3:10]
-        cfg.low_level_observations.ee_goal.params = dict()
-
-        cfg.low_level_observations.joint_pos.func = mdp.joint_pos_rel_without_wheel
-        cfg.low_level_observations.joint_pos.params["wheel_asset_cfg"] = SceneEntityCfg(
-            "robot", joint_names=self.wheel_joint_names
+        self._low_level_obs_cfg = build_low_level_observation_group(
+            cfg.low_level_observations,
+            layout=self._layout,
+            actions_fn=lambda dummy_env: last_action(),
+            velocity_commands_fn=lambda dummy_env: self._raw_actions[:, :3],
+            ee_goal_fn=lambda dummy_env: self._raw_actions[:, 3:10],
         )
-        # cfg.low_level_observations.base_lin_vel.scale = 2.0
-        cfg.low_level_observations.base_ang_vel.scale = 0.25
-        cfg.low_level_observations.joint_pos.scale = 1.0
-        cfg.low_level_observations.joint_vel.scale = 0.05
-        cfg.low_level_observations.base_lin_vel = None
-        cfg.low_level_observations.height_scan = None
-        cfg.low_level_observations.joint_pos.params["asset_cfg"].joint_names = self.joint_names
-        cfg.low_level_observations.joint_vel.params["asset_cfg"].joint_names = self.joint_names
         # 在 __init__ 末尾添加，提前缓存引用避免每步查找
         self._ee_command_term = env.command_manager.get_term(cfg.ee_command_name)
-
-        self._low_level_obs_manager = ObservationManager({"ll_policy": cfg.low_level_observations}, env)
+        self._low_level_obs_manager = ObservationManager(
+            {"ll_policy": self._low_level_obs_cfg}, env
+        )
+        verify_low_level_layout(
+            tag=type(self).__name__,
+            robot=self.robot,
+            layout=self._layout,
+            obs_manager=self._low_level_obs_manager,
+            group_name="ll_policy",
+            policy=self.policy,
+        )
         self._counter = 0
 
         # ── 增量模式：缓存上一时刻的目标位姿（world 系） ──────────────────────
@@ -312,9 +321,10 @@ class PreTrainedPickAction(ActionTerm):
 
             # policy 输出切分给3个 action term
             policy_output = self.policy(low_level_obs)
-            self.low_level_leg_actions[:] = policy_output[:, :self._joint_pos_dim]
-            self.low_level_wheel_actions[:] = policy_output[:, self._joint_pos_dim:self._joint_pos_dim + self._wheel_vel_dim]
-            self.low_level_ee_actions[:] = policy_output[:, self._joint_pos_dim + self._wheel_vel_dim:self._joint_pos_dim + self._wheel_vel_dim + self._ee_ik_dim]
+            leg, wheel, ee = self._layout.split(policy_output)
+            self.low_level_leg_actions[:] = leg
+            self.low_level_wheel_actions[:] = wheel
+            self.low_level_ee_actions[:] = ee
             # 在 apply_actions 里写入 command 之前
             # target_pos  = self._raw_actions[:, 3:6]    # (num_envs, 3)
             # target_quat = self._raw_actions[:, 6:10]   # (num_envs, 4)  qw, qx, qy, qz
@@ -450,6 +460,14 @@ class PreTrainedPickActionCfg(ActionTermCfg):
     """Low level end-effector action configuration."""
     low_level_observations: ObservationGroupCfg = MISSING
     """Low level observation configuration."""
+    ee_action_dim: int = 7
+    """低层 checkpoint 动作输出里 IK 槽位的数量（见 ``low_level_replay``）。
+
+    低层 IK 改成由 CommandManager 直接驱动后（``CommandDrivenIKAction.action_dim == 0``），
+    这 7 维不再被任何低层 action term 消费；但旧 checkpoint 的 ``actions`` 观测包含它们，
+    回放时必须照原样喂回去，否则低层 policy 的观测布局与训练时不一致。
+    低层重训后（L2）应改为从低层 cfg 推导。
+    """
     ee_command_name: str = "ee_pose"
     """The command name in CommandManager that this action term outputs to. Should correspond to a command in CommandsCfg."""
     debug_vis: bool = False

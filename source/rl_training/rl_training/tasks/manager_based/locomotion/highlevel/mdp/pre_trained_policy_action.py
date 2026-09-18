@@ -128,8 +128,10 @@ class PreTrainedPolicyAction(ActionTerm):
         cfg.low_level_observations.velocity_commands.func = lambda dummy_env: self._raw_actions[:, :3]
         cfg.low_level_observations.velocity_commands.params = dict()
 
-        cfg.low_level_observations.ee_pose_commands.func = lambda dummy_env: self._raw_actions[:, 3:]
-        cfg.low_level_observations.ee_pose_commands.params = dict()
+        # 低层 policy 观测组里只有 ee_goal（没有 ee_pose_commands），
+        # 这里以前写的是不存在的属性名，一旦启用该 action term 会立刻 AttributeError。
+        cfg.low_level_observations.ee_goal.func = lambda dummy_env: self._raw_actions[:, 3:10]
+        cfg.low_level_observations.ee_goal.params = dict()
 
         cfg.low_level_observations.joint_pos.func = mdp.joint_pos_rel_without_wheel
         cfg.low_level_observations.joint_pos.params["wheel_asset_cfg"] = SceneEntityCfg(

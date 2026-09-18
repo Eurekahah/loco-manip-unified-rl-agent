@@ -23,11 +23,15 @@ from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg imp
 from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import EventCfg as HighLevelEventCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import HighLevelSceneCfg
 from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.flat_env_cfg import DeeproboticsM20FlatEnvCfg as LOW_LEVEL_ENV_CFG
+from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.flat_env_wbc_cfg import WBCObservationsCfg
 import isaaclab.sim as sim_utils
 
 from rl_training.tasks.manager_based.locomotion.velocity.mdp.commands import HeightInvariantEECommandCfg
 
 _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
+# WBC 版低层 policy 的观测模板（比 flat 版多 body_pose_cmd），由 cfg 显式提供，
+# 不再由 action term 在运行时构造并覆盖 cfg.low_level_observations（清单 ⑥）。
+_low_level_wbc_obs_cfg = WBCObservationsCfg()
 
 @configclass
 class HLFlatPickActionsCfg(HighLevelActionsCfg):
@@ -59,7 +63,7 @@ class HLFlatPickWBCActionsCfg(HLFlatPickActionsCfg):
         low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
         low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,
         low_level_ee_actions=_low_level_env_cfg.actions.ee_ik,
-        low_level_observations=_low_level_env_cfg.observations.policy,
+        low_level_observations=_low_level_wbc_obs_cfg.policy,
         debug_vis=False,
     )
 
@@ -72,7 +76,7 @@ class TeleopActionsCfg(HLFlatPickActionsCfg):
         low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
         low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,
         low_level_ee_actions=_low_level_env_cfg.actions.ee_ik,
-        low_level_observations=_low_level_env_cfg.observations.policy,
+        low_level_observations=_low_level_wbc_obs_cfg.policy,
         debug_vis=False,
     )
 
