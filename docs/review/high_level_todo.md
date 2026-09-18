@@ -228,7 +228,7 @@
 | 新增 A：`actions` 观测宽度少 7 维 | `codex/hl-replay-layout` | `dc45d0e` |
 | 新增 B：`joint_pos` 轮关节掩码索引空间 | `codex/hl-replay-layout` | `dc45d0e` |
 | 新增 C：L2 布局推导（默认）+ 低层 `ee_goal` 恢复 | `codex/hl-replay-l2` / `codex/ll-keep-ee-goal` | `9d52fac` |
-| ① `PreTrainedPickAction` 缺 `ll_command`（+ 奖励项改用 `ll_command_w`） | `codex/hl-fix-ll-command` | `__LLCMD__` |
+| ① `PreTrainedPickAction` 缺 `ll_command`（+ 奖励项改用 `ll_command_w`） | `codex/hl-fix-ll-command` | `e064bc6` |
 
 ---
 
