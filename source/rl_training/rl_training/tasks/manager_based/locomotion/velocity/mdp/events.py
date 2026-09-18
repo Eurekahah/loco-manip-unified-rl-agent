@@ -202,12 +202,40 @@ def _randomize_prop_by_op(
 
 
 def bad_orientation_2(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot") # type: ignore
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),  # type: ignore
+    limit_angle: float = 0.8,
 ) -> torch.Tensor:
-    """Terminate when the asset's orientation is too far from the desired orientation limits.
+    """机体相对竖直方向的**总倾角**超过 ``limit_angle``（弧度）时终止。
 
-    This is computed by checking the angle between the projected gravity vector and the z-axis.
+    倾角由投影重力与机体 z 轴的夹角给出：
+    ``tilt = acos(clamp(-projected_gravity_b[:, 2], -1, 1))``
+    （直立时 0，侧躺 90°，翻过来 180°），因此是**旋转不变**的。
+
+    历史与修正
+    ----------
+    旧实现是
+
+        (projected_gravity_b[:, 2] > 0) | (projected_gravity_b[:, :2].abs() > 0.5).any(-1)
+
+    因为 ``|g| = 1``，``|g_x| > 0.5`` 等价于「绕单轴倾斜约 30°」
+    （``arcsin(0.5) = 30°``）。这条边界在 g_xy 平面里是个**方形**而不是圆：
+    沿 x/y 倾斜 30° 就终止，沿 xy 对角要 45° 才终止 —— 方向不同、宽容度不同。
+
+    30° 对本任务的命令空间来说太紧：``body_pose`` 的 pitch 命令范围是 ±0.35 rad(20°)、
+    roll ±0.25 rad(14°)，两者叠加的名义倾角已达 0.427 rad(24.5°)，距离 30° 只剩
+    ~5.5°；而实测跟踪误差（``Metrics/body_pose/*_error_mean``）本身就有
+    0.13~0.38 rad(7.5~21.6°)，**比这个余量还大** —— 于是正常的跟踪误差会被判成"摔倒"。
+    实测（history_adaptation/2026-09-18_19-33-47）：``bad_orientation_2`` 占终止的
+    62.7%（早期 96.6%），是时长的实际瓶颈。
+
+    现在默认 ``limit_angle = 0.8 rad (45.8°)``：与仓库里另一处
+    ``bad_orientation(limit_angle=0.8)`` 保持一致，比旧的 30° 明显放宽、
+    但仍能拦住真摔（侧躺 90°、翻倒 180°），并且是旋转不变的。
+
+    Args:
+        limit_angle: 允许的最大总倾角（弧度）。0.8≈45.8°，1.0≈57.3°（更宽松）。
     """
-    # extract the used quantities (to enable type-hinting)
     asset: RigidObject = env.scene[asset_cfg.name]
-    return (asset.data.projected_gravity_b[:, 2] > 0) | (asset.data.projected_gravity_b[:, :2].abs() > 0.5).any(-1)
+    tilt = torch.acos(torch.clamp(-asset.data.projected_gravity_b[:, 2], -1.0, 1.0))
+    return tilt > limit_angle
