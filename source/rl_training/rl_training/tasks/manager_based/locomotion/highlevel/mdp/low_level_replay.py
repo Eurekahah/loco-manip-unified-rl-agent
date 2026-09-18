@@ -389,6 +389,37 @@ def checkpoint_dims(policy) -> tuple[int, int]:
     return int(linears[0].weight.shape[1]), int(linears[-1].weight.shape[0])
 
 
+def push_ee_target_to_ik(command_term, target_b: torch.Tensor, *, tag: str) -> None:
+    """把高层的 EE 目标（**root 系**）推给驱动 IK 的命令项。
+
+    为什么不能只写 ``pose_command_b``
+    --------------------------------
+    IK（``CommandDrivenIKAction``）读的是 ``command_manager.get_command(cfg.command_name)``，
+    对 ``HeightInvariantEECommand`` 来说就是 ``pose_command_b`` —— 所以必须写它。
+
+    但 ``HeightInvariantEECommand._update_command()`` 会在**每个 env step 的末尾**
+    （``command_manager.compute()``）用 ``pose_start_b`` / ``pose_end_b`` 重新插值覆盖
+    ``pose_command_b``。只写 ``pose_command_b`` 的话：
+
+    * IK 本身没问题 —— ``action_manager.apply_action()`` 在 decimation 子步里跑，
+      发生在 ``command_manager.compute()`` 之前，读到的就是刚写进去的目标；
+    * 但命令项自己的 ``metrics``（如 ``Metrics/ee_pose/position_error``）和 debug marker
+      仍然显示**它自己采样出来的目标**，会让人误判"目标没生效"。
+
+    所以这里把 ``pose_start_b`` / ``pose_end_b`` 也一起写（两者相等 ⇒ 插值恒等于该目标），
+    让命令项的指标/可视化与 IK 真正使用的目标一致。
+    """
+    if not hasattr(command_term, "pose_command_b"):
+        raise AttributeError(
+            f"[{tag}] {type(command_term).__name__} 没有 pose_command_b，"
+            "无法作为 IK 目标来源"
+        )
+    command_term.pose_command_b[:] = target_b
+    for attr in ("pose_start_b", "pose_end_b"):
+        if hasattr(command_term, attr):
+            getattr(command_term, attr)[:] = target_b
+
+
 def ll_command_world(action_term) -> torch.Tensor:
     """取 action term 的「世界系」高层命令（``[vx,vy,wz, ee_pos_w(3), ee_quat_w(4)]``）。
 

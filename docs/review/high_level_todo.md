@@ -44,7 +44,38 @@
 - 可选修法：① 给 `PreTrainedPickAction` 补同义属性；② 该奖励内做 `hasattr` 判断后跳过；
   ③ 非 WBC 的 pick 配置里把这一项置 `None`
 
-### 2. 高层给机械臂的目标写进了死字段，IK 根本收不到
+### 2. `[已修]` 高层给机械臂的目标写进了死字段，IK 根本收不到
+
+> 修复于 `codex/hl-fix-ee-command`（O1 方案）。修法：写 `pose_command_b`，
+> 并新增 `low_level_replay.push_ee_target_to_ik()` 统一推送：
+>
+> ```python
+> command_term.pose_command_b[:] = target_b          # IK 读的就是这个
+> command_term.pose_start_b[:] = command_term.pose_end_b[:] = target_b
+> ```
+>
+> 第二行是必须的：`HeightInvariantEECommand._update_command()` 会在**每个 env step 末尾**
+> （`command_manager.compute()`）用 `pose_start_b/pose_end_b` 插值覆盖 `pose_command_b`。
+> 只写 `pose_command_b` 的话 IK 本身没问题（`apply_action()` 在 decimation 子步里跑，
+> 早于 `command_manager.compute()`，读到的是刚写进去的值），但命令项自己的
+> `Metrics/ee_pose/position_error` 和 debug marker 仍然显示**它自己采样的目标**，
+> 会让人误判"目标没生效"。把 start/end 一起写（两者相等 ⇒ 插值恒等于该目标），
+> 指标与可视化就都对齐到高层目标了。
+>
+> 实测（`--num_envs 8 --steps 20`，三个任务都过）：
+>
+> | 任务 | `|pose_command_b − 高层root目标|` | 命令项自己的目标 vs 高层目标 | EE 距高层目标 |
+> |---|---|---|---|
+> | `...Pick-Flat-Teacher-v0` | pos **0.000e+00** quat **0.000e+00** | 0.0000 | 0.2575 m |
+> | `...Pick-WBC-Flat-Teacher-v0` | pos **0.000e+00** quat **0.000e+00** | 0.0000 | 0.0429 m |
+> | `Isaac-M20-Piper-Teleop-v0` | pos **0.000e+00** quat **0.000e+00** | 0.0000 | 0.0057 m |
+>
+> （EE 误差就是"目标确实在被跟踪、只是低层策略精度有限"的量；flat 那个 0.26 m 偏大
+> 是因为旧 flat checkpoint 训练时 IK 还是 policy 驱动，与现在 command 驱动有分布差异。）
+>
+> 训练回归：三个任务 `train.py --num_envs 64 --max_iterations 2` 全 **EXIT=0**，
+> flat pick 0.83→1.14、WBC pick 0.88→1.28（比修 ②③ 前更高，符合"目标真的生效了"）、
+> teleop 0.12→0.18（teleop 本来就写的 `pose_command_b`，只多了 start/end 同步）。
 
 - 写入处：`pre_trained_pick_action.py:327`、`pre_trained_pick_wbc_action.py:347`
   → `self._ee_command_term.pose_command_w[...] = ...`
@@ -58,7 +89,7 @@
 - 建议：统一写 `pose_command_b`（世界系 → root 系转换后写入）；或让 IK 改读
   `pose_command_w` 并补上它的更新逻辑
 
-### 3. replay 喂给低层 policy 的 `ee_goal` 是**世界系**，训练时是 root 系
+### 3. `[已修]` replay 喂给低层 policy 的 `ee_goal` 是**世界系**，训练时是 root 系
 
 - 训练侧：`velocity/mdp/observations.py::ee_goal_local` 返回 `command_local` = `pose_command_b`（root 系）
 - replay 侧把这些槽位覆盖成世界系量：
@@ -70,6 +101,27 @@
 - 前置决策：你当前 WIP 已在 `flat_env_wbc_cfg.py:314-315` 把
   `policy.ee_goal / critic.ee_goal` 置 `None`；需要先定 WBC 版是否保留 `ee_goal`，
   再统一 replay 侧到底往哪个槽位喂什么坐标系的值
+
+> 修复于 `codex/hl-fix-ll-command`（WBC/teleop 部分）+ `codex/hl-fix-ee-command`（flat 部分）。
+> 按 O1 统一：`ll_command` 规范形式就是 **root 系**
+> （`[vx,vy,wz, ee_pos_b(3), ee_quat_b(4)]`），因此
+>
+> * 低层 `ee_goal` 观测 ← `ll_command[:, 3:10]`（root）；
+> * IK 目标 ← `pose_command_b` ← 同一个 `ll_command[:, 3:10]`；
+> * 需要世界系的奖励项 ← 新增的 `ll_command_w`（见清单 ①）。
+>
+> 实测（低层 obs 里 `ee_goal` 槽位的取值，与独立复算对比）：
+>
+> | 任务 | vs【root 系命令】 | vs【世界系命令】(对照) |
+> |---|---|---|
+> | `...Pick-Flat-Teacher-v0` | **0.000e+00** | 8.9093 |
+>
+> 前置决策的落地：**低层 WBC 训练改为保留 `ee_goal`**
+> （`codex/ll-keep-ee-goal`，观测 76 → 83），因此现阶段测试用的
+> `2026-09-18_01-31-58` checkpoint（`ee_goal=None`，76 维）在 replay 侧会自动
+> 省掉 `ee_goal` 槽位（`build_low_level_obs_manager()`，实测 obs 76 = 76）；
+> 等用"保留 ee_goal"的配置重训完，新 checkpoint 的 `policy_layout.json` 里
+> `policy_obs_dim` 会是 83，replay 自动把槽位加回来。
 
 ---
 
@@ -229,6 +281,8 @@
 | 新增 B：`joint_pos` 轮关节掩码索引空间 | `codex/hl-replay-layout` | `dc45d0e` |
 | 新增 C：L2 布局推导（默认）+ 低层 `ee_goal` 恢复 | `codex/hl-replay-l2` / `codex/ll-keep-ee-goal` | `9d52fac` |
 | ① `PreTrainedPickAction` 缺 `ll_command`（+ 奖励项改用 `ll_command_w`） | `codex/hl-fix-ll-command` | `e064bc6` |
+| ② 高层 EE 目标写进死字段、IK 收不到（含 start/end_b 同步） | `codex/hl-fix-ee-command` | `__EECMD__` |
+| ③ replay 的 `ee_goal` 用世界系（统一到 root 系，O1） | `codex/hl-fix-ll-command` + `codex/hl-fix-ee-command` | `e064bc6` / `__EECMD__` |
 
 ---
 

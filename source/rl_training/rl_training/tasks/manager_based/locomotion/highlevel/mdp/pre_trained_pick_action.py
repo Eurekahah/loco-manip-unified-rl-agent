@@ -23,6 +23,7 @@ from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay i
     build_low_level_observation_group,
     check_low_level_action_cfgs,
     expected_policy_obs_dim,
+    push_ee_target_to_ik,
     resolve_layout,
     verify_low_level_layout,
 )
@@ -85,6 +86,18 @@ class PreTrainedPickAction(ActionTerm):
         self.policy = torch.jit.load(file_bytes).to(env.device).eval()
 
         self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+
+        # ── ll_command：给外部（奖励项 / 低层观测 / IK）读的"高层下发的命令" ──
+        # 语义与 PreTrainedPickWBCAction / TeleopLLAction 一致：
+        #   [vx, vy, wz, ee_pos_b(3), ee_quat_b(4)]      ← root 系（规范形式）
+        # 另存一份世界系副本给需要世界系的消费者（奖励项要和物体世界坐标比较）：
+        #   [vx, vy, wz, ee_pos_w(3), ee_quat_w(4)]
+        # 本类内部的位置增量仍在世界系里累积（见 _target_pos_w），root 系那一份在
+        # 每次 process_actions 末尾由世界系目标换算得到。
+        # 注意：必须在构造低层观测组之前分配 —— 观测组的 lambda 会立刻被
+        # ObservationManager 调用一次来推断维度。
+        self._ll_command = torch.zeros(self.num_envs, 10, device=self.device)
+        self._ll_command_w = torch.zeros(self.num_envs, 10, device=self.device)
 
         # 分别初始化三个 low level action term
         self._joint_pos_action_term: ActionTerm = cfg.low_level_leg_actions.class_type(
@@ -151,7 +164,9 @@ class PreTrainedPickAction(ActionTerm):
             layout=self._layout,
             actions_fn=lambda dummy_env: last_action(),
             velocity_commands_fn=lambda dummy_env: self._raw_actions[:, :3],
-            ee_goal_fn=lambda dummy_env: self._raw_actions[:, 3:10],
+            # 低层 policy 训练时的 ee_goal = HeightInvariantEECommand.pose_command_b（root 系）；
+            # 回放必须喂 root 系（ll_command 的前 10 维就是它），不能喂世界系目标。
+            ee_goal_fn=lambda dummy_env: self._ll_command[:, 3:10],
         )
         # 在 __init__ 末尾添加，提前缓存引用避免每步查找
         self._ee_command_term = env.command_manager.get_term(cfg.ee_command_name)
@@ -194,16 +209,6 @@ class PreTrainedPickAction(ActionTerm):
         self._delta_pos_w = torch.zeros_like(self._target_pos_w)
         self._delta_yaw = torch.zeros(self.num_envs, 1, device=self.device)
         self._delta_action = torch.zeros(self.num_envs, 4, device=self.device)  # (delta_pos_w, delta_yaw)
-
-        # ── ll_command：给外部（奖励项 / 低层观测 / IK）读的"高层下发的命令" ──
-        # 语义统一成与 PreTrainedPickWBCAction / TeleopLLAction 一致：
-        #   [vx, vy, wz, ee_pos_b(3), ee_quat_b(4)]      ← root 系（规范形式）
-        # 另外维护一份世界系副本供需要世界系的消费者使用（奖励项里要和物体世界坐标比较）：
-        #   [vx, vy, wz, ee_pos_w(3), ee_quat_w(4)]
-        # 本类内部的位置增量目前仍在世界系里累积（见 _target_pos_w），
-        # root 系那一份在每次 process_actions 末尾由世界系目标换算得到。
-        self._ll_command = torch.zeros(self.num_envs, 10, device=self.device)
-        self._ll_command_w = torch.zeros(self.num_envs, 10, device=self.device)
     """
     Properties.
     """
@@ -395,16 +400,14 @@ class PreTrainedPickAction(ActionTerm):
             self.low_level_leg_actions[:] = leg
             self.low_level_wheel_actions[:] = wheel
             self.low_level_ee_actions[:] = ee
-            # 在 apply_actions 里写入 command 之前
-            # target_pos  = self._raw_actions[:, 3:6]    # (num_envs, 3)
-            # target_quat = self._raw_actions[:, 6:10]   # (num_envs, 4)  qw, qx, qy, qz
-
-            # # 归一化，防止非单位四元数导致坐标轴歪斜
-            # target_quat = torch.nn.functional.normalize(target_quat, p=2, dim=-1)
-
-            # self._ee_command_term.pose_command_w[:, 0:3] = target_pos
-            # self._ee_command_term.pose_command_w[:, 3:7] = target_quat
-            self._ee_command_term.pose_command_w[:] = self._raw_actions[:, 3:10] # 更新 CommandManager 中的 ee_pose 命令，供 IK controller 使用
+            # 把高层目标写给 IK：IK（CommandDrivenIKAction）读的是
+            # command_manager.get_command("ee_pose") == HeightInvariantEECommand.pose_command_b，
+            # 它是 **root 系**目标（与 DifferentialIKController 的误差计算同系）。
+            # 之前写的是 pose_command_w —— 那个字段只被父类 _update_metrics/debug vis 用，
+            # 写进去等于没写，IK 一直在跟 command 自己采样出来的随机目标。
+            push_ee_target_to_ik(
+                self._ee_command_term, self._ll_command[:, 3:10], tag=type(self).__name__
+            )
 
             self._joint_pos_action_term.process_actions(self.low_level_leg_actions)
             self._wheel_vel_action_term.process_actions(self.low_level_wheel_actions)
@@ -470,9 +473,9 @@ class PreTrainedPickAction(ActionTerm):
         self.base_vel_visualizer.visualize(base_pos_w, vel_arrow_quat, vel_arrow_scale)
 
         # ── ee_pose 目标可视化 ✅ ──────────────────────────────────────
-        # raw_actions[:, 3:10] = [x, y, z, qw, qx, qy, qz]
-        ee_goal_pos  = self.raw_actions[:, 3:6]   # (N, 3)
-        ee_goal_quat = self.raw_actions[:, 6:10]  # (N, 4) wxyz
+        # marker 要画在世界系里，所以用 ll_command_w（ll_command 是 root 系）
+        ee_goal_pos  = self.ll_command_w[:, 3:6]   # (N, 3)
+        ee_goal_quat = self.ll_command_w[:, 6:10]  # (N, 4) wxyz
 
         # 四元数全零时（reset后还没收到命令）跳过可视化，避免除零
         valid_mask = torch.norm(ee_goal_quat, dim=-1) > 0.1

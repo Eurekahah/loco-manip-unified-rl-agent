@@ -19,6 +19,7 @@ from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay i
     build_low_level_observation_group,
     check_low_level_action_cfgs,
     expected_policy_obs_dim,
+    push_ee_target_to_ik,
     resolve_layout,
     verify_low_level_layout,
 )
@@ -412,8 +413,10 @@ class TeleopLLAction(ActionTerm):
             self.low_level_wheel_actions[:] = wheel
             self.low_level_ee_actions[:]    = ee
 
-            # self._ee_command_term.pose_command_w[:] = self._ll_command[:, 3:10]
-            self._ee_command_term.pose_command_b[:] = self._ll_command[:, 3:10]
+            # 目标写 pose_command_b（root 系）：IK 读的就是这个字段（清单 ②）
+            push_ee_target_to_ik(
+                self._ee_command_term, self._ll_command[:, 3:10], tag=type(self).__name__
+            )
 
             self._joint_pos_action_term.process_actions(self.low_level_leg_actions)
             self._wheel_vel_action_term.process_actions(self.low_level_wheel_actions)

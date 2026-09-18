@@ -24,6 +24,7 @@ from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay i
     build_low_level_observation_group,
     check_low_level_action_cfgs,
     expected_policy_obs_dim,
+    push_ee_target_to_ik,
     resolve_layout,
     verify_low_level_layout,
 )
@@ -379,9 +380,13 @@ class PreTrainedPickWBCAction(ActionTerm):
             self.low_level_leg_actions[:] = leg
             self.low_level_wheel_actions[:] = wheel
             self.low_level_ee_actions[:] = ee
-            # 在 apply_actions 里写入 command 之前
-
-            self._ee_command_term.pose_command_w[:] = self._ll_command[:, 3:10] # 更新 CommandManager 中的 ee_pose 命令，供 IK controller 使用
+            # 把高层目标写给 IK：IK 读的是 command_manager.get_command("ee_pose")
+            # == HeightInvariantEECommand.pose_command_b（root 系目标）。
+            # 之前写的是 pose_command_w —— 那个字段只被父类 _update_metrics/debug vis
+            # 使用，写进去等于没写（清单 ②）。
+            push_ee_target_to_ik(
+                self._ee_command_term, self._ll_command[:, 3:10], tag=type(self).__name__
+            )
 
             self._joint_pos_action_term.process_actions(self.low_level_leg_actions)
             self._wheel_vel_action_term.process_actions(self.low_level_wheel_actions)
