@@ -91,29 +91,38 @@ def history_single_step_obs(
 - 解决办法:__init__ 只保存 asset/body_ids 等引用,不做任何物理查询;真正的查询延迟到
   第一次被调用(__call__)时才执行 —— 那时候 startup 随机化事件肯定已经跑完了。查询结果
   缓存进 self.buf,之后每次 __call__ 都是直接返回缓存,开销为零。
-- reset(env_ids) 保留接口、留空。如果以后把某个随机化改成 "reset" mode(每个 episode
-  都重新随机化),把对应类 reset() 里注释掉的查询逻辑取消注释即可。
+- reset 语义：只有"对应的随机化在 reset 模式"的项才需要在 episode reset 时刷新，由 ObsTerm
+  参数 ``update_on_reset`` 控制（默认 False）。IsaacLab 在 ``_reset_idx`` 里先
+  ``event_manager.apply(mode="reset")`` 再 ``observation_manager.reset()``，所以在 ``reset()``
+  里重查物理量拿到的一定是随机化之后的新值。
+  当前 EventCfg 中只有 ``randomize_actuator_gains`` 是 reset 模式 → 只有
+  ``privileged_joint_gain_scale`` 默认开启刷新；其余项对应 startup 随机化，保持"只取一次"。
 """
 
 
-class privileged_base_extra_payload(ManagerTermBase):
-    """基座额外负载 (kg),相对默认质量的偏移量。对应 randomize_rigid_body_mass(add)。"""
+class _PrivilegedCachedTerm(ManagerTermBase):
+    """特权观测的公共缓存逻辑（子类只需实现 _compute）。"""
+
+    #: 该 ObsTerm 对应的随机化是否在 episode reset 时重新采样（EventTerm mode="reset"）。
+    #: 子类可覆盖；也可以在 ObsTerm 参数里传 ``update_on_reset=True/False`` 单独覆盖。
+    default_update_on_reset: bool = False
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
-        asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
-        self.asset = env.scene[asset_cfg.name]
-        self.body_id = asset_cfg.body_ids[0] if asset_cfg.body_ids is not None else 0
+        # 注意：ObsTerm.params 会被 manager 原样透传给 __call__（见 ObservationManager._prepare_terms），
+        # 所以这个开关必须 pop 掉，否则 __call__ 会收到意外关键字参数而报 TypeError。
+        override = cfg.params.pop("update_on_reset", None)
+        self.update_on_reset: bool = self.default_update_on_reset if override is None else bool(override)
         self.buf: torch.Tensor | None = None
         self.count = 0
 
-    def _compute(self):
-        current_mass = self.asset.root_physx_view.get_masses()[:, self.body_id].to(self._env.device)
-        default_mass = self.asset.data.default_mass[:, self.body_id].to(self._env.device)
-        self.buf = (current_mass - default_mass).unsqueeze(-1)
+    def _compute(self, env_ids: torch.Tensor | slice | None = None):
+        raise NotImplementedError
 
     def reset(self, env_ids: torch.Tensor | slice | None = None):
-        pass
+        # manager 构建期第一次 __call__ 之前 buf 还不存在，交给正常路径去填
+        if self.update_on_reset and self.buf is not None:
+            self._compute(env_ids=env_ids)
 
     def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
         if self.count < 2 or self.buf is None:
@@ -122,86 +131,86 @@ class privileged_base_extra_payload(ManagerTermBase):
         return self.buf
 
 
-class privileged_end_effector_payload(ManagerTermBase):
-    """末端负载 (kg)。对应 randomize_rigid_body_mass(scale)。"""
+class privileged_base_extra_payload(_PrivilegedCachedTerm):
+    """基座额外负载 (kg),相对默认质量的偏移量。对应 randomize_rigid_body_mass(add)（startup）。"""
+
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
+        self.asset = env.scene[asset_cfg.name]
+        self.body_id = asset_cfg.body_ids[0] if asset_cfg.body_ids is not None else 0
+
+    def _compute(self, env_ids: torch.Tensor | slice | None = None):
+        current_mass = self.asset.root_physx_view.get_masses()[:, self.body_id].to(self._env.device)
+        default_mass = self.asset.data.default_mass[:, self.body_id].to(self._env.device)
+        value = (current_mass - default_mass).unsqueeze(-1)
+        if self.buf is None or env_ids is None:
+            self.buf = value
+        else:
+            self.buf[env_ids] = value[env_ids]
+
+
+class privileged_end_effector_payload(_PrivilegedCachedTerm):
+    """末端负载 (kg)。对应 randomize_rigid_body_mass(scale)（startup）。"""
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
         self.asset = env.scene[asset_cfg.name]
         self.body_id = asset_cfg.body_ids[0]
-        self.buf: torch.Tensor | None = None
-        self.count = 0
 
-    def _compute(self):
+    def _compute(self, env_ids: torch.Tensor | slice | None = None):
         current_mass = self.asset.root_physx_view.get_masses()[:, self.body_id].to(self._env.device)
         default_mass = self.asset.data.default_mass[:, self.body_id].to(self._env.device)
-        self.buf = (current_mass - default_mass).unsqueeze(-1)
-
-    def reset(self, env_ids: torch.Tensor | slice | None = None):
-        pass
-
-    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-        if self.count < 2 or self.buf is None:
-            self._compute()
-            self.count += 1
-        return self.buf
+        value = (current_mass - default_mass).unsqueeze(-1)
+        if self.buf is None or env_ids is None:
+            self.buf = value
+        else:
+            self.buf[env_ids] = value[env_ids]
 
 
-class privileged_rigid_body_inertia(ManagerTermBase):
-    """指定 body 的惯量偏移(对角项均值)。对应 randomize_rigid_body_inertia。"""
+class privileged_rigid_body_inertia(_PrivilegedCachedTerm):
+    """指定 body 的惯量偏移(对角项均值)。对应 randomize_rigid_body_inertia（startup）。"""
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
         self.asset = env.scene[asset_cfg.name]
         self.body_ids = asset_cfg.body_ids
-        self.buf: torch.Tensor | None = None
-        self.count = 0
 
-    def _compute(self):
+    def _compute(self, env_ids: torch.Tensor | slice | None = None):
         current_inertia = self.asset.root_physx_view.get_inertias()[:, self.body_ids].to(self._env.device)
         default_inertia = self.asset.data.default_inertia[:, self.body_ids].to(self._env.device)
-        self.buf = (current_inertia - default_inertia).mean(dim=-1)
-
-    def reset(self, env_ids: torch.Tensor | slice | None = None):
-        pass
-
-    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-        if self.count < 2 or self.buf is None:
-            self._compute()
-            self.count += 1
-        return self.buf
+        value = (current_inertia - default_inertia).mean(dim=-1)
+        if self.buf is None or env_ids is None:
+            self.buf = value
+        else:
+            self.buf[env_ids] = value[env_ids]
 
 
-class privileged_base_com_offset(ManagerTermBase):
-    """基座质心偏移 (3,)。对应 randomize_com_positions。"""
+class privileged_base_com_offset(_PrivilegedCachedTerm):
+    """基座质心偏移 (3,)。对应 randomize_com_positions（startup）。"""
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
         self.asset = env.scene[asset_cfg.name]
         self.body_id = asset_cfg.body_ids[0] if asset_cfg.body_ids is not None else 0
-        self.buf: torch.Tensor | None = None
-        self.count = 0
 
-    def _compute(self):
+    def _compute(self, env_ids: torch.Tensor | slice | None = None):
         current_com = self.asset.root_physx_view.get_coms()[:, self.body_id, :3].to(self._env.device)
         default_com = self.asset.data.default_com[:, self.body_id, :3].to(self._env.device)
-        self.buf = current_com - default_com
-
-    def reset(self, env_ids: torch.Tensor | slice | None = None):
-        pass
-
-    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-        if self.count < 2 or self.buf is None:
-            self._compute()
-            self.count += 1
-        return self.buf
+        value = current_com - default_com
+        if self.buf is None or env_ids is None:
+            self.buf = value
+        else:
+            self.buf[env_ids] = value[env_ids]
 
 
-class privileged_material_properties(ManagerTermBase):
+class privileged_material_properties(_PrivilegedCachedTerm):
     """脚部 PhysX 材质特权信息:静摩擦、动摩擦、恢复系数。对应 randomize_rigid_body_material。
+
+    该随机化是 startup 模式 → 默认不在 reset 时刷新。
 
     Returns:
         torch.Tensor: shape [num_envs, num_feet * 3],按
@@ -215,64 +224,54 @@ class privileged_material_properties(ManagerTermBase):
         asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
         self.asset = env.scene[asset_cfg.name]
         self.foot_body_ids = asset_cfg.body_ids
-        self.buf: torch.Tensor | None = None
-        self.count = 0
 
-    def _compute(self):
+    def _compute(self, env_ids: torch.Tensor | slice | None = None):
         materials = self.asset.root_physx_view.get_material_properties().to(self._env.device)  # [num_envs, num_bodies, 3]
         static_friction = materials[:, self.foot_body_ids, 0]
         dynamic_friction = materials[:, self.foot_body_ids, 1]
         restitution = materials[:, self.foot_body_ids, 2]
-        self.buf = torch.cat([static_friction, dynamic_friction, restitution], dim=-1)
-
-    def reset(self, env_ids: torch.Tensor | slice | None = None):
-        pass
-
-    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-        if self.count < 2 or self.buf is None:
-            self._compute()
-            self.count += 1
-        return self.buf
+        value = torch.cat([static_friction, dynamic_friction, restitution], dim=-1)
+        if self.buf is None or env_ids is None:
+            self.buf = value
+        else:
+            self.buf[env_ids] = value[env_ids]
 
 
-class privileged_joint_gain_scale(ManagerTermBase):
-    """关节 PD 增益缩放系数(stiffness/damping 相对默认值的比例)。对应 randomize_actuator_gains。"""
+class privileged_joint_gain_scale(_PrivilegedCachedTerm):
+    """关节 PD 增益缩放系数(stiffness/damping 相对默认值的比例)。
+
+    对应 ``randomize_actuator_gains``，该 EventTerm 是 **reset 模式** → 默认在每个 episode
+    reset 后刷新缓存（``update_on_reset`` 默认 True）；多次 reset 只更新被 reset 的那几行。
+    如果把它改回 startup 模式，可在 ObsTerm 参数里传 ``update_on_reset=False`` 省掉这次查询。
+    """
+
+    default_update_on_reset: bool = True
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         self.asset = env.scene[cfg.params["asset_cfg"].name]
         self.included_actuators = {"joint", "wheel", "piper_arm", "piper_gripper"}  # 轮子和夹爪可按需去掉
-        self.buf: torch.Tensor | None = None
-        self.count = 0
 
-    def _compute(self):
+    @staticmethod
+    def _scale(current: torch.Tensor, default) -> torch.Tensor:
+        if isinstance(default, float):
+            return current / max(default, 1e-8)
+        return current / current.new_tensor(default).clamp_min(1e-8)
+
+    def _compute(self, env_ids: torch.Tensor | slice | None = None):
         scales = []
         for actuator_name, actuator in self.asset.actuators.items():
             if actuator_name not in self.included_actuators:
                 continue
-            current_k = actuator.stiffness
-            current_d = actuator.damping
-            default_k = actuator.cfg.stiffness
-            default_d = actuator.cfg.damping
-            k_scale = (
-                current_k / max(default_k, 1e-8)
-                if isinstance(default_k, float)
-                else current_k / current_k.new_tensor(default_k).clamp_min(1e-8)
-            )
-            d_scale = (
-                current_d / max(default_d, 1e-8)
-                if isinstance(default_d, float)
-                else current_d / current_d.new_tensor(default_d).clamp_min(1e-8)
-            )
+            k_scale = self._scale(actuator.stiffness, actuator.cfg.stiffness)
+            d_scale = self._scale(actuator.damping, actuator.cfg.damping)
+            if env_ids is not None:
+                k_scale = k_scale[env_ids]
+                d_scale = d_scale[env_ids]
             scales.append(k_scale)
             scales.append(d_scale)
-        self.buf = torch.cat(scales, dim=-1)
-
-    def reset(self, env_ids: torch.Tensor | slice | None = None):
-        pass
-
-    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-        if self.count < 2 or self.buf is None:
-            self._compute()
-            self.count += 1
-        return self.buf
+        value = torch.cat(scales, dim=-1)
+        if self.buf is None or env_ids is None:
+            self.buf = value
+        else:
+            self.buf[env_ids] = value
