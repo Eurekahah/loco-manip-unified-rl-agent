@@ -34,6 +34,9 @@
 from __future__ import annotations
 
 import copy
+import json
+import math
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
@@ -374,11 +377,96 @@ def verify_wheel_columns(robot: "Articulation", layout: LowLevelActionLayout, *,
 
 
 def checkpoint_dims(policy) -> tuple[int, int]:
-    """返回低层 checkpoint 的 ``(观测维度, 动作维度)``。"""
-    linears = [m for m in policy.actor.modules() if hasattr(m, "weight")]
+    """返回低层 checkpoint 的 ``(观测维度, 动作维度)``。
+
+    ``export_policy_as_jit`` 导出的模块带 ``.actor`` 子模块；而一个"纯 MLP"的导出
+    可能把 actor 放在顶层，所以这里两种结构都兼容。
+    """
+    root = getattr(policy, "actor", policy)
+    linears = [m for m in root.modules() if hasattr(m, "weight")]
     if not linears:
         raise RuntimeError("低层 policy 里找不到带 weight 的层，无法校验布局。")
     return int(linears[0].weight.shape[1]), int(linears[-1].weight.shape[0])
+
+
+def read_policy_layout(policy_path: str) -> dict | None:
+    """读取导出产物旁边的 ``policy_layout.json``（由 export_deploy_policy.py 写出）。
+
+    这份 json 是「该 checkpoint 到底要什么输入」的权威描述：对
+    ``ActorCriticHistory`` 这类 actor 输入含 latent 的策略，光看
+    ``actor.0.weight`` 是**读不出观测维度**的。
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(policy_path)), "policy_layout.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def expected_policy_obs_dim(policy, policy_path: str, *, tag: str) -> tuple[int, dict | None]:
+    """低层 policy 期望的**观测**维度 + 解析到的 layout json。"""
+    layout_json = read_policy_layout(policy_path)
+    if layout_json is not None:
+        if layout_json.get("kind") == "history":
+            raise NotImplementedError(
+                f"[{tag}] 该低层 checkpoint 是带 history encoder 的 ROA 策略"
+                f"（policy_obs={layout_json.get('policy_obs_dim')}, "
+                f"history={layout_json.get('history_length')} x "
+                f"{layout_json.get('history_single_step_dim')}）。\n"
+                "高层 replay 侧还没实现 history 窗口回放，见 "
+                "docs/review/history_low_level_policy_todo.md。\n"
+                "临时替代：用不带 history encoder 的普通 ActorCritic 低层策略。"
+            )
+        return int(layout_json["policy_obs_dim"]), layout_json
+    obs_dim, _ = checkpoint_dims(policy)
+    return obs_dim, None
+
+
+def build_low_level_obs_manager(
+    *,
+    env,
+    obs_cfg: ObservationGroupCfg,
+    group_name: str,
+    expected_obs_dim: int,
+    tag: str,
+):
+    """建低层观测组，并让它与 checkpoint 期望的观测维度**严格一致**。
+
+    低层 cfg 里 ``ee_goal`` 可能被置 None（省掉 7 维），也可能保留。这里按 checkpoint
+    的实际维度取舍：先按模板建；若多出来的宽度正好是一个 ``ee_goal``，就把它去掉重建；
+    否则直接报错（不做任何猜测性的维度拼凑）。
+
+    Returns:
+        ``(obs_manager, obs_cfg, used_ee_goal)``
+    """
+    from isaaclab.managers import ObservationManager
+
+    manager = ObservationManager({group_name: obs_cfg}, env)
+    dim = int(manager.group_obs_dim[group_name][0])
+    if dim == expected_obs_dim:
+        return manager, obs_cfg, getattr(obs_cfg, "ee_goal", None) is not None
+
+    if getattr(obs_cfg, "ee_goal", None) is not None:
+        terms = manager.active_terms[group_name]
+        dims = manager.group_obs_term_dim[group_name]
+        ee_dim = int(math.prod(dims[terms.index("ee_goal")]))
+        if dim - ee_dim == expected_obs_dim:
+            obs_cfg.ee_goal = None
+            manager = ObservationManager({group_name: obs_cfg}, env)
+            return manager, obs_cfg, False
+
+    raise RuntimeError(
+        f"[{tag}] 低层观测维度对不上：回放构造出 {dim}，checkpoint 期望 {expected_obs_dim}。"
+        " 观测项："
+        + ", ".join(
+            f"{n}{tuple(d)}"
+            for n, d in zip(
+                manager.active_terms[group_name], manager.group_obs_term_dim[group_name]
+            )
+        )
+        + "\n（没有做任何自动加减维度：请确认低层 cfg 与产生该 checkpoint 的训练一致，"
+        "或用 export_deploy_policy.py 重新导出以生成 policy_layout.json。）"
+    )
 
 
 def verify_low_level_layout(
@@ -389,12 +477,14 @@ def verify_low_level_layout(
     obs_manager: "ObservationManager",
     group_name: str,
     policy,
+    expected_obs_dim: int | None = None,
 ) -> int:
     """打印并校验「回放布局 == checkpoint 布局」。
 
     任何一条不满足都直接报错，而不是等到训练跑偏。
     """
-    expected_obs, policy_action_dim = checkpoint_dims(policy)
+    policy_obs_dim, policy_action_dim = checkpoint_dims(policy)
+    expected_obs = policy_obs_dim if expected_obs_dim is None else int(expected_obs_dim)
     group_dim = obs_manager.group_obs_dim[group_name]
     actual_obs = int(group_dim[0]) if isinstance(group_dim, tuple) else int(group_dim)
 

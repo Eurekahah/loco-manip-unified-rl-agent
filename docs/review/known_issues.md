@@ -199,6 +199,80 @@ high_level 侧的问题单独放在 `high_level_todo.md`。
   会得到完全错误的结论（本次即踩此坑）。
 - 建议：调试统一用 `sensor.body_names` 索引；或加断言提示二者不同。
 
+### 19. `[实测分析]` `bad_orientation_2` 的终止率很高 —— 阈值偏紧 + 训练中期退步
+
+对 `logs/rsl_rl/history_adaptation/2026-09-18_19-33-47`（7500+ iter）的实测：
+
+| 迭代 | mean_reward | mean_episode_length | `bad_orientation_2` | `time_out` | `root_height_below_minimum` |
+|---|---|---|---|---|---|
+| 500 | 0.89 | 184 | **0.966** | 0.034 | 0.001 |
+| 1000 | 1.92 | 280 | 0.921 | 0.079 | 0.000 |
+| 2000 | 4.74 | 456 | 0.781 | 0.219 | 0.000 |
+| 3000 | 13.20 | 669 | 0.477 | 0.515 | 0.008 |
+| 4000 | 15.85 | 649 | 0.511 | 0.482 | 0.008 |
+| 5000 | 13.70 | 658 | 0.489 | 0.488 | 0.023 |
+| 6000 | 12.54 | 641 | 0.532 | 0.455 | 0.013 |
+| 7554 | 11.26 | 567 | **0.627** | 0.353 | 0.020 |
+
+终止构成：末值 `bad_orientation_2` 0.627 + `time_out` 0.353 + 高度 0.020 ≈ 1.0
+（`terrain_out_of_bounds` 恒 0）。**确实是 `bad_orientation_2` 占主导**。
+
+阈值来源（`velocity/mdp/events.py::bad_orientation_2`，硬编码、无参数）：
+
+```python
+return (asset.data.projected_gravity_b[:, 2] > 0) | (asset.data.projected_gravity_b[:, :2].abs() > 0.5).any(-1)
+```
+
+`|g| = 1`，所以 `|g_x| > 0.5` ⇔ **绕单轴倾斜约 30°** 就终止
+（`arcsin(0.5) = 30°`）；`g_z > 0` ⇔ 翻过来。两点值得注意：
+
+1. **对单轴很紧，对对角较松**：这是 g_xy 平面上的"方形"边界而不是圆形 ——
+   沿 x 或 y 倾斜 30° 就终止，沿 xy 对角倾斜要 45° 才终止。
+   仓库里另一处 `bad_orientation`（官方实现，`limit_angle=0.8 rad ≈ 46°`）
+   是旋转不变的圆边界，比它宽松得多。
+2. **与任务要求冲突**：`WBCCommandsCfg.body_pose` 的命令范围是
+   pitch ±0.35 rad(20°)、roll ±0.25 rad(14°)。两者叠加已接近 30°，
+   再叠加跟踪超调/瞬态就必然触发终止。峰值 7500 iter 期间
+   `Metrics/body_pose/pitch_error_bias ≈ -0.09~-0.28`、`roll_error_bias` 从
+   -0.03 漂到 -0.18 rad（≈10°），说明策略长期带着系统性姿态偏差。
+
+第三个现象（比"高不高"更值得处理）：**3000~4000 轮之后整体在退步**。
+同一份日志里：
+
+| 指标 | 4000 | 7554 | 趋势 |
+|---|---|---|---|
+| `Train/mean_reward` | 15.85 | 11.26 | ↓ |
+| `Train/mean_episode_length` | 649 | 567 | ↓ |
+| `Metrics/base_velocity/error_vel_xy` | 0.479 | **0.605** | ↑（速度跟踪变差） |
+| `Episode_Reward/track_lin_vel_xy_exp` | 0.863 | 0.679 | ↓ |
+| `Episode_Reward/body_pitch_tracking` | 0.395 | 0.360 | ↓ |
+| `Episode_Reward/body_roll_tracking` | 0.317 | 0.282 | ↓ |
+| `Policy/mean_noise_std` | 1.45 | **1.53** | ↑（探索噪声在变大） |
+| `Loss/latent_distance` | 0.011 | 0.010 | 已收敛 |
+
+课程曲线：`body_height_rew_s2` 在 ~2000 轮、`body_pitch_rew_s3` /
+`body_roll_rew_s3` 在 ~3000 轮把权重从 0.001 拉到 0.8（`num_steps` 分别 25000/50000，
+按比例提前到位），另外还有 `body_pose_height_range_s2`（0.33~0.6）与
+`base_velocity_lin_vel_x_s4`（±2.0）在放宽任务。也就是说**难度在 2000~3000 轮陡增**，
+而策略在 4000 轮之后没有继续适应，反而全面变差（连它自己刚被加权的那两项
+pitch/roll 跟踪也在降）。叠加 `mean_noise_std` 持续上涨，
+更像是训练不稳定（噪声上升 → 倾斜/跌倒增多 → 终止与碰撞惩罚吃掉回报），
+而不是“收敛到次优”。
+
+建议的处理顺序（都要先用 A/B 实测验证再定）：
+
+1. **先用与主流程无关的方式排查终止阈值**：跑一次 `bad_orientation_2` 的
+   触发时姿态统计（记录触发瞬间的 `|g_x|,|g_y|` 分布），确认到底是"30° 太紧"
+   还是"策略真的在摔"。注意 `known_issues #18` 的顺序陷阱，用 sensor/body 名字索引。
+2. 若确认是阈值太紧：把 `bad_orientation_2` 改成旋转不变的角度阈值
+   （复用官方 `bad_orientation(limit_angle=...)`，或把 0.5 提到 0.6~0.7
+   并写成 `DoneTerm` 参数而不是硬编码），同时保证 `root_height_below_minimum`
+   （现在 0.3）仍然拦得住真摔。
+3. 训练稳定性：把 `body_pitch/roll_rew_s3` 的 `num_steps` 从 50000 缩到与
+   `body_height_rew_s2` 一致（25000），避免"奖励权重远远落后于任务难度"；
+   并考虑给 `init_noise_std` 加约束或调小（现在它在单调上升）。
+4. 重训后再看 `bad_orientation_2` 是否降到 0.3 以下、`error_vel_xy` 是否随迭代下降。
+
 ---
 
 ## 二、工程性

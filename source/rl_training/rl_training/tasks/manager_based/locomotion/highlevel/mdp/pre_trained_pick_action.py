@@ -19,8 +19,10 @@ from isaaclab.utils.assets import check_file_path, read_file
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
 from isaaclab.managers import SceneEntityCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import (
+    build_low_level_obs_manager,
     build_low_level_observation_group,
     check_low_level_action_cfgs,
+    expected_policy_obs_dim,
     resolve_layout,
     verify_low_level_layout,
 )
@@ -153,8 +155,19 @@ class PreTrainedPickAction(ActionTerm):
         )
         # 在 __init__ 末尾添加，提前缓存引用避免每步查找
         self._ee_command_term = env.command_manager.get_term(cfg.ee_command_name)
-        self._low_level_obs_manager = ObservationManager(
-            {"ll_policy": self._low_level_obs_cfg}, env
+        # 按 checkpoint 的实际观测维度决定要不要喂 ee_goal（低层 cfg 与 checkpoint
+        # 必须一致，不一致直接报错，不做猜测性拼凑）
+        self._expected_ll_obs_dim, self._policy_layout_json = expected_policy_obs_dim(
+            self.policy, cfg.policy_path, tag=type(self).__name__
+        )
+        self._low_level_obs_manager, self._low_level_obs_cfg, self._ll_used_ee_goal = (
+            build_low_level_obs_manager(
+                env=env,
+                obs_cfg=self._low_level_obs_cfg,
+                group_name="ll_policy",
+                expected_obs_dim=self._expected_ll_obs_dim,
+                tag=type(self).__name__,
+            )
         )
         verify_low_level_layout(
             tag=type(self).__name__,
@@ -163,6 +176,7 @@ class PreTrainedPickAction(ActionTerm):
             obs_manager=self._low_level_obs_manager,
             group_name="ll_policy",
             policy=self.policy,
+            expected_obs_dim=self._expected_ll_obs_dim,
         )
         self._counter = 0
 

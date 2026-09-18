@@ -29,10 +29,15 @@ import isaaclab.sim as sim_utils
 from rl_training.tasks.manager_based.locomotion.velocity.mdp.commands import HeightInvariantEECommandCfg
 
 _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
-# 当前用于测试的低层 checkpoint（用"保留 ee_goal"的当前代码浅训 50 iter 得到）；
-# 换成你自己的长训 checkpoint 时只改这里即可（清单 ⑦ 会把这一步参数化）。
+# 当前用于测试的低层 checkpoint。
+#
+# 现阶段用"不含 ee_goal"口径的普通 ActorCritic 策略（6300 iter）先把低层链路跑通；
+# 它的 policy_layout.json 里 policy_obs_dim=76（不含 ee_goal），replay 会据此自动
+# 省掉 ee_goal 观测项。等你用"保留 ee_goal"的配置重训完，把这里换掉即可 ——
+# 那时 layout json 里会是 83，replay 会自动把 ee_goal 加回来。
+# （清单 ⑦ 会把这一步参数化。）
 _LOW_LEVEL_WBC_POLICY = (
-    "logs/rsl_rl/deeprobotics_m20_wbc_flat/2026-09-18_23-56-05_keep_eegoal/exported/policy.pt"
+    "logs/rsl_rl/deeprobotics_m20_wbc_flat/2026-09-18_01-31-58/exported/policy.pt"
 )
 # WBC 版低层 policy 的观测模板（比 flat 版多 body_pose_cmd），由 cfg 显式提供，
 # 不再由 action term 在运行时构造并覆盖 cfg.low_level_observations（清单 ⑥）。
