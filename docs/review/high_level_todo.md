@@ -281,8 +281,8 @@
 | 新增 B：`joint_pos` 轮关节掩码索引空间 | `codex/hl-replay-layout` | `dc45d0e` |
 | 新增 C：L2 布局推导（默认）+ 低层 `ee_goal` 恢复 | `codex/hl-replay-l2` / `codex/ll-keep-ee-goal` | `9d52fac` |
 | ① `PreTrainedPickAction` 缺 `ll_command`（+ 奖励项改用 `ll_command_w`） | `codex/hl-fix-ll-command` | `e064bc6` |
-| ② 高层 EE 目标写进死字段、IK 收不到（含 start/end_b 同步） | `codex/hl-fix-ee-command` | `__EECMD__` |
-| ③ replay 的 `ee_goal` 用世界系（统一到 root 系，O1） | `codex/hl-fix-ll-command` + `codex/hl-fix-ee-command` | `e064bc6` / `__EECMD__` |
+| ② 高层 EE 目标写进死字段、IK 收不到（含 start/end_b 同步） | `codex/hl-fix-ee-command` | `7a22759` |
+| ③ replay 的 `ee_goal` 用世界系（统一到 root 系，O1） | `codex/hl-fix-ll-command` + `codex/hl-fix-ee-command` | `e064bc6` / `7a22759` |
 
 ---
 
