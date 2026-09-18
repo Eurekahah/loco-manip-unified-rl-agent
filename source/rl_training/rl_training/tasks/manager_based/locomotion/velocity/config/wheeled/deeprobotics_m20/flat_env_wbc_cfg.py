@@ -385,6 +385,7 @@ class RoughEnvWBCConfig(DeeproboticsM20RoughEnvCfg):
         if self.__class__.__name__ == "RoughEnvWBCConfig":
             self.disable_zero_weight_rewards()
 
+@configclass
 class FlatEnvWBCConfig_PLAY(FlatEnvWBCConfig):
     def __post_init__(self):
         super().__post_init__()
@@ -405,7 +406,7 @@ class FlatEnvWBCConfig_PLAY(FlatEnvWBCConfig):
         
         if self.__class__.__name__ == "FlatEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()
-
+@configclass
 class RoughEnvWBCConfig_PLAY(RoughEnvWBCConfig):
     def __post_init__(self):
         super().__post_init__()
@@ -425,7 +426,7 @@ class RoughEnvWBCConfig_PLAY(RoughEnvWBCConfig):
         self.commands.body_pose.roll_range = (-0.25, 0.25)
         if self.__class__.__name__ == "RoughEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()
-
+@configclass
 class RoughWOStairsEnvWBCConfig(RoughEnvWBCConfig):
     def __post_init__(self):
         super().__post_init__()
@@ -559,7 +560,7 @@ class RoughWOStairsEnvWBCConfig(RoughEnvWBCConfig):
 
         print(f"[disable_rewards] Disabled {len(disabled)} reward terms: {disabled}")
         return disabled
-
+@configclass
 class RoughWOStairsEnvWBCConfig_PLAY(RoughWOStairsEnvWBCConfig):
     def __post_init__(self):
         super().__post_init__()

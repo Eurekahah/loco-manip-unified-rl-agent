@@ -910,9 +910,9 @@ class BodyPoseCommand(CommandTerm):
     def __str__(self) -> str:
         return (
             f"BodyPoseCommand | envs={self.num_envs} | "
-            f"height~N({self.cfg.height_mean},{self.cfg.height_std}) "
-            f"pitch~N({self.cfg.pitch_mean},{self.cfg.pitch_std}) "
-            f"roll~N({self.cfg.roll_mean},{self.cfg.roll_std})"
+            f"height~U({self.cfg.height_range[0]},{self.cfg.height_range[1]}) "
+            f"pitch~U({self.cfg.pitch_range[0]},{self.cfg.pitch_range[1]}) "
+            f"roll~U({self.cfg.roll_range[0]},{self.cfg.roll_range[1]})"
         )
 
     @property
@@ -1069,7 +1069,7 @@ class BodyPoseCommandCfg(CommandTermCfg):
     roll_range:  tuple = (-0.25, 0.25) # ±14°
 
     # ---- 继承自 CommandTermCfg ----
-    resampling_time_range: tuple = (10.0, 10.0)  # 每 5~10 s 重采样一次
+    resampling_time_range: tuple = (10.0, 10.0)  # 每 10~10 s 重采样一次
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
     feet_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*wheel")
     debug_vis: bool = False
