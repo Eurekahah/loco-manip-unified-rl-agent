@@ -29,6 +29,11 @@ import isaaclab.sim as sim_utils
 from rl_training.tasks.manager_based.locomotion.velocity.mdp.commands import HeightInvariantEECommandCfg
 
 _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
+# 当前用于测试的低层 checkpoint（用"保留 ee_goal"的当前代码浅训 50 iter 得到）；
+# 换成你自己的长训 checkpoint 时只改这里即可（清单 ⑦ 会把这一步参数化）。
+_LOW_LEVEL_WBC_POLICY = (
+    "logs/rsl_rl/deeprobotics_m20_wbc_flat/2026-09-18_23-56-05_keep_eegoal/exported/policy.pt"
+)
 # WBC 版低层 policy 的观测模板（比 flat 版多 body_pose_cmd），由 cfg 显式提供，
 # 不再由 action term 在运行时构造并覆盖 cfg.low_level_observations（清单 ⑥）。
 _low_level_wbc_obs_cfg = WBCObservationsCfg()
@@ -39,6 +44,9 @@ class HLFlatPickActionsCfg(HighLevelActionsCfg):
         asset_name="robot",
         # policy_path=f"logs/rsl_rl/deeprobotics_m20_flat/2026-03-18_18-06-34/exported/policy.pt",
         policy_path=f"logs/rsl_rl/deeprobotics_m20_flat/2026-04-21_00-02-23/exported/policy.pt",
+        # 这份旧 flat checkpoint 是在"IK 还是普通 action term（7 维进 policy 动作空间）"时
+        # 训的，所以必须用 L1 显式布局；换成用当前代码新训的 flat checkpoint 时删掉这行（走 L2）。
+        ee_action_dim=7,
         low_level_decimation=4,
         low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
         low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,
@@ -58,7 +66,7 @@ class HLFlatPickActionsCfg(HighLevelActionsCfg):
 class HLFlatPickWBCActionsCfg(HLFlatPickActionsCfg):
     pre_trained_pick_action: mdp.PreTrainedPickWBCActionCfg = mdp.PreTrainedPickWBCActionCfg(
         asset_name="robot",
-        policy_path=f"logs/rsl_rl/deeprobotics_m20_wbc_flat/2026-05-16_23-13-28/exported/policy.pt",
+        policy_path=_LOW_LEVEL_WBC_POLICY,
         low_level_decimation=4,
         low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
         low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,
@@ -71,7 +79,7 @@ class HLFlatPickWBCActionsCfg(HLFlatPickActionsCfg):
 class TeleopActionsCfg(HLFlatPickActionsCfg):
     pre_trained_pick_action = mdp.TeleopLLActionCfg(
         asset_name="robot",
-        policy_path="logs/rsl_rl/deeprobotics_m20_wbc_flat/2026-06-09_21-10-22/exported/policy.pt",  
+        policy_path=_LOW_LEVEL_WBC_POLICY,
         low_level_decimation=4,
         low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
         low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,

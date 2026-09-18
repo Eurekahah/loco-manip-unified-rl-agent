@@ -201,6 +201,57 @@
 | ⑨ `ee_pose_commands` 引用不存在的观测项 | `codex/hl-replay-layout` | `dc45d0e` |
 | 新增 A：`actions` 观测宽度少 7 维 | `codex/hl-replay-layout` | `dc45d0e` |
 | 新增 B：`joint_pos` 轮关节掩码索引空间 | `codex/hl-replay-layout` | `dc45d0e` |
+| 新增 C：L2 布局推导（默认）+ 低层 `ee_goal` 恢复 | `codex/hl-replay-l2` / `codex/ll-keep-ee-goal` | `__L2_COMMIT__` |
+
+---
+
+## L2 布局（已接入）+ 低层 `ee_goal` 决策
+
+### 决策：WBC 低层 policy 保留 `ee_goal` 观测
+
+一度把 `FlatEnvWBCConfig` 的 `policy/critic.ee_goal` 置了 `None`（理由是"已经给了机械臂
+关节观测"），现已改回**保留**（`codex/ll-keep-ee-goal`）。
+
+| | ee_goal 去掉 | ee_goal 保留（现在） |
+|---|---|---|
+| WBC 低层 policy obs | 76 | **83** |
+| 低层 action | 16 | 16 |
+
+**代价（重要）**：任何在 `ee_goal=None` 下训出的低层 checkpoint 都不能再用，必须重训。
+已核对：`9049275` 与 `main` 的 `flat_env_wbc_cfg.py` 都有那两行 `= None`，
+所以在那之后训出来的 WBC / History-Adaptation 低层模型全部作废。
+
+### L2：布局从低层 cfg 推导
+
+`PreTrained*ActionCfg.ee_action_dim` 现在是一个显式的二选一开关：
+
+| 取值 | 模式 | 关节列顺序 / IK 槽位 | 适用 |
+|---|---|---|---|
+| `-1`（默认） | **L2** | 从低层 obs cfg + 机器人解析；IK 槽位取低层 action term 实测值 | 用**当前代码**新训的 checkpoint |
+| `>= 0` | **L1** | 用模块里显式声明的分组与该定值 | 低层 cfg 已经改过的**旧** checkpoint |
+
+L2 下 `resolve_layout()` 会：
+1. 用 `robot.find_joints(低层 obs 的 joint_pos.asset_cfg.joint_names, preserve_order=True)`
+   解析出关节列顺序（`".*"` → 24 个关节的原生序）；
+2. 校验 `joint_pos` 与 `joint_vel` 的列顺序一致（不一致直接报错）；
+3. 轮关节名单取低层 `joint_vel` 动作 cfg 的 `joint_names`；
+4. IK 槽位取低层 `ee_ik` action term 的 `action_dim`（现在是 0）。
+
+已有的高层 cfg 现状：
+
+| 任务 | 模式 | 低层 checkpoint |
+|---|---|---|
+| `...Pick-Flat-Teacher-v0`（flat） | L1（`ee_action_dim=7`） | 旧 flat checkpoint（2026-04-21）仍可用 |
+| `...Pick-WBC-Flat-Teacher-v0` | L2 | `2026-09-18_23-56-05_keep_eegoal/exported/policy.pt`（浅训 50 iter） |
+| `Isaac-M20-Piper-Teleop-v0` | L2 | 同上 |
+
+### 实测
+
+| 任务 | 模式 | 低层 action_dim | 回放 obs | checkpoint 期望 | 结果 |
+|---|---|---|---|---|---|
+| `Isaac-M20-Piper-Teleop-v0` | L2 | 16（`ee_ik=0`） | 83（joint 24 / ee_goal 7 / body_pose 3） | 83 | 步进 3 次 OK |
+| `...Pick-WBC-Flat-Teacher-v0` | L2 | 16 | 83 | 83 | 步进 2 次 OK，train 2 iter EXIT=0（reward 0.66→0.73） |
+| `...Pick-Flat-Teacher-v0` | L1 | 23（`ee_ik=7`） | 83（joint 22） | 83 | 维度通过，随后停在 P0 ①（`ll_command` 缺失） |
 
 验证命令（均 `--headless`）：
 

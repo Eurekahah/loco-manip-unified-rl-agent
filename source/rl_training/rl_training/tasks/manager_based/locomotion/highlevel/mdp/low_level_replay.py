@@ -160,6 +160,66 @@ def layout_from_low_level_cfg(env_cfg, *, ee_action_dim: int | None = None) -> L
     )
 
 
+def _joint_names_of(asset_cfg) -> str | list[str]:
+    names = getattr(asset_cfg, "joint_names", None)
+    if names is None:
+        raise ValueError("低层观测的 asset_cfg.joint_names 为 None，无法推导关节列顺序。")
+    return names
+
+
+def resolve_layout(
+    *,
+    robot: "Articulation",
+    low_level_obs_cfg: ObservationGroupCfg,
+    low_level_leg_cfg,
+    low_level_wheel_cfg,
+    declared_ee_action_dim: int,
+    actual_ee_ik_action_dim: int,
+    tag: str,
+) -> LowLevelActionLayout:
+    """构造回放布局。
+
+    * ``declared_ee_action_dim < 0`` -> **L2（默认）**：关节列顺序、轮关节名单、
+      IK 槽位数全部从「低层 cfg + 机器人」推导，不手抄任何东西。
+    * ``declared_ee_action_dim >= 0`` -> **L1**：沿用显式声明的分组与 IK 槽位数
+      （用于那些"当时的低层 cfg 与现在不同"的旧 checkpoint）。
+    """
+    if declared_ee_action_dim >= 0:
+        layout = default_layout(ee_action_dim=declared_ee_action_dim)
+        # L1 也校验一遍：显式声明的关节名单必须真的存在于机器人上
+        robot.find_joints(list(layout.policy_joint_names), preserve_order=True)
+        return layout
+
+    # ---- L2：从低层 cfg 推导 ----
+    pos_asset_cfg = low_level_obs_cfg.joint_pos.params.get("asset_cfg")
+    vel_asset_cfg = low_level_obs_cfg.joint_vel.params.get("asset_cfg")
+    if pos_asset_cfg is None or vel_asset_cfg is None:
+        raise ValueError(
+            f"[{tag}] 低层观测的 joint_pos/joint_vel 没有 asset_cfg，无法推导布局。"
+        )
+    _, pos_names = robot.find_joints(_joint_names_of(pos_asset_cfg), preserve_order=True)
+    _, vel_names = robot.find_joints(_joint_names_of(vel_asset_cfg), preserve_order=True)
+    if list(pos_names) != list(vel_names):
+        raise RuntimeError(
+            f"[{tag}] 低层观测的 joint_pos 与 joint_vel 关节列顺序不一致，需要分别声明：\n"
+            f"  joint_pos: {list(pos_names)}\n"
+            f"  joint_vel: {list(vel_names)}"
+        )
+
+    wheel_names = tuple(getattr(low_level_wheel_cfg, "joint_names", ()) or ())
+    if not wheel_names:
+        raise ValueError(f"[{tag}] 低层 joint_vel 动作 cfg 没有 joint_names，无法确定轮关节。")
+    leg_names = tuple(getattr(low_level_leg_cfg, "joint_names", ()) or ())
+
+    layout = LowLevelActionLayout(
+        policy_joint_names=tuple(pos_names),
+        leg_joint_names=leg_names,
+        wheel_joint_names=wheel_names,
+        ee_action_dim=int(actual_ee_ik_action_dim),
+    )
+    return layout
+
+
 # ---------------------------------------------------------------------------
 # 低层观测
 # ---------------------------------------------------------------------------
@@ -237,9 +297,14 @@ def build_low_level_observation_group(
     """
     group = copy.deepcopy(base_group)
 
-    def _override(term_name: str, func) -> None:
+    def _override(term_name: str, func, *, required: bool = True) -> None:
+        if func is None:
+            # 该观测项在本次低层 layout 里不参与（例如低层 policy 不含 ee_goal）
+            return
         term = getattr(group, term_name, None)
-        if term is None:
+        if term is None or term == "MISSING":
+            if not required:
+                return
             raise AttributeError(
                 f"低层观测模板里没有 '{term_name}' 项，无法覆写。模板现有项："
                 f"{[k for k in group.__dict__ if not k.startswith('_')]}"
@@ -249,9 +314,10 @@ def build_low_level_observation_group(
 
     _override("actions", actions_fn)
     _override("velocity_commands", velocity_commands_fn)
-    _override("ee_goal", ee_goal_fn)
-    if body_pose_cmd_fn is not None:
-        _override("body_pose_cmd", body_pose_cmd_fn)
+    # ee_goal / body_pose_cmd 是否存在于低层观测由模板决定（例如低层 cfg 可能把
+    # ee_goal 置 None，或者用 flat 模板时压根没有 body_pose_cmd）
+    _override("ee_goal", ee_goal_fn, required=False)
+    _override("body_pose_cmd", body_pose_cmd_fn, required=False)
 
     # 本体量：列顺序显式给出，且用「按列置零」的版本避免索引空间混用
     group.joint_pos.func = joint_pos_rel_without_wheel_columns
@@ -271,8 +337,10 @@ def build_low_level_observation_group(
     group.base_ang_vel.scale = base_ang_vel_scale
     group.joint_pos.scale = joint_pos_scale
     group.joint_vel.scale = joint_vel_scale
-    group.base_lin_vel = None
-    group.height_scan = None
+    if getattr(group, "base_lin_vel", None) is not None:
+        group.base_lin_vel = None
+    if getattr(group, "height_scan", None) is not None:
+        group.height_scan = None
     group.enable_corruption = False
     return group
 

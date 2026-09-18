@@ -21,7 +21,7 @@ from isaaclab.managers import SceneEntityCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import (
     build_low_level_observation_group,
     check_low_level_action_cfgs,
-    default_layout,
+    resolve_layout,
     verify_low_level_layout,
 )
 
@@ -100,7 +100,15 @@ class PreTrainedPickAction(ActionTerm):
         # scale / clip / 关节名单的唯一来源是低层 action cfg（cfg.low_level_*_actions），
         # 这里只做一致性校验，不再手抄，也不再事后给 action term 赋值
         # （JointAction 在 __init__ 里就把 cfg 编译成内部张量，事后赋值无效）。
-        self._layout = default_layout(ee_action_dim=cfg.ee_action_dim)
+        self._layout = resolve_layout(
+            robot=self.robot,
+            low_level_obs_cfg=cfg.low_level_observations,
+            low_level_leg_cfg=cfg.low_level_leg_actions,
+            low_level_wheel_cfg=cfg.low_level_wheel_actions,
+            declared_ee_action_dim=cfg.ee_action_dim,
+            actual_ee_ik_action_dim=self._ee_ik_action_term.action_dim,
+            tag=type(self).__name__,
+        )
         check_low_level_action_cfgs(
             tag=type(self).__name__,
             layout=self._layout,
@@ -460,13 +468,14 @@ class PreTrainedPickActionCfg(ActionTermCfg):
     """Low level end-effector action configuration."""
     low_level_observations: ObservationGroupCfg = MISSING
     """Low level observation configuration."""
-    ee_action_dim: int = 7
-    """低层 checkpoint 动作输出里 IK 槽位的数量（见 ``low_level_replay``）。
+    ee_action_dim: int = -1
+    """低层 checkpoint 动作输出里 IK 槽位的数量。
 
-    低层 IK 改成由 CommandManager 直接驱动后（``CommandDrivenIKAction.action_dim == 0``），
-    这 7 维不再被任何低层 action term 消费；但旧 checkpoint 的 ``actions`` 观测包含它们，
-    回放时必须照原样喂回去，否则低层 policy 的观测布局与训练时不一致。
-    低层重训后（L2）应改为从低层 cfg 推导。
+    ``-1``（默认）= **L2**：关节列顺序与 IK 槽位数都从低层 cfg / action term 实测推导，
+    用于**用当前代码新训**的低层 checkpoint。
+    ``>=0`` = **L1**：显式声明，用于那些"当时的低层 cfg 已经变了"的旧 checkpoint
+    （旧 WBC/flat checkpoint 训练时 IK 还是普通 action term，槽位数是 7）。
+    两种模式不一致时会在建 env 阶段直接报错，不会静默跑偏。
     """
     ee_command_name: str = "ee_pose"
     """The command name in CommandManager that this action term outputs to. Should correspond to a command in CommandsCfg."""

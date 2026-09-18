@@ -22,7 +22,7 @@ from isaaclab.managers import SceneEntityCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import (
     build_low_level_observation_group,
     check_low_level_action_cfgs,
-    default_layout,
+    resolve_layout,
     verify_low_level_layout,
 )
 
@@ -103,7 +103,15 @@ class PreTrainedPickWBCAction(ActionTerm):
         # 同 PreTrainedPickAction：布局显式声明，scale/clip/关节名单以低层 action cfg
         # 为唯一来源，观测组由模板 deepcopy 生成（不再就地改传入的 cfg，
         # 也不再在运行时替换 cfg.low_level_observations）。
-        self._layout = default_layout(ee_action_dim=cfg.ee_action_dim)
+        self._layout = resolve_layout(
+            robot=self.robot,
+            low_level_obs_cfg=cfg.low_level_observations,
+            low_level_leg_cfg=cfg.low_level_leg_actions,
+            low_level_wheel_cfg=cfg.low_level_wheel_actions,
+            declared_ee_action_dim=cfg.ee_action_dim,
+            actual_ee_ik_action_dim=self._ee_ik_action_term.action_dim,
+            tag=type(self).__name__,
+        )
         check_low_level_action_cfgs(
             tag=type(self).__name__,
             layout=self._layout,
@@ -464,8 +472,9 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
     """Low level end-effector action configuration."""
     low_level_observations: ObservationGroupCfg = MISSING
     """Low level observation configuration."""
-    ee_action_dim: int = 7
-    """低层 checkpoint 动作输出里 IK 槽位的数量（见 ``low_level_replay``）。"""
+    ee_action_dim: int = -1
+    """低层 checkpoint 动作输出里 IK 槽位的数量；``-1`` = 从低层 cfg 推导（L2）。
+    旧 checkpoint 训练时该值为 7（见 ``low_level_replay`` 与 ``PreTrainedPickActionCfg``）。"""
     ee_command_name: str = "ee_pose"
     """The command name in CommandManager that this action term outputs to. Should correspond to a command in CommandsCfg."""
     debug_vis: bool = False
