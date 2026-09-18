@@ -195,12 +195,12 @@
 
 | 条目 | 分支 | 提交 |
 |---|---|---|
-| ④ 低层动作 scale 硬编码（含"其实是死代码"的实测结论） | `codex/hl-replay-layout` | `72fd6e6` |
-| ⑤ 6 份 replay 实现 → 第一步抽取（R3 级） | `codex/hl-replay-layout` | `72fd6e6` |
-| ⑥ `__init__` 就地改 cfg | `codex/hl-replay-layout` | `72fd6e6` |
-| ⑨ `ee_pose_commands` 引用不存在的观测项 | `codex/hl-replay-layout` | `72fd6e6` |
-| 新增 A：`actions` 观测宽度少 7 维 | `codex/hl-replay-layout` | `72fd6e6` |
-| 新增 B：`joint_pos` 轮关节掩码索引空间 | `codex/hl-replay-layout` | `72fd6e6` |
+| ④ 低层动作 scale 硬编码（含"其实是死代码"的实测结论） | `codex/hl-replay-layout` | `dc45d0e` |
+| ⑤ 6 份 replay 实现 → 第一步抽取（R3 级） | `codex/hl-replay-layout` | `dc45d0e` |
+| ⑥ `__init__` 就地改 cfg | `codex/hl-replay-layout` | `dc45d0e` |
+| ⑨ `ee_pose_commands` 引用不存在的观测项 | `codex/hl-replay-layout` | `dc45d0e` |
+| 新增 A：`actions` 观测宽度少 7 维 | `codex/hl-replay-layout` | `dc45d0e` |
+| 新增 B：`joint_pos` 轮关节掩码索引空间 | `codex/hl-replay-layout` | `dc45d0e` |
 
 验证命令（均 `--headless`）：
 
