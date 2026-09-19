@@ -93,6 +93,52 @@ def sphere2cart(lpy: torch.Tensor) -> torch.Tensor:
 
     return torch.stack([x, y, z], dim=-1)
 
+
+def _safe_normalize(v: torch.Tensor) -> torch.Tensor:
+    """按最后一维归一化；零向量返回零向量（不产生 NaN）。"""
+    return v / v.norm(dim=-1, keepdim=True).clamp_min(1e-9)
+
+
+def quat_slerp_batch(q0: torch.Tensor, q1: torch.Tensor, tau: torch.Tensor | float) -> torch.Tensor:
+    """批量最短路径球面插值（wxyz），``q0``/``q1`` 形状 ``(N, 4)``，``tau`` 可广播到 ``(N, 1)``。
+
+    为什么不直接用 ``isaaclab.utils.math.quat_slerp``
+    ------------------------------------------------
+    官方那个实现是**给单个四元数**写的，用在命令项里有两个致命问题：
+
+    1. 它用 ``torch.dot`` + ``if tau == 0.0`` / ``if abs(angle) < eps`` 判断，
+       只接受 1-D 输入，**不支持 batch 维**（命令项是 ``(num_envs, 4)``）；
+    2. 它内部有 ``q2 *= -1.0`` 和 ``q1 = q1 * ...`` 这类**就地/重新赋值**，直接传
+       ``self.pose_end_b`` 会被就地改符号 —— 污染命令项自己的状态。
+
+    所以这里重写一个等价但批量化、无副作用的版本：
+
+    * 先做**最短路径**处理（``dot < 0`` 时翻转 ``q1``）；
+    * 夹角极小（``sin(angle) -> 0``）时退化成线性插值再归一化，避免数值爆炸；
+    * 输出始终归一化。
+
+    实测与官方单样本 ``quat_slerp`` 逐样本对比：最大误差 ~1e-7（见
+    ``scripts/reinforcement_learning/rsl_rl/probe_ee_curriculum.py``）。
+    """
+    q0 = _safe_normalize(q0)
+    q1 = _safe_normalize(q1)
+    if not isinstance(tau, torch.Tensor):
+        tau = torch.full((q0.shape[0], 1), float(tau), device=q0.device, dtype=q0.dtype)
+    elif tau.dim() == 1:
+        tau = tau.unsqueeze(-1)
+
+    dot = (q0 * q1).sum(dim=-1, keepdim=True)
+    q1 = torch.where(dot < 0.0, -q1, q1)      # 最短路径
+    dot = dot.abs().clamp(0.0, 1.0)
+    angle = torch.acos(dot)
+    sin_angle = torch.sin(angle)
+
+    # 夹角极小（含退化情形）时用 lerp，避免 sin(angle) 除法放大误差
+    use_lerp = sin_angle < 1e-6
+    w0 = torch.where(use_lerp, 1.0 - tau, torch.sin((1.0 - tau) * angle) / sin_angle.clamp_min(1e-9))
+    w1 = torch.where(use_lerp, tau, torch.sin(tau * angle) / sin_angle.clamp_min(1e-9))
+    return _safe_normalize(w0 * q0 + w1 * q1)
+
 from dataclasses import dataclass, field
 
 class HeightInvariantEECommand(mdp.UniformPoseCommand):
@@ -178,6 +224,27 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         )
         # 本次重采样的目标位姿作为插值终点，而不是直接写入 pose_command_b
         self.pose_end_b[env_ids] = torch.cat([target_pos_b, target_quat_b], dim=-1)
+
+        # ── 3.5 目标「混合比例」课程（EE 目标课程 s0→s3）──────────────────
+        # pose_start_b 是**重采样这一刻真实 EE 位姿**（root 系），因此
+        #   blend_pos = 0 / blend_orn = 0 ⇒ 目标 = 当前位姿（reset 后即默认位姿），臂不需要动；
+        #   blend_* = 1                  ⇒ 完全采用采样的目标（= 原来的行为）。
+        # 中间值 = 把采样目标沿直线 / slerp 拉回当前位姿，臂的移动幅度随之增长。
+        # 用"混合比例"而不是"默认位姿常数"的理由：默认位姿逐环境不同（reset 随机会让
+        # 仰角 std≈7.6°、方位 std≈42°，见 probe_ee_default_pose.py），常数区间只能近似，
+        # 而混合逐环境精确；同时 s3 严格等于原有采样分布，不会引入新的分布偏移。
+        blend_pos = float(getattr(self.cfg, "target_blend_pos", 1.0))
+        blend_orn = float(getattr(self.cfg, "target_blend_orn", 1.0))
+        if blend_pos < 1.0 or blend_orn < 1.0:
+            start = self.pose_start_b[env_ids]
+            end = self.pose_end_b[env_ids]
+            blended = end.clone()
+            if blend_pos < 1.0:
+                blended[:, :3] = start[:, :3] + blend_pos * (end[:, :3] - start[:, :3])
+            if blend_orn < 1.0:
+                blended[:, 3:] = quat_slerp_batch(start[:, 3:], end[:, 3:], blend_orn)
+            self.pose_end_b[env_ids] = blended
+
         # self.pose_end_b[:,:] = torch.tensor([0.6, 0, 0.1, 0.5,0.5,0.5,0.5],device=self.device)
  
         # 4. 采样本段轨迹的跟踪时长 T_traj，余下时间保持不动 ，并重置计时器
@@ -189,22 +256,36 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         
     
     def _update_command(self):
-        """
-        对 pose_command_b 按 T_traj 做位置插值，姿态不插值，直接取终点姿态。
-        起点为每次重采样瞬间的位姿 pose_start_b，终点为最新一次重采样得到的 pose_end_b。
-        elapsed_time 超过 T_traj 后 alpha 被 clamp 到 1，即余下时间到达终点后保持不动。
+        """按 ``T_traj`` 把命令从 ``pose_start_b`` 推到 ``pose_end_b``：
+        **位置线性插值 + 姿态 slerp**（最短路径球面插值）。
+
+        起点是每次重采样瞬间的真实 EE 位姿，终点是本次重采样得到的目标；
+        ``elapsed_time`` 超过 ``T_traj`` 后 ``alpha`` 被 clamp 到 1，即到位后保持不动。
+
+        历史
+        ----
+        旧实现里姿态**不插值**，直接取终点四元数::
+
+            self.pose_command_b[:, 3:] = self.pose_end_b[:, 3:]
+
+        于是每 5 s 重采样时机械臂的姿态参考会**瞬时跳变**到新目标
+        （``o_yaw`` 范围是 ±π，跳变可以接近 180°），关节速度/力矩尖峰直接打到
+        底盘上。改成 slerp 后，单步姿态变化被限制在 ``angle / T_traj * dt`` 的量级
+        （A/B 实测见 ``scripts/reinforcement_learning/rsl_rl/probe_ee_curriculum.py``）。
         """
         dt = self._env.step_dt
         self.elapsed_time += dt
  
         alpha = (self.elapsed_time / self.T_traj).clamp(0.0, 1.0).unsqueeze(-1)  # (N, 1)
- 
+
         # 只对位置线性插值
         self.pose_command_b[:, :3] = (
             self.pose_start_b[:, :3] + alpha * (self.pose_end_b[:, :3] - self.pose_start_b[:, :3])
         )
-        # 姿态不插值，直接使用终点姿态
-        self.pose_command_b[:, 3:] = self.pose_end_b[:, 3:]
+        # 姿态做 slerp（最短路径）；alpha=1 时严格等于 pose_end_b
+        self.pose_command_b[:, 3:] = quat_slerp_batch(
+            self.pose_start_b[:, 3:], self.pose_end_b[:, 3:], alpha
+        )
         # self.pose_command_b[:, :] = self.pose_end_b[:, :]  # debug: 直接使用终点姿态，绕过插值
         
 
@@ -472,6 +553,26 @@ class HeightInvariantEECommandCfg(mdp.UniformPoseCommandCfg):
     underground_limit: float = 0.05          # EE z 低于此值视为穿地
     num_collision_check_samples: int = 10    # 路径插值采样点数
     max_resample_attempts: int = 10          # 最大重采样次数
+
+    # ── EE 目标「混合比例」课程（默认 1.0 = 完全采用采样目标 = 原行为）──────────
+    # 每次重采样都会把**采样出来的目标**与**这一刻真实的 EE 位姿**（root 系）做混合：
+    #     blend = 0   → 目标 = 当前位姿（reset 后即默认位姿）⇒ 机械臂不需要移动
+    #     blend = 1   → 目标 = 采样目标（完整任务）
+    # 位置用线性混合、姿态用 slerp（`quat_slerp_batch`）。
+    #
+    # 为什么用"混合"而不是"把 p_l/p_pitch/p_yaw 区间收成一个常数点"来实现 s0：
+    # 实测（`probe_ee_default_pose.py`，Flat-WBC，8 envs）默认位姿在 height-invariant
+    # 坐标系下是 r0=0.4035±0.0328、仰角 +72.3°±7.6°、方位 +10.0°±42.0°。方位的
+    # 逐环境差异主要来自复位时 root 的 roll/pitch 随机化（这个坐标系只保留 yaw），
+    # 所以**任何固定常数区间都不能表达"每个环境各自的默认位姿"**；而且
+    # `o_*=(0,0)` 对应的姿态是把局部 +z 对齐到位置方向的 `q_align`，与默认姿态
+    # 实测差 68.5°±0.6°，即"只锁位置、姿态区间收 0"并不是"姿态也锁默认"。
+    # 混合比例方案逐环境精确，且 s3（1.0）严格等于原有采样分布。
+    target_blend_pos: float = 1.0
+    """位置混合比例 ∈ [0, 1]；1.0 = 原行为。"""
+
+    target_blend_orn: float = 1.0
+    """姿态混合比例 ∈ [0, 1]；1.0 = 原行为。"""
    
 import pytorch_kinematics as pk
 
