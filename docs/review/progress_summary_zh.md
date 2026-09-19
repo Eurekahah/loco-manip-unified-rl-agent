@@ -16,6 +16,7 @@
 | `codex/hl-replay-history` | （见文末 commit） | **任务 2**：高层 replay 支持带 history encoder 的低层策略 —— 10 步窗口（复用 IsaacLab `CircularBuffer`）+ 按 `policy_layout.json` 单/双输入调用 + history 里的 `last_action` 用低层 16 维动作 + 复位检测修成"跳变检测" | 见下 |
 | `codex/hl-fix-ll-command` | `e064bc6`（文档 `b32c515`） | **①** `PreTrainedPickAction` 补 `ll_command`/`ll_command_w`；`ll_command_world()` helper；8 处世界系奖励项改用它 | 见下 |
 | `codex/hl-fix-ee-command` | `7a22759`（文档 `749ff83`） | **②** IK 目标写 `pose_command_b` + 同步 `pose_start_b/pose_end_b`；**③** flat 的 `ee_goal` 改用 root 系 | 见下 |
+| `codex/hl-replay-base-class` | `2c5a85a` | **任务 3⑤ 的 R1**：抽 `LowLevelPolicyActionBase`（策略载入/布局/观测/history/tick/`ll_command` 的单一来源）+ 迁移 nav（顺带修 nav 缺 `ll_command`）+ policy/openvla 先补 `ll_command` 接口 | nav 2 iter EXIT=0、obs 69=69 |
 | `codex/ll-history-flat-eegoal` | `45f9e74` **（已推 GitHub）** | 训练用配置：`bad_orientation_2` 改成旋转不变 0.8 rad(45.8°) + 保留 `ee_goal` + 训练说明 `docs/train_history_flat_zh.md` + 导出脚本 | History-Adaptation 2 iter exit 0，policy 83 / history 700 |
 
 ## 二、关键实测数据
@@ -97,7 +98,7 @@ history 窗口: length=10 single_step=70 flat=700
 | **history 回放**（`history_low_level_policy_todo.md`） | ✅ 已完成（`codex/hl-replay-history`）：10 步窗口 + 单/双输入调用 + 低层 last_action；导出侧另在 `codex/export-deploy-policy` | 见上实测 |
 | P1 ⑦ checkpoint 路径参数化 | 目前 `_LOW_LEVEL_WBC_POLICY` 是一处常量，改成环境变量/CLI | 小 |
 | P1 ⑧ 模块级 `LOW_LEVEL_ENV_CFG` + `render_interval` 警告 | `high_level_env_cfg.py:30/456-458` | 小 |
-| ⑤ 的 R1 步：抽 `LowLevelPolicyActionBase` | 把 nav/openvla/`pre_trained_policy` 也纳入；顺带修 nav 奖励项读不存在的 `ll_command` | 中 |
+| ⑤ 的 R1 步：抽 `LowLevelPolicyActionBase` | ✅ 基类已抽 + nav 已迁移（`codex/hl-replay-base-class` `2c5a85a`）；nav 的 `ll_command` 已修（奖励项不再 AttributeError）。未迁移：`pre_trained_policy`（无 task 注册）与 `openvla`（需 7B 模型，无法本地验证）—— 两者已补 `ll_command` 接口，完整迁移待后续 | 剩余：小 |
 | 低层 known_issues ⑤⑥⑦ | `body_names=""` 占位符、`disable_zero_weight_rewards` 脆弱、`feet_distance_y_exp` 类型错误 | 小 |
 | ⑯ 剩下的低层侧 | 低层 env 自己也加布局打印/断言；`joint_pos_rel_without_wheel` 补断言 | 小 |
 | 清理 | `codex/docs-review`（两份清单的来源分支，未合并）；nav/openvla cfg 里指向不存在 checkpoint 的硬编码路径 | 小 |
