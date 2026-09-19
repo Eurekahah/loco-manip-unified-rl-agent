@@ -273,6 +273,20 @@ pitch/roll 跟踪也在降）。叠加 `mean_noise_std` 持续上涨，
    并考虑给 `init_noise_std` 加约束或调小（现在它在单调上升）。
 4. 重训后再看 `bad_orientation_2` 是否降到 0.3 以下、`error_vel_xy` 是否随迭代下降。
 
+> **2026-09-19 更新（部分已修）**：第 2 条（阈值）+ 一个新的"EE 目标课程"已落地在
+> `codex/ll-ee-goal-curriculum`（代码 commit `9ccb8ec`）：
+>
+> * `bad_orientation_2` 改为旋转不变的总倾角阈值 `limit_angle=0.8 rad`（来自 cherry-pick
+>   的 `d445007`/`45f9e74`），并在 `DoneTerm` 参数里显式给出；
+> * `HeightInvariantEECommand` 新增 `target_blend_pos/target_blend_orn`：s0 阶段
+>   目标 = 当前（默认）EE 位姿 ⇒ 臂不动；s1/s2/s3 在 25k/50k/75k 步逐步放开到 1.0
+>   （=原来的完整任务分布）；`_update_command` 的姿态改成 slerp 插值；
+> * 实测：s0 的臂扰动机制 A/B（倾角 p99 7.2° vs s3 35.0°）、slerp 姿态单步跳变
+>   155.7° → 3.12°、训练 2 iter `bad_orientation_2=0.0000`（详见
+>   `bad_orientation_analysis_zh.md` §5A/§5B）；
+> * 上面第 3 条（把 `body_pitch/roll_rew_s3` 的 `num_steps` 从 50k 缩到 25k）与
+>   执行器刚度课程**仍未做**（可选）。
+
 ---
 
 ## 二、工程性

@@ -16,6 +16,7 @@
 | `codex/hl-fix-ll-command` | `e064bc6`（文档 `b32c515`） | **①** `PreTrainedPickAction` 补 `ll_command`/`ll_command_w`；`ll_command_world()` helper；8 处世界系奖励项改用它 | 见下 |
 | `codex/hl-fix-ee-command` | `7a22759`（文档 `749ff83`） | **②** IK 目标写 `pose_command_b` + 同步 `pose_start_b/pose_end_b`；**③** flat 的 `ee_goal` 改用 root 系 | 见下 |
 | `codex/ll-history-flat-eegoal` | `45f9e74` **（已推 GitHub）** | 训练用配置：`bad_orientation_2` 改成旋转不变 0.8 rad(45.8°) + 保留 `ee_goal` + 训练说明 `docs/train_history_flat_zh.md` + 导出脚本 | History-Adaptation 2 iter exit 0，policy 83 / history 700 |
+| `codex/ll-ee-goal-curriculum` | `9ccb8ec`（基于 `codex/hl-fix-ee-command` + cherry-pick `d445007`） | **任务 1**：EE 目标课程 s0→s3（`target_blend_pos/_orn`）+ 姿态 slerp 插值 + 两个探针脚本 | 见下 |
 
 ## 二、关键实测数据
 
@@ -63,11 +64,37 @@ flat pick 0.83→1.14、WBC pick 0.88→1.28、teleop 0.12→0.18。
 checkpoint `actor.0.weight (512,115)=83+32latent`、`history_encoder.conv.0 (32,70,4)`；
 `env.yaml` 里 `limit_angle: 0.8` 与 `ee_goal` 非 null 均生效。
 
+### EE 目标课程 + 姿态 slerp（`codex/ll-ee-goal-curriculum`）
+
+`probe_ee_default_pose.py`（默认位姿在 height-invariant 系下的球坐标，8 envs）：
+
+```
+r0     = 0.4035 ± 0.0328   （落在当前 p_l=(0.3,0.52) 内 ✅）
+pitch0 = +1.2615 ± 0.1321 rad = +72.3°±7.6°   （当前 p_pitch 上界只有 +36° ⇒ 臂至少要低 36°）
+yaw0   = +0.1739 ± 0.7335 rad = +10.0°±42.0°  （逐环境差异大）
+EE z = 0.9219 vs 采样平面 z = 0.6000（默认 EE 比平面高 0.32 m）
+o_*=(0,0) 的姿态与默认姿态差 68.5°±0.6° ⇒ "常数区间"表达不了"每个环境各自的默认位姿"
+```
+
+`probe_ee_curriculum.py`（16 envs）：
+
+| 检查 | 结果 |
+|---|---|
+| 课程阶段（counter=0/25k/50k/75k） | blend = (0,0) / (0.35,0) / (0.35,0.35) / (1,1) 全部符合预期 |
+| `quat_slerp_batch` vs 官方单样本 `quat_slerp` | 最大分量偏差 **1.19e-07**；并实测确认官方实现会**就地修改输入** |
+| `_update_command` 受控测试（T_traj=1s, dt=0.02s, 夹角 155.7°） | 单步姿态跳变 **155.74° → 3.12°**（≈ angle/T_traj·dt） |
+| 臂扰动 A/B（站立，倾角 p99 / 最大） | s0 **7.18° / 13.65°** vs s3 **35.01° / 45.40°** |
+| 臂扰动 A/B（±1 m/s，倾角 p99 / 最大） | s0 **2.90° / 3.36°** vs s3 **6.52° / 36.77°** |
+
+`History-Adaptation-Deeprobotics-M20-v0 --num_envs 64 --max_iterations 2` → **EXIT=0**，
+`Episode_Termination/bad_orientation_2 = 0.0000`，`env.yaml` 里
+`target_blend_pos/target_blend_orn = 0.0`（Stage 0）与 `limit_angle: 0.8` 均生效。
+
 ## 三、还没做的（按建议优先级）
 
 | 项 | 说明 | 预估 |
 |---|---|---|
-| **bad_orientation 课程**（详见 `bad_orientation_analysis_zh.md`） | EE 目标 s0→s3 课程 + 姿态 slerp +（可选）执行器刚度课程 | 先测默认半径，再改 `WBCCurriculumCfg`；验证 ~30 min/组 |
+| **bad_orientation 课程**（详见 `bad_orientation_analysis_zh.md`） | ✅ EE 目标 s0→s3 课程 + 姿态 slerp 已完成（`codex/ll-ee-goal-curriculum` `9ccb8ec`）；剩（可选）执行器刚度课程与"课程开/关"300 iter 对照实验 | 已完成主体；可选项 ~30 min/组 |
 | **history 回放**（`history_low_level_policy_todo.md`） | 回放侧 10 步 history 窗口 + 双输入调用；导出侧已完成 | 与 L2 分支同量级 |
 | P1 ⑦ checkpoint 路径参数化 | 目前 `_LOW_LEVEL_WBC_POLICY` 是一处常量，改成环境变量/CLI | 小 |
 | P1 ⑧ 模块级 `LOW_LEVEL_ENV_CFG` + `render_interval` 警告 | `high_level_env_cfg.py:30/456-458` | 小 |

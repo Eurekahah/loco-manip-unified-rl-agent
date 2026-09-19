@@ -189,6 +189,17 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             joint_names_expr=["arm_joint[1-6]"],
             effort_limit=100.0,       # 根据 Piper 实际力矩限制填写
             velocity_limit=3.0,     # rad/s
+            # ⚠️ 标定记录（2026-09-19，见 docs/review/bad_orientation_analysis_zh.md）：
+            # 下面注释里的 "DelayedPD 在 60~100（stiffness） / 0~20（damping）" 是当时定的目标区间，
+            # 而现在的 300/20 **超出该区间 3~5 倍**。实测（同一份已训低层策略、同一任务）：
+            #   软臂（=7 月那代 Implicit 40/8 的效果）→ 臂关节速度 RMS 0.95 rad/s，倾角越限比例 0.0002
+            #   硬臂（当前 300/20）              → 臂关节速度 RMS 1.74 rad/s，倾角越限比例 0.0006
+            # 即"臂刚度 ≈ 它把多少扰动传给底盘"。仍然偏"硬"的话，可选方案是把 300 降回 60~100，
+            # 或者做"刚度课程"（前段 40/8，训练中后期线性升到 300/20；实现方式：
+            # 在 curriculum 里改 robot.actuators["piper_arm"].stiffness/damping 后调用
+            # robot.write_joint_stiffness_to_sim(...) / write_joint_damping_to_sim(...)）。
+            # 目前**没有**启用刚度课程：先靠 EE 目标课程（WBCCurriculumCfg 的 ee_goal_*_blend_*
+            # 与 HeightInvariantEECommandCfg.target_blend_*）把"早期一动臂就终止"这一条解决掉。
             stiffness=300.0, # 20
             damping=20, # 0.1
             friction=0.01,
