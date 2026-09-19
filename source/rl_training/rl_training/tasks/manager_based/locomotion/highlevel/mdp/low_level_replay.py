@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING, Sequence
 import torch
 
 from isaaclab.managers import ObservationGroupCfg, SceneEntityCfg
-from isaaclab.envs.mdp import joint_vel_rel
+from isaaclab.envs.mdp import base_ang_vel, joint_pos_rel, joint_vel_rel, projected_gravity
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
@@ -469,16 +469,9 @@ def expected_policy_obs_dim(policy, policy_path: str, *, tag: str) -> tuple[int,
     """低层 policy 期望的**观测**维度 + 解析到的 layout json。"""
     layout_json = read_policy_layout(policy_path)
     if layout_json is not None:
-        if layout_json.get("kind") == "history":
-            raise NotImplementedError(
-                f"[{tag}] 该低层 checkpoint 是带 history encoder 的 ROA 策略"
-                f"（policy_obs={layout_json.get('policy_obs_dim')}, "
-                f"history={layout_json.get('history_length')} x "
-                f"{layout_json.get('history_single_step_dim')}）。\n"
-                "高层 replay 侧还没实现 history 窗口回放，见 "
-                "docs/review/history_low_level_policy_todo.md。\n"
-                "临时替代：用不带 history encoder 的普通 ActorCritic 低层策略。"
-            )
+        # 对 ``ActorCriticHistory`` 这类策略，``actor.0.weight`` 的输入宽度是
+        # ``policy_obs + latent``（实测 115 = 83 + 32），**读不出**观测维度，
+        # 所以这里必须优先用 layout json（`policy_obs_dim`），不能落到 checkpoint_dims。
         return int(layout_json["policy_obs_dim"]), layout_json
     obs_dim, _ = checkpoint_dims(policy)
     return obs_dim, None
@@ -540,6 +533,7 @@ def verify_low_level_layout(
     group_name: str,
     policy,
     expected_obs_dim: int | None = None,
+    policy_layout_json: dict | None = None,
 ) -> int:
     """打印并校验「回放布局 == checkpoint 布局」。
 
@@ -556,6 +550,14 @@ def verify_low_level_layout(
         f"[ll-replay:{tag}] 低层 policy action_dim={policy_action_dim}, "
         f"低层 obs 维度={actual_obs} (checkpoint 期望 {expected_obs})"
     )
+    if policy_layout_json is not None and policy_layout_json.get("kind") == "history":
+        print(
+            f"[ll-replay:{tag}] 该 checkpoint 是 history(ROA) 策略：actor 的输入宽度 "
+            f"{policy_obs_dim} = policy_obs {policy_layout_json.get('policy_obs_dim')} + "
+            f"latent {policy_layout_json.get('latent_dim')}。"
+            "**不能用 checkpoint_dims() 读观测维度**（它读 actor.0.weight，会把 latent 算进去）——"
+            "以 policy_layout.json 的 policy_obs_dim 为准。"
+        )
     print(
         f"[ll-replay:{tag}] 动作分块 leg={layout.leg_dim} wheel={layout.wheel_dim} "
         f"ee_ik={layout.ee_action_dim} -> total={layout.total_action_dim}"
@@ -585,3 +587,184 @@ def verify_low_level_layout(
               "请改用 layout_from_low_level_cfg() 并更新低层 checkpoint 路径。"
         )
     return actual_obs
+
+
+# ---------------------------------------------------------------------------
+# history（ROA / RMA 风格）策略的回放支持
+# ---------------------------------------------------------------------------
+
+
+def history_single_step_ll(
+    env, asset_cfg: SceneEntityCfg, last_action: torch.Tensor
+) -> torch.Tensor:
+    """history 编码器的**单步**输入（与低层训练逐项一致，只有 last_action 的来源不同）。
+
+    低层训练时这个向量由 ``velocity/mdp/observations.py::history_single_step_obs`` 生成::
+
+        [base_ang_vel(3), projected_gravity(3), joint_pos(N), joint_vel(N), last_action(M)]
+
+    本函数照抄它的前四项（同样的 IsaacLab 函数、同样的 ``asset_cfg`` 默认值 ⇒ 列的关节顺序
+    都是 articulation 原生序），**唯一的区别**是最后一段：
+
+    * 训练时 ``last_action = base_mdp.last_action(env) = env.action_manager.action``
+      → 低层 env 的动作向量（12 腿 + 4 轮 + IK 槽位）；
+    * 回放时若直接用 ``env.action_manager.action``，拿到的是**高层动作**
+      （11/12 维的 ``[vx,vy,wz,Δpos(3),Δrpy(3),Δbody(3)]``），语义完全不对。
+      所以必须显式传入回放自己缓存的低层动作。
+
+    ``HistoryCfg.history_obs`` 这个 ObsTerm 没有额外的 scale/noise（只有 clip=±100），
+    因此这里也**不做任何缩放**。
+    """
+    return torch.cat(
+        [
+            base_ang_vel(env, asset_cfg),
+            projected_gravity(env, asset_cfg),
+            joint_pos_rel(env, asset_cfg),
+            joint_vel_rel(env, asset_cfg),
+            last_action,
+        ],
+        dim=-1,
+    )
+
+
+def run_low_level_policy(policy, policy_obs: torch.Tensor, history_flat: torch.Tensor | None = None):
+    """调用低层策略：普通 ``ActorCritic`` 单输入；带 history encoder 的部署态策略双输入。
+
+    两种导出产物（都由 ``export_deploy_policy.py`` 写出）的 ``forward`` 签名不同：
+
+    * ``kind == "actor"``   → ``forward(policy_obs) -> action``
+    * ``kind == "history"`` → ``forward(policy_obs, history_flat) -> action``
+      （内部先 ``history_encoder(history_flat)`` 得到 latent，再 ``actor(cat([obs, latent]))``）
+
+    由 ``policy_layout.json`` 决定走哪条路（见 :func:`build_history_window`）。
+    """
+    if history_flat is None:
+        return policy(policy_obs)
+    return policy(policy_obs, history_flat)
+
+
+class LowLevelReplayState:
+    r"""回放侧的低层 tick 状态：**复位检测（含动作缓存清零）** + 可选的 history 窗口。
+
+    复位语义（与低层训练对齐）
+    --------------------------
+    * 低层动作缓存（``low_level_{leg,wheel,ee}_actions``）与 history 帧里的 ``last_action``
+      在 episode 复位后必须属于**新 episode**；IsaacLab 自己不会清
+      ``action_manager.action``，所以回放侧显式清零；
+    * history 窗口在复位时清零，随后由 ``CircularBuffer`` 的"首次 push 填满整窗"补齐 ——
+      这与训练侧 ``ObservationManager`` 的行为一致（它的 ``buffer`` getter 返回
+      ``[最旧 ... 最新]`` 的 ``(N, T, D)``，``flatten_history_dim=True`` 就是
+      ``reshape(N, T*D)``，即 ``[t0(D), t1(D), ...]``，正好对应
+      ``HistoryEncoder.forward`` 的 ``view(B, T, D).transpose(1, 2)``）。
+    * 复位检测：拿 ``episode_length_buf`` 与**上一次低层 tick**相比，变小即视为新 episode。
+      它是每个 env step 递增、复位时置 0，而高层 env 一步里有
+      ``decimation // low_level_decimation`` 个低层 tick，所以只有复位后的**第一个** tick
+      会被判成复位。
+      （旧实现在 ``last_action()`` 闭包里用 ``episode_length_buf == 0``：那个条件在复位后的
+      **整个 env step** 里都成立，于是整步内每个 tick 都把上一帧动作清 0，
+      与 history 帧里的 ``last_action`` 自相矛盾 —— 这里换成"跳变检测"，只在复位那一 tick 清一次。）
+    """
+
+    def __init__(
+        self,
+        *,
+        env,
+        layout: LowLevelActionLayout,
+        policy_layout_json: dict | None,
+        last_action_fn,
+        cache_tensors: Sequence[torch.Tensor],
+        asset_name: str = "robot",
+        tag: str,
+    ) -> None:
+        from isaaclab.utils.buffers import CircularBuffer
+
+        self._env = env
+        self._tag = tag
+        self._last_action_fn = last_action_fn
+        self._caches = list(cache_tensors)
+        # 初始值取一个大于任何 episode 长度的正数 ⇒ 第一次 tick 一定被当成"新 episode"，
+        # 于是第一次 push 会用 CircularBuffer 的"填满整窗"语义，和训练侧一致。
+        self._prev_len = torch.full((env.num_envs,), 1 << 30, device=env.device, dtype=torch.long)
+        self._asset_cfg = SceneEntityCfg(asset_name)
+        self._asset_cfg.resolve(env.scene)   # joint_names 保持默认（全部关节、原生序），与训练侧一致
+        self._buffer = None
+        self.length: int | None = None
+        self.single_step_dim: int | None = None
+        self.register_reset_count = 0
+        if policy_layout_json is not None and policy_layout_json.get("kind") == "history":
+            self.length = int(policy_layout_json["history_length"])
+            self.single_step_dim = int(policy_layout_json["history_single_step_dim"])
+            expected = 3 + 3 + 2 * len(layout.policy_joint_names) + layout.total_action_dim
+            if expected != self.single_step_dim:
+                raise RuntimeError(
+                    f"[{tag}] history 单步维度对不上：policy_layout.json 说 "
+                    f"{self.single_step_dim}，而按当前布局算是 {expected}"
+                    f"（base_ang_vel 3 + projected_gravity 3 + joint_pos "
+                    f"{len(layout.policy_joint_names)} + joint_vel "
+                    f"{len(layout.policy_joint_names)} + last_action "
+                    f"{layout.total_action_dim}）。"
+                    "常见原因：checkpoint 的动作维度（含/不含 IK 槽位）与布局不一致。"
+                )
+            self._buffer = CircularBuffer(
+                max_len=self.length, batch_size=env.num_envs, device=env.device
+            )
+            print(
+                f"[ll-replay:{tag}] history 窗口: {self.length} × {self.single_step_dim} = "
+                f"{self.length * self.single_step_dim}；单步 = base_ang_vel 3 + "
+                f"projected_gravity 3 + joint_pos {len(layout.policy_joint_names)} + "
+                f"joint_vel {len(layout.policy_joint_names)} + last_action "
+                f"{layout.total_action_dim}（低层动作，不是高层动作）"
+            )
+        else:
+            print(f"[ll-replay:{tag}] 低层策略不含 history encoder：单输入 forward(policy_obs)")
+
+    @property
+    def has_history(self) -> bool:
+        return self._buffer is not None
+
+    def on_tick(self) -> torch.Tensor | None:
+        """每个**低层 tick**调用一次：处理复位、推入 history 帧。
+
+        Returns:
+            history 展平窗口 ``(num_envs, length * single_step_dim)``；无 history 时 ``None``。
+        """
+        env = self._env
+        buf_len = env.episode_length_buf
+        fresh_ids = (buf_len < self._prev_len).nonzero(as_tuple=False).squeeze(-1)
+        self._prev_len = buf_len.clone()
+        if fresh_ids.numel() > 0:
+            for cache in self._caches:
+                cache[fresh_ids] = 0.0
+            if self._buffer is not None:
+                self._buffer.reset(fresh_ids)
+            self.register_reset_count += int(fresh_ids.numel())
+        if self._buffer is None:
+            return None
+        # 注意：这里传入的 last_action 必须是**低层**动作（与观测里的 actions 槽位同一个量），
+        # 且在推入 history 之后才被新策略输出覆盖。
+        self._buffer.append(
+            history_single_step_ll(env, self._asset_cfg, self._last_action_fn())
+        )
+        return self._buffer.buffer.reshape(env.num_envs, -1)
+
+
+def build_history_window(
+    *,
+    env,
+    layout: LowLevelActionLayout,
+    policy_layout_json: dict | None,
+    last_action_fn,
+    cache_tensors: Sequence[torch.Tensor],
+    asset_name: str = "robot",
+    tag: str,
+) -> LowLevelReplayState:
+    """构造 :class:`LowLevelReplayState`（普通 ActorCritic 时 history 部分自动关闭）。"""
+    return LowLevelReplayState(
+        env=env,
+        layout=layout,
+        policy_layout_json=policy_layout_json,
+        last_action_fn=last_action_fn,
+        cache_tensors=cache_tensors,
+        asset_name=asset_name,
+        tag=tag,
+    )

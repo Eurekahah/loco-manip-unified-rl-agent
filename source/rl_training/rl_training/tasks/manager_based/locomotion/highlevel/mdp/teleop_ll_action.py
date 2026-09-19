@@ -17,10 +17,12 @@ from isaaclab.managers import SceneEntityCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import (
     build_low_level_obs_manager,
     build_low_level_observation_group,
+    build_history_window,
     check_low_level_action_cfgs,
     expected_policy_obs_dim,
     push_ee_target_to_ik,
     resolve_layout,
+    run_low_level_policy,
     verify_low_level_layout,
 )
 from rl_training.tasks.manager_based.locomotion.velocity.mdp.utils import compute_base_height_rel_to_feet
@@ -127,12 +129,10 @@ class TeleopLLAction(ActionTerm):
         self.low_level_ee_actions    = torch.zeros(self.num_envs, self._ee_ik_dim,      device=self.device)
 
         def last_action():
-            if hasattr(env, "episode_length_buf"):
-                reset_mask = env.episode_length_buf == 0
-                self.low_level_leg_actions[reset_mask, :]   = 0
-                self.low_level_wheel_actions[reset_mask, :] = 0
-                self.low_level_ee_actions[reset_mask, :]    = 0
-            # 低层 policy 训练时的 actions 观测 = 完整动作向量 [leg | wheel | ee_ik]
+            # 低层 policy 训练时的 actions 观测 = 完整动作向量 [leg | wheel | ee_ik]。
+            # """复位清空""" 不在这里做了：用 `episode_length_buf == 0` 会在复位后的**整个
+            # env step** 内每 tick 都清一次（与 history 帧里的 last_action 自相矛盾），
+            # 现在统一由 LowLevelReplayState.on_tick() 按"跳变"检测清一次。
             return torch.cat(
                 [self.low_level_leg_actions,
                  self.low_level_wheel_actions,
@@ -168,6 +168,21 @@ class TeleopLLAction(ActionTerm):
             group_name="ll_policy",
             policy=self.policy,
             expected_obs_dim=self._expected_ll_obs_dim,
+            policy_layout_json=self._policy_layout_json,
+        )
+        # 回放侧的低层 tick 状态：复位检测 + 低层动作缓存清零 + （history 策略时的）10 步窗口
+        self._ll_replay_state = build_history_window(
+            env=env,
+            layout=self._layout,
+            policy_layout_json=self._policy_layout_json,
+            last_action_fn=last_action,
+            cache_tensors=[
+                self.low_level_leg_actions,
+                self.low_level_wheel_actions,
+                self.low_level_ee_actions,
+            ],
+            asset_name=cfg.asset_name,
+            tag=type(self).__name__,
         )
         self._counter = 0
 
@@ -389,13 +404,10 @@ class TeleopLLAction(ActionTerm):
     # ------------------------------------------------------------------
 
     def apply_actions(self):
-        # episode reset 时清空 low-level actions（无需重置增量缓存）
+        # episode reset 时的其它处理（低层动作缓存的清空已交给 _ll_replay_state.on_tick()）
         if hasattr(self._env, "episode_length_buf"):
             reset_ids = (self._env.episode_length_buf == 0).nonzero(as_tuple=False).squeeze(-1)
             if reset_ids.numel() > 0:
-                self.low_level_leg_actions[reset_ids, :]   = 0
-                self.low_level_wheel_actions[reset_ids, :] = 0
-                self.low_level_ee_actions[reset_ids, :]    = 0
                 if self.cfg.absolute_commands:
                     # VR 绝对目标语义：reset 后把标定基准重锚到初始位姿
                     self.recalibrate(reset_ids)
@@ -405,9 +417,12 @@ class TeleopLLAction(ActionTerm):
                     self._reset_default_body_pose(reset_ids)
 
         if self._counter % self.cfg.low_level_decimation == 0:
+            # 低层 tick：先处理复位 + 推入 history 帧（last_action 用上一 tick 的低层动作），
+            # 再算观测/跑策略 —— 顺序不能反，否则 history 帧里的 last_action 会是"未来"的动作。
+            history_flat = self._ll_replay_state.on_tick()
             low_level_obs = self._low_level_obs_manager.compute_group("ll_policy")
 
-            policy_output = self.policy(low_level_obs)
+            policy_output = run_low_level_policy(self.policy, low_level_obs, history_flat)
             leg, wheel, ee = self._layout.split(policy_output)
             self.low_level_leg_actions[:]   = leg
             self.low_level_wheel_actions[:] = wheel

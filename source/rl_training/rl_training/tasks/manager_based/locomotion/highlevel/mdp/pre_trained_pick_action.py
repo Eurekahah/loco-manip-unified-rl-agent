@@ -21,10 +21,12 @@ from isaaclab.managers import SceneEntityCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import (
     build_low_level_obs_manager,
     build_low_level_observation_group,
+    build_history_window,
     check_low_level_action_cfgs,
     expected_policy_obs_dim,
     push_ee_target_to_ik,
     resolve_layout,
+    run_low_level_policy,
     verify_low_level_layout,
 )
 
@@ -146,14 +148,10 @@ class PreTrainedPickAction(ActionTerm):
         )
 
         def last_action():
-            if hasattr(env, "episode_length_buf"):
-                reset_mask = env.episode_length_buf == 0
-                self.low_level_leg_actions[reset_mask, :] = 0
-                self.low_level_wheel_actions[reset_mask, :] = 0
-                self.low_level_ee_actions[reset_mask, :] = 0
-                self._raw_actions[reset_mask, :] = 0
             # 低层 policy 训练时的 actions 观测 = 完整动作向量 [leg | wheel | ee_ik]，
             # 必须逐维对齐（含不再被 IK 消费的 ee_ik 槽位），见 low_level_replay.py
+            # 复位清空统一交给 LowLevelReplayState.on_tick()（原因见该类的文档字符串）；
+            # 注意 _raw_actions 也一起清（本 term 的 velocity_commands 槽位直接取自它）。
             return torch.cat(
                 [self.low_level_leg_actions, self.low_level_wheel_actions, self.low_level_ee_actions],
                 dim=-1,
@@ -192,6 +190,22 @@ class PreTrainedPickAction(ActionTerm):
             group_name="ll_policy",
             policy=self.policy,
             expected_obs_dim=self._expected_ll_obs_dim,
+            policy_layout_json=self._policy_layout_json,
+        )
+        # 回放侧的低层 tick 状态：复位检测 + 低层动作缓存清零 + （history 策略时的）10 步窗口
+        self._ll_replay_state = build_history_window(
+            env=env,
+            layout=self._layout,
+            policy_layout_json=self._policy_layout_json,
+            last_action_fn=last_action,
+            cache_tensors=[
+                self._raw_actions,
+                self.low_level_leg_actions,
+                self.low_level_wheel_actions,
+                self.low_level_ee_actions,
+            ],
+            asset_name=cfg.asset_name,
+            tag=type(self).__name__,
         )
         self._counter = 0
 
@@ -392,10 +406,12 @@ class PreTrainedPickAction(ActionTerm):
 
         
         if self._counter % self.cfg.low_level_decimation == 0:
+            # 低层 tick：先复位处理 + 推 history 帧，再算观测/跑策略（顺序不能反）
+            history_flat = self._ll_replay_state.on_tick()
             low_level_obs = self._low_level_obs_manager.compute_group("ll_policy")
 
             # policy 输出切分给3个 action term
-            policy_output = self.policy(low_level_obs)
+            policy_output = run_low_level_policy(self.policy, low_level_obs, history_flat)
             leg, wheel, ee = self._layout.split(policy_output)
             self.low_level_leg_actions[:] = leg
             self.low_level_wheel_actions[:] = wheel
