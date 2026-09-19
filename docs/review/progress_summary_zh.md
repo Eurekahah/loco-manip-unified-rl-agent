@@ -90,6 +90,22 @@ o_*=(0,0) 的姿态与默认姿态差 68.5°±0.6° ⇒ "常数区间"表达不�
 `Episode_Termination/bad_orientation_2 = 0.0000`，`env.yaml` 里
 `target_blend_pos/target_blend_orn = 0.0`（Stage 0）与 `limit_angle: 0.8` 均生效。
 
+**EE 课程 A/B 对照实验**（同代码同 seed，`--num_envs 64 --max_iterations 120`，只改 blend）：
+
+| 指标（iter=119） | 课程开（s0） | 对照（blend=1） |
+|---|---|---|
+| `Episode_Termination/bad_orientation_2` | **0.594** | **0.883** |
+| 同上（iter=100） | **0.521** | **0.936** |
+| `Metrics/base_velocity/error_vel_xy` | 0.057 | 0.062 |
+| `Policy/mean_noise_std` | 1.003 | 1.006 |
+| `Train/mean_episode_length` | 30.7 | 33.0 |
+
+（run：`2026-09-19_14-16-49` / `2026-09-19_14-27-24`，都 EXIT=0。
+方向对上了，但没回到 7 月那代的 ~1% —— 因为 64 envs 的短跑里"腿还没学会走"
+本身就在摔；同代码 4096 envs（用户那份 09-02-50）早期只有 0.37~0.50。
+要再压这个终止项，建议下一步做执行器刚度课程（§5C）。详见
+`bad_orientation_analysis_zh.md` 的"✅ 对照实验实测"。）
+
 ## 三、还没做的（按建议优先级）
 
 | 项 | 说明 | 预估 |
