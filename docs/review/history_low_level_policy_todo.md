@@ -1,6 +1,6 @@
 # 待办：让高层 replay 支持「带 history encoder」的低层策略
 
-状态：**未实现，已完成前置的一半**。本文件是给下一次开工用的交接文档。
+状态：**✅ 已实现（2026-09-19，分支 `codex/hl-replay-history`，commit 见文末）**。
 基分支：`codex/hl-replay-l2`（commit `9d52fac`）+ `codex/export-deploy-policy`（`e565065`）。
 
 ---
@@ -55,6 +55,39 @@ joint_pos(24) + joint_vel(24) + last_action(16)`，窗口 10 步 → 700 维。
 
 ## 3. 还差什么（下一步要做的）
 
+> ### ✅ 三件事都已完成（`codex/hl-replay-history`）
+>
+> 代码位置：`highlevel/mdp/low_level_replay.py` 新增
+> `history_single_step_ll()` / `run_low_level_policy()` / `LowLevelReplayState` /
+> `build_history_window()`；三个 action term（`pre_trained_pick_action` /
+> `pre_trained_pick_wbc_action` / `teleop_ll_action`）在 `__init__` 里各建一个
+> `self._ll_replay_state`，在 `apply_actions()` 的低层 tick 里先
+> `history_flat = self._ll_replay_state.on_tick()`，再
+> `policy_output = run_low_level_policy(self.policy, low_level_obs, history_flat)`。
+>
+> 3.1 **环形缓冲**：直接复用 IsaacLab 的 `CircularBuffer`（就是训练侧
+> `ObservationManager` 内部用的那个类），因此"首次 push 填满整窗 / reset 清零 /
+> 展平成 `[t_oldest(D) ... t_newest(D)]`"这些语义与训练**同源**，不是重新实现一遍。
+> `last_action` 取回放自己缓存的**低层 16 维动作**（`[leg|wheel|ee_ik]`）。
+>
+> 3.2 **按 layout json 决定单/双输入**：`expected_policy_obs_dim()` 里那个
+> `NotImplementedError` 已删除；`run_low_level_policy()` 按 `history_flat is None`
+> 分支调用 `policy(obs)` 或 `policy(obs, history_flat)`。
+> `checkpoint_dims()` 仍然只用于**动作维度**校验，观测维度一律以 `policy_layout.json`
+> 的 `policy_obs_dim` 为准（启动日志里会显式打印"actor 输入 115 = 83 + 32 latent，
+> 不能用 checkpoint_dims 读观测维度"）。
+>
+> 3.3 **ee_goal 取舍**：不需要额外开关 —— 用"保留 ee_goal"的 history checkpoint
+> （`policy_obs_dim=83`）时，`build_low_level_obs_manager()` 直接得到 83 维；
+> 用旧的不含 ee_goal 的 checkpoint 时它会自动去掉那 7 维（仍保持严格校验）。
+>
+> ⚠️ 一个顺带修掉的坑（原实现的 `last_action()` 闭包）：闭包里用
+> `episode_length_buf == 0` 来判断"复位"并清零低层动作缓存 —— 这个条件在复位后的
+> **整个 env step** 里都成立（高层 env 一步有 10 个低层 tick），于是整步内每个 tick
+> 都把上一帧动作清 0，与 history 帧里的 `last_action` 自相矛盾。现在改成
+> "`episode_length_buf` 相比上一次低层 tick **变小**"的跳变检测，只在复位那一 tick
+> 清一次（`LowLevelReplayState.on_tick()`）。
+
 回放侧（`highlevel/mdp/low_level_replay.py` + 三个 action term）需要三件事：
 
 ### 3.1 维护 history 环形缓冲
@@ -100,6 +133,39 @@ joint_pos(24) + joint_vel(24) + last_action(16)`，窗口 10 步 → 700 维。
 > `policy_layout.json` 里 `policy_obs_dim` 会是 83，回放会自动把 ee_goal 加回来。
 
 ## 4. 建议的实现顺序与验收
+
+> ### ✅ 验收实测（2026-09-19）
+>
+> 先导出部署态策略（**用 `codex/export-deploy-policy` 上的脚本**，本分支没有它，
+> 所以那次是用 `git show 4276970:.../export_deploy_policy.py` 取出来跑的：
+> `--run logs/rsl_rl/history_adaptation/2026-09-19_09-02-50 --checkpoint model_5500.pt
+> --out_dir <run>/exported_deploy`）：
+>
+> ```json
+> {"kind": "history", "policy_obs_dim": 83, "history_single_step_dim": 70,
+>  "history_length": 10, "latent_dim": 32, "action_dim": 16}
+> ```
+> 自检：与 `ActorCriticHistory.act_inference` 的最大误差 `0.000e+00`。
+>
+> 新增探针 `scripts/reinforcement_learning/rsl_rl/probe_history_window.py`
+> （`Isaac-M20-Piper-Teleop-v0`，8 envs，40 步，历史窗口逐 tick 复算）：
+>
+> | 检查 | 实测 |
+> |---|---|
+> | replay 建出的低层 obs / 窗口 | obs **83** ✓、history **10 × 70 = 700** ✓、action **16** ✓（全部与 layout json 一致） |
+> | **单步内容**：窗口最后一帧 vs 用**低层训练函数** `mdp.history_single_step_obs` 独立复算（临时把 `action_manager._action` 换成低层 16 维动作） | `max|差| = 0.000e+00` |
+> | **整窗顺序**：40 次 tick 的 700 维窗口 vs "最近 k 帧按 `[t_oldest..t_newest]` 拼接 + 复位填充" | `max|差| = 0.000e+00`（其中 72 个 env·tick 带复位填充） |
+> | `CircularBuffer` 语义（顺序 + reset 后填满整窗） | 与训练侧同源，直测得 `[2,3,4]`、reset 后 `[9,9,9]` ✓ |
+> | `last_action` 段宽度 | **16**（低层动作）；对照：高层 `action_manager.total_action_dim = 13` ⇒ 拿错宽度都不对 |
+>
+> 训练冒烟（都是 `--headless --num_envs 64 --max_iterations 2`）：
+>
+> | 任务 | 低层 checkpoint | 结果 |
+> |---|---|---|
+> | `Isaac-M20-Piper-Teleop-v0` | **history**（83/700/16） | **EXIT=0**，reward 0.11 → 0.15，启动打印 `history 窗口: 10 × 70 = 700` |
+> | `...Pick-WBC-Flat-Teacher-v0` + `policy_path=<history 策略>` | **history** | **EXIT=0**，reward 0.92 → 1.28 |
+> | `...Pick-WBC-Flat-Teacher-v0`（默认 76 维普通 ActorCritic） | actor | **EXIT=0**，obs 76 = 76，reward 0.88 → 1.26（回归） |
+> | `...Pick-Flat-Teacher-v0`（L1，`ee_action_dim=7`） | actor（23 维动作） | **EXIT=0**，reward 0.81 → 1.11（回归） |
 
 1. `history_single_step_yy(env, asset_cfg, last_action_fn)` 放进 `low_level_replay.py`
    （镜像低层函数，明确注释"差异仅在于 last_action 的来源"）。
