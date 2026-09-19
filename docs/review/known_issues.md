@@ -287,6 +287,38 @@ pitch/roll 跟踪也在降）。叠加 `mean_noise_std` 持续上涨，
 > * 上面第 3 条（把 `body_pitch/roll_rew_s3` 的 `num_steps` 从 50k 缩到 25k）与
 >   执行器刚度课程**仍未做**（可选）。
 
+### 20. `[已修]` `root_height_below_minimum` 的"记账陷阱" + 稳态高度误差指标被塌陷污染
+
+**现象**：用户 2026-09-19 的 20k run 里 `bad_orientation_2` 只有 0.7%，但
+`root_height_below_minimum` 是 **0.349**，看起来"换个终止项就成了新瓶颈"。
+同一份日志里 `Metrics/body_pose/height_error_bias` 长期 +0.10~+0.21 m
+（`height_error = 命令 − 实际`），容易读成"机器人系统性蹲得比命令低 10~20 cm"。
+
+**实测（`probe_root_height_termination.py`，512 envs × 20 s，`model_19999` 的部署态策略）**：
+
+* 两个终止项是**记账迁移**：旧 run(30°) `0.624+0.015=0.639`；新 run(45.8°) `0.007+0.349=0.356`
+  ⇒ 总摔倒率其实降了 44%，只是"趴窝"改由高度项记账（趴窝时身体是平的，倾角不超 45.8°）。
+* 高度项抓的是**真摔**：触发瞬间 `root_z` 均值 0.188（最小 0.125）、实际高度比命令低 0.345 m、
+  倾角均值 24°（只有 6.1% 超 45.8°）。
+* **阈值反事实**：0.24/0.26/0.28/0.30/0.32 → 20 s 内触发 24.4/24.4/24.6/**25.8**/31.4 %
+  ⇒ **单纯下调阈值（0.30→0.26）基本无效**（深塌会一次性跨过所有阈值）。
+* `height_error_bias` 的 +0.10~0.21 m **不是稳态误差**：稳态 MAE 只有 0.037 m、
+  偏差 +0.028 m；均值是被塌陷瞬间（单次误差 0.35 m）拉高的。
+
+**修复（`codex/ll-height-stability`）**：
+
+1. 新增稳态指标 `Metrics/body_pose/height_error_bias_steady`
+   （`BodyPoseCommandCfg.steady_error_clip`，WBC 里设 0.15 m）：把误差裁剪到 ±0.15 m 后取均值，
+   专门看"没摔的时候跟得怎么样"；塌陷本身看 `Episode_Termination/root_height_below_minimum`。
+2. **不动终止阈值**；改为减少摔倒：EE 课程 s0 锚点从"默认（举起）位姿"改成**低位锚点**
+   （锁低位 1.0% vs 锁默认 55.5% vs 无课程 25.8%）、`body_pose.height_range` 上界 0.60→0.55
+   （0.60 够不到且是摔倒率最高的桶）、push/外力加 30%→100% 的扰动课程。
+
+详见 `bad_orientation_analysis_zh.md` §5F（含完整数据表与复现命令）。
+
+**验收口径**：以后看"摔倒"请用 `bad_orientation_2 + root_height_below_minimum` 的**合计**，
+否则每次调阈值都只是让指标在两项之间搬家。
+
 ---
 
 ## 二、工程性

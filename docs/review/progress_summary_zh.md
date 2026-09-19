@@ -17,6 +17,7 @@
 | `codex/hl-fix-ee-command` | `7a22759`（文档 `749ff83`） | **②** IK 目标写 `pose_command_b` + 同步 `pose_start_b/pose_end_b`；**③** flat 的 `ee_goal` 改用 root 系 | 见下 |
 | `codex/ll-history-flat-eegoal` | `45f9e74` **（已推 GitHub）** | 训练用配置：`bad_orientation_2` 改成旋转不变 0.8 rad(45.8°) + 保留 `ee_goal` + 训练说明 `docs/train_history_flat_zh.md` + 导出脚本 | History-Adaptation 2 iter exit 0，policy 83 / history 700 |
 | `codex/ll-ee-goal-curriculum` | `9ccb8ec`（基于 `codex/hl-fix-ee-command` + cherry-pick `d445007`） | **任务 1**：EE 目标课程 s0→s3（`target_blend_pos/_orn`）+ 姿态 slerp 插值 + 两个探针脚本 | 见下 |
+| `codex/ll-height-stability` | （见文末 commit） | **root_height 专项**：EE 课程 s0 锚点改**低位锚点**（s1/s2/s3 用 `mdp.apply_range_stages` 做区间阶梯）、`body_pose.height_range` 上界 0.60→0.55、扰动课程（push/外力 30%→100%）、新增稳态高度误差指标 | 见下 |
 
 ## 二、关键实测数据
 
@@ -105,6 +106,32 @@ o_*=(0,0) 的姿态与默认姿态差 68.5°±0.6° ⇒ "常数区间"表达不�
 本身就在摔；同代码 4096 envs（用户那份 09-02-50）早期只有 0.37~0.50。
 要再压这个终止项，建议下一步做执行器刚度课程（§5C）。详见
 `bad_orientation_analysis_zh.md` 的"✅ 对照实验实测"。）
+
+### root_height_below_minimum 专项（`codex/ll-height-stability`）
+
+用 `2026-09-19_09-02-50` 的 `model_19999` 部署态策略跑 512 envs × 20 s
+（`probe_root_height_termination.py`，关掉终止项、保留 push + 动作噪声）：
+
+| EE 目标锚点 | `root_z<0.30` 的 20s 触发率 | 稳态高度偏差(命令−实际) |
+|---|---|---|
+| 跟随全范围（= 无 EE 课程，现状） | 25.8% | +0.028 m |
+| 锁**默认位姿**（举起） | **55.5%** | +0.024 m |
+| 锁**低位锚点**（r=0.41、仰角 −0.08） | **1.0%** | +0.007 m |
+
+阈值反事实（同一 rollout 只改阈值）：0.24/0.26/0.28/0.30/0.32 →
+20s 触发 **24.4 / 24.4 / 24.6 / 25.8 / 31.4 %** ⇒ **单纯下调阈值基本无效**。
+两项终止的"记账迁移"：旧 run(30°) `0.624+0.015=0.639` → 新 run(45.8°) `0.007+0.349=0.356`
+（总摔倒率降 44%）。详见 `bad_orientation_analysis_zh.md` §5F。
+
+本轮改动：s0 低位锚点 + 区间阶梯（25k/50k/75k）、`height_range` 0.60→0.55、
+扰动课程 30%→100%（25k 步）、新增 `Metrics/body_pose/height_error_bias_steady`。
+
+**训练命令**（详见分支里的说明）：
+
+```bash
+python scripts/reinforcement_learning/rsl_rl/train.py \
+    --task History-Adaptation-Deeprobotics-M20-v0 --headless --num_envs 4096
+```
 
 ## 三、还没做的（按建议优先级）
 

@@ -155,3 +155,108 @@ def ramp_reward_weight(
         term_cfg.weight = weight
         env.reward_manager.set_term_cfg(term_name, term_cfg)
     return weight
+
+
+# ---------------------------------------------------------------------------
+# 课程：区间阶梯 / 扰动缩放（幂等，可每步调用）
+# ---------------------------------------------------------------------------
+
+
+def _progress(env: ManagerBasedRLEnv, num_steps: int, start_scale: float) -> float:
+    """线性进度：``common_step_counter`` 从 0 → num_steps 时返回 start_scale → 1.0。"""
+    p = min(max(env.common_step_counter / max(int(num_steps), 1), 0.0), 1.0)
+    return start_scale + (1.0 - start_scale) * p
+
+
+def apply_range_stages(
+    env: ManagerBasedRLEnv,
+    env_ids: Sequence[int],
+    command_name: str,
+    stages: Sequence[dict],
+) -> None:
+    """按训练步数在预设的若干组 ``ranges`` 之间推进（**区间课程**）。
+
+    ``stages`` 形如::
+
+        [{"num_steps": 25_000, "ranges": {"p_l": (0.36, 0.47), ...}},
+         {"num_steps": 50_000, "ranges": {...}},
+         {"num_steps": 75_000, "ranges": {...}}]
+
+    语义：``common_step_counter > num_steps`` 之后采用该组的取值；多组同时满足时取**最后**一组
+    （即区间是单调放宽的）。只写 ``ranges`` 里出现过的字段，没写的保持 cfg 里的初始值（s0）。
+
+    为什么不用 ``mdp.modify_term_cfg`` + 每个字段一个 term：``commands.<name>.ranges`` 有 6 个
+    字段、3 个阶段就是 18 个 term，噪声太大。这里一个 term 管一组，而且**幂等**（每次都从
+    stages 里写的目标值写回，不做相对修改），可以安全地每步调用。
+    """
+    term_cfg = env.command_manager.get_term(command_name).cfg
+    active = [s for s in stages if env.common_step_counter > s["num_steps"]]
+    if not active:
+        return
+    target = active[-1]["ranges"]
+    changed = []
+    for name, value in target.items():
+        value = tuple(value) if isinstance(value, (list, tuple)) else value
+        if getattr(term_cfg.ranges, name) != value:
+            setattr(term_cfg.ranges, name, value)
+            changed.append(f"{name}={value}")
+    if changed:
+        print(
+            f"[curriculum] {command_name}.ranges 进入阶段 "
+            f"(num_steps={active[-1]['num_steps']}, step={env.common_step_counter}): "
+            + ", ".join(changed)
+        )
+
+
+def _scale_nested(obj, s: float):
+    """把嵌套的数值 / 区间按比例 s 缩放（tuple/list/dict 递归）。"""
+    if isinstance(obj, dict):
+        return {k: _scale_nested(v, s) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return tuple(_scale_nested(v, s) for v in obj)
+    return obj * s
+
+
+def apply_event_scale(
+    env: ManagerBasedRLEnv,
+    env_ids: Sequence[int],
+    spec: Sequence[dict],
+    num_steps: int,
+    start_scale: float = 0.3,
+) -> None:
+    """把**扰动类事件**的参数从 ``start_scale`` 线性放大到 1.0（扰动课程）。
+
+    ``spec`` 里给出"事件名 + 参数名 + **完整幅度**"，缩放始终基于完整幅度计算，
+    因此幂等；例如::
+
+        [{"term": "randomize_push_robot", "param": "velocity_range",
+          "base": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
+         {"term": "randomize_apply_external_force_torque", "param": "force_range",
+          "base": (-10.0, 10.0)}]
+
+    为什么需要：实测（`scripts/reinforcement_learning/rsl_rl/probe_root_height_termination.py`）
+    第 0 步就全量开启的 push / 外力会让早期"一被推就趴窝"，
+    而趴窝现在由 `root_height_below_minimum` 记账。
+    """
+    s = _progress(env, num_steps, start_scale)
+    for item in spec:
+        term_name = item["term"]
+        # 事件可能被某个 cfg/探针关掉（置 None）—— `get_term_cfg` 对不存在的项会抛
+        # ValueError，所以先查 active_terms，缺了就跳过（不要因此让训练崩掉）。
+        if term_name not in env.event_manager.active_terms:
+            continue
+        term_cfg = env.event_manager.get_term_cfg(term_name)
+        if term_cfg is None:
+            continue
+        new_value = _scale_nested(item["base"], s)
+        if term_cfg.params.get(item["param"]) != new_value:
+            term_cfg.params[item["param"]] = new_value
+            env.event_manager.set_term_cfg(term_name, term_cfg)
+            # 只在缩放比例有明显变化时打印（否则每步都会因为 0.03% 的变化刷屏）
+            last = item.get("_last_printed_scale")
+            if last is None or abs(s - last) >= 0.02:
+                item["_last_printed_scale"] = s
+                print(
+                    f"[curriculum] 扰动 {term_name}.{item['param']} 缩放到 {s:.2f}× "
+                    f"(step={env.common_step_counter}): {new_value}"
+                )

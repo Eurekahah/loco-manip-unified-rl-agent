@@ -556,7 +556,7 @@ class PreTrainedPickWBCActionCfg(ActionTermCfg):
         ee_pos_z: tuple[float, float] = (-0.6, 0.6)
         ee_pitch: tuple[float, float] = (-math.pi/2, 0.0 )  # 限制在朝下到朝前
         # target_height: 机器狗期望站立高度（米），参考低层训练时的正常高度
-        target_height: tuple[float, float] = (0.33, 0.6)
+        target_height: tuple[float, float] = (0.33, 0.55)  # 与低层 body_pose.height_range 上界保持一致（实测 0.60 够不到，见 docs/review/bad_orientation_analysis_zh.md §5F）
         # target_pitch: 机身期望俯仰角（弧度），正值抬头
         target_pitch: tuple[float, float] = (-0.35, 0.35)  # (-0.35, 0.35)
         # target_roll: 机身期望侧倾角（弧度），正值右倾

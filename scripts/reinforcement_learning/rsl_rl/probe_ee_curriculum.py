@@ -69,31 +69,64 @@ from rl_training.tasks.manager_based.locomotion.velocity.mdp.commands import (  
 
 
 def _check_curriculum_stages(env) -> None:
-    """把 common_step_counter 推到各阶段阈值之后，检查 blend 是否按预期变化。"""
+    """把 common_step_counter 推到各阶段阈值之后，检查 **EE 目标区间** 是否按预期推进。
+
+    s0 = `Flat/RoughEnvWBCConfig.__post_init__` 里锁定的**低位锚点**（不是默认位姿！），
+    s1/s2/s3 由 `WBCCurriculumCfg.ee_goal_stages`（`mdp.apply_range_stages`）推进。
+    """
     print("\n" + "-" * 78)
     print("[probe] (1) EE 目标课程阶段检查（curriculum_manager.compute 手动触发）")
     term_cfg = env.command_manager.get_term("ee_pose").cfg
+    anchor = {
+        "p_l": (0.41, 0.41), "p_pitch": (-0.08, -0.08), "p_yaw": (0.0, 0.0),
+        "o_roll": (0.0, 0.0), "o_pitch": (0.0, 0.0), "o_yaw": (0.0, 0.0),
+    }
+    s1 = {"p_l": (0.36, 0.47), "p_pitch": (-0.35, 0.20), "p_yaw": (-0.45, 0.45),
+          "o_roll": (-0.09, 0.09), "o_pitch": (-0.09, 0.09), "o_yaw": (0.0, 0.0)}
+    s2 = {"p_l": (0.33, 0.50), "p_pitch": (-0.55, 0.40), "p_yaw": (-0.85, 0.85),
+          "o_roll": (-0.175, 0.175), "o_pitch": (-0.175, 0.175), "o_yaw": (-0.6, 0.6)}
+    s3 = {"p_l": (0.30, 0.52), "p_pitch": (-0.7853981633974483, 0.6283185307179586),
+          "p_yaw": (-1.2566370614359172, 1.2566370614359172),
+          "o_roll": (-0.39269908169872414, 0.39269908169872414),
+          "o_pitch": (-0.39269908169872414, 0.39269908169872414),
+          "o_yaw": (-3.141592653589793, 3.141592653589793)}
     expect = [
-        (0, 0.0, 0.0),
-        (25_001, 0.35, 0.0),
-        (50_001, 0.35, 0.35),
-        (75_001, 1.0, 1.0),
+        (0, anchor, "s0 低位锚点"),
+        (25_001, s1, "s1"),
+        (50_001, s2, "s2"),
+        (75_001, s3, "s3 = 完整任务"),
     ]
     all_ids = torch.arange(env.num_envs, device=env.device)
     ok = True
-    for counter, exp_pos, exp_orn in expect:
+    for counter, exp, label in expect:
         env.common_step_counter = counter
         env.curriculum_manager.compute(env_ids=all_ids)
-        got_pos = float(term_cfg.target_blend_pos)
-        got_orn = float(term_cfg.target_blend_orn)
-        good = abs(got_pos - exp_pos) < 1e-9 and abs(got_orn - exp_orn) < 1e-9
+        bad = []
+        for name, value in exp.items():
+            got = tuple(getattr(term_cfg.ranges, name))
+            if len(got) != len(value) or any(abs(a - b) > 1e-6 for a, b in zip(got, value)):
+                bad.append(f"{name}={got}!= {value}")
+        good = not bad
         ok &= good
-        print(f"    counter={counter:>7}  target_blend_pos={got_pos:.2f} "
-              f"target_blend_orn={got_orn:.2f}  (期望 {exp_pos:.2f}/{exp_orn:.2f})  "
-              f"{'OK' if good else '**不一致**'}")
+        print(f"    counter={counter:>7}  {label:<14} "
+              f"p_l={tuple(term_cfg.ranges.p_l)} p_pitch={tuple(term_cfg.ranges.p_pitch)} "
+              f"o_yaw={tuple(term_cfg.ranges.o_yaw)}  {'OK' if good else '**不一致** ' + '; '.join(bad)}")
     print(f"[probe] (1) 结论: {'全部符合预期' if ok else '存在不一致（见上）'}")
     if not ok:
         raise RuntimeError("EE 目标课程阶段不符合预期")
+
+    # 扰动课程：push / 外力幅度应随步数从 30% 放大到 100%
+    print("[probe] (1b) 扰动课程（push / 外力幅度）:")
+    for counter in (0, 12_000, 25_001):
+        env.common_step_counter = counter
+        env.curriculum_manager.compute(env_ids=all_ids)
+        if "randomize_push_robot" not in env.event_manager.active_terms:
+            print(f"    counter={counter:>7}  （本探针把扰动事件关掉了，跳过）")
+            continue
+        push = env.event_manager.get_term_cfg("randomize_push_robot").params["velocity_range"]["x"]
+        force = env.event_manager.get_term_cfg("randomize_apply_external_force_torque").params["force_range"]
+        print(f"    counter={counter:>7}  push.velocity_range.x={tuple(round(v,3) for v in push)}  "
+              f"external.force_range={tuple(round(v,3) for v in force)}")
 
 
 def _check_slerp() -> None:
@@ -226,11 +259,17 @@ def _check_update_command_slerp(env, term) -> None:
         raise RuntimeError("_update_command 的 slerp 插值不符合预期")
 
 
-def _arm_disturbance_stats(env, term, steps: int, blend_pos: float, blend_orn: float,
+def _arm_disturbance_stats(env, term, steps: int, ee_ranges: dict | None,
                            velocity_ranges: tuple) -> dict:
-    """给定 blend 设置跑 steps 步，统计臂关节速度 / 底盘角速度 / 倾角 / EE 跟踪误差。"""
-    term.cfg.target_blend_pos = blend_pos
-    term.cfg.target_blend_orn = blend_orn
+    """给定 EE 目标区间（None = 保持当前/s0 锁低位）跑 steps 步，统计臂/底盘/倾角/root_z。
+
+    会统计 `root_z < 0.30` 的比例 —— 现在 `root_height_below_minimum` 是主要的摔倒记账项
+    （实测：锁低位锚点 1.0% vs 臂跟随全范围 25.8% vs 锁默认举起位姿 55.5%，
+    详见 docs/review/bad_orientation_analysis_zh.md §5F）。
+    """
+    if ee_ranges is not None:
+        for name, value in ee_ranges.items():
+            setattr(term.cfg.ranges, name, value)
     vel_ranges = env.command_manager.get_term("base_velocity").cfg.ranges
     vel_ranges.lin_vel_x, vel_ranges.lin_vel_y, vel_ranges.ang_vel_z = velocity_ranges
 
@@ -241,6 +280,7 @@ def _arm_disturbance_stats(env, term, steps: int, blend_pos: float, blend_orn: f
     actions = torch.zeros(env.num_envs, env.action_manager.total_action_dim, device=env.device)
 
     arm_vel_sq, base_ang_sq, ee_err, tilts = [], [], [], []
+    below, total = 0, 0
     settle = max(1, steps // 3)          # 前 1/3 步只用于过渡（复位瞬态），不计入统计
     prev_len = env.episode_length_buf.clone()
     for k in range(steps):
@@ -257,6 +297,8 @@ def _arm_disturbance_stats(env, term, steps: int, blend_pos: float, blend_orn: f
         base_ang_sq.append(robot.data.root_ang_vel_b[valid].pow(2).sum(dim=-1).mean().item())
         tilt = torch.acos(torch.clamp(-robot.data.projected_gravity_b[valid, 2], -1.0, 1.0))
         tilts.append(tilt)
+        below += int((robot.data.root_pos_w[valid, 2] < 0.30).sum())
+        total += int(valid.sum())
         ee_pos_b, _ = math_utils.subtract_frame_transforms(
             robot.data.root_pos_w[valid], robot.data.root_quat_w[valid],
             robot.data.body_pos_w[valid, ee_idx], robot.data.body_quat_w[valid, ee_idx],
@@ -270,6 +312,7 @@ def _arm_disturbance_stats(env, term, steps: int, blend_pos: float, blend_orn: f
         "tilt_p99_deg": math.degrees(float(tilt_all.quantile(0.99))),
         "tilt_max_deg": math.degrees(float(tilt_all.max())),
         "ee_pos_err_mean": sum(ee_err) / len(ee_err),
+        "root_z_below_030": below / max(total, 1),
     }
 
 
@@ -300,8 +343,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     print(f"[probe] task={args_cli.task} num_envs={env.num_envs} steps={args_cli.steps} "
           f"ee resampling={env_cfg.commands.ee_pose.resampling_time_range} "
           f"T_traj={env_cfg.commands.ee_pose.ranges.T_traj}")
-    print(f"[probe] 初始 target_blend_pos={float(term.cfg.target_blend_pos)} "
-          f"target_blend_orn={float(term.cfg.target_blend_orn)}   （Stage 0）")
+    print(f"[probe] Stage 0（s0）EE 目标区间: p_l={tuple(term.cfg.ranges.p_l)} "
+          f"p_pitch={tuple(term.cfg.ranges.p_pitch)} p_yaw={tuple(term.cfg.ranges.p_yaw)} "
+          f"o_roll={tuple(term.cfg.ranges.o_roll)}")
 
     _check_curriculum_stages(env)
     _check_slerp()
@@ -310,25 +354,35 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     _check_update_command_slerp(env, term)
 
     print("\n" + "-" * 78)
-    print("[probe] (4) 臂扰动机制 A/B（同样的零动作，只改 EE 目标混合比例）")
+    print("[probe] (4) 臂扰动机制 A/B（同样的零动作，只改 EE 目标区间）")
     # 恢复真实的重采样节奏（part 3 用了 0.2~0.3 s 的快速重采样）
     env_cfg.commands.ee_pose.resampling_time_range = (5.0, 5.0)
     env_cfg.commands.ee_pose.ranges.T_traj = (1.0, 3.0)
     term.cfg.resampling_time_range = (5.0, 5.0)
     term.cfg.ranges.T_traj = (1.0, 3.0)
+    # s0 = 锁低位锚点（cfg 里的初值）；s3 = 完整任务区间（要显式写回去，
+    # 因为 part 1 把 curriculum 推到了 s3，但 part 3 之后 term.cfg.ranges 可能被改过）
+    s0_ranges = {"p_l": (0.41, 0.41), "p_pitch": (-0.08, -0.08), "p_yaw": (0.0, 0.0),
+                 "o_roll": (0.0, 0.0), "o_pitch": (0.0, 0.0), "o_yaw": (0.0, 0.0)}
+    s3_ranges = {"p_l": (0.30, 0.52), "p_pitch": (-0.7853981633974483, 0.6283185307179586),
+                 "p_yaw": (-1.2566370614359172, 1.2566370614359172),
+                 "o_roll": (-0.39269908169872414, 0.39269908169872414),
+                 "o_pitch": (-0.39269908169872414, 0.39269908169872414),
+                 "o_yaw": (-3.141592653589793, 3.141592653589793)}
     zero = ((0.0, 0.0), (0.0, 0.0), (0.0, 0.0))
     for vel_cmd, title in ((zero, "站立（速度命令恒 0）"),
                            (orig_vel_ranges, f"速度命令 {orig_vel_ranges[0]}")):
-        s0 = _arm_disturbance_stats(env, term, args_cli.steps, 0.0, 0.0, vel_cmd)
-        s3 = _arm_disturbance_stats(env, term, args_cli.steps, 1.0, 1.0, vel_cmd)
+        s0 = _arm_disturbance_stats(env, term, args_cli.steps, s0_ranges, vel_cmd)
+        s3 = _arm_disturbance_stats(env, term, args_cli.steps, s3_ranges, vel_cmd)
         print(f"    [{title}]")
         for name, key in (("臂关节速度 RMS", "arm_vel_rms"),
                           ("底盘角速度 RMS", "base_ang_vel_rms"),
                           ("平均倾角 (deg)", "tilt_mean_deg"),
                           ("倾角 p99 (deg)", "tilt_p99_deg"),
                           ("最大倾角 (deg)", "tilt_max_deg"),
+                          ("root_z<0.30 比例", "root_z_below_030"),
                           ("EE 位置跟踪误差 (m)", "ee_pos_err_mean")):
-            print(f"      {name:<20} s0(blend=0) = {s0[key]:.4f}   s3(blend=1) = {s3[key]:.4f}")
+            print(f"      {name:<20} s0(锁低位锚点) = {s0[key]:.4f}   s3(全范围) = {s3[key]:.4f}")
     print("=" * 78 + "\n")
 
 

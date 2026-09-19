@@ -283,6 +283,96 @@
 > 300 iter = 7.2k 步 < 25k，所以整个 run 都停在 s0，正好对比
 > "臂被按住" vs "臂一路跟着随机目标动"。
 
+---
+
+## 5F. `root_height_below_minimum`（趴窝）专项：诊断与修复
+
+> 分支 `codex/ll-height-stability`（基于 `codex/ll-ee-goal-curriculum`）。
+> 触发这次分析的现状：用户 2026-09-19 用 `45f9e74` 在 4096 envs 训练 20k iter 后
+> `bad_orientation_2` 只有 0.7%，但 `root_height_below_minimum` 高达 0.349（`time_out` 0.644）。
+
+### 1. 先看"记账迁移"：总摔倒率其实降了 44%
+
+| run | 阈值 | `bad_orientation_2` | `root_height_below_minimum` | 合计 | `time_out` | ep_len |
+|---|---|---|---|---|---|---|
+| `2026-09-18_19-33-47`（7554 iter） | 30° | 0.6244 | 0.0151 | **0.6395** | 0.3605 | 492.1 |
+| `2026-09-19_09-02-50`（19999 iter） | 45.8° | 0.0074 | 0.3486 | **0.3560** | 0.6442 | 713.4 |
+
+把倾角阈值从 30° 放宽到 45.8° 之后，"趴窝"（底盘贴地、身体却是平的）不再触发倾角项，
+改由高度项记账。**所以单看 `root_height_below_minimum` 变高，不代表训练变差。**
+
+### 2. 诊断探针（`scripts/reinforcement_learning/rsl_rl/probe_root_height_termination.py`）
+
+用 `model_19999.pt` 导出的部署态策略，512 envs × 20 s（关掉两个终止项，保留 push 与
+动作噪声 1.0，以复现训练口径）。4 组对照，**唯一变量是 EE 目标的锚点/区间**：
+
+| EE 目标 | `root_z<0.30` 的 20s 触发率 | 稳态高度偏差(命令−实际) | `root_z` p05 |
+|---|---|---|---|
+| 跟随全范围目标（= 无 EE 课程） | 25.8% | +0.028 m | 0.339 |
+| 锁在**默认位姿**（举起：EE 在采样平面之上 0.32 m） | **55.5%** | +0.024 m | 0.206 |
+| 锁在**低位锚点**（r=0.41、仰角 −0.08 rad） | **1.0%** | +0.007 m | 0.362 |
+
+**结论 1：s0 的锚点必须是"低位"而不是"默认位姿"** —— 默认位姿是"把臂举起来"，
+重心高、更容易趴窝；低位锚点把 20s 触发率从 25.8% 压到 1.0%。
+
+**阈值反事实**（同一 rollout，只改判定阈值）：
+
+| 阈值 | 瞬时占比 | 20 s 内触发过的环境 |
+|---|---|---|
+| 0.24 | 3.7% | 24.4% |
+| **0.26** | 3.8% | **24.4%** |
+| 0.28 | 3.9% | 24.6% |
+| **0.30（当前）** | 4.1% | **25.8%** |
+| 0.32 | 4.2% | 31.4% |
+
+**结论 2：单纯下调阈值（0.30→0.26）只把这部分终止从 25.8% 降到 24.4% —— 基本没用。**
+因为触发时是"深塌"（`root_z` 均值 0.188、最小 0.125，实际高度比命令低 0.345 m，
+轮子反而离地 ~12 cm），任何 0.24~0.32 的阈值都在同一瞬间被跨过。
+
+**终止瞬间画像**（20745 个 env·step）：命令高度均值 0.48、实际高度 0.130、倾角均值 24°
+（只有 6.1% 超过 45.8°，16% 在 15° 以内）⇒ **这是真摔（趴窝），不是"蹲得低"**。
+按命令高度分桶看 `root_z<0.30` 比例是 3.0%~5.6%，**与命令高度几乎无关**
+（最低桶反而最低），也印证了"不是命令贴近下界导致的"。
+
+### 3. 上轮的 A/B 需要更正：s0（旧锚点）并没有降低总摔倒率
+
+| iter=119（64 envs × 120 iter） | s0（旧：锁当前/默认位姿） | 对照（无课程） |
+|---|---|---|
+| `bad_orientation_2` | 0.594 | 0.883 |
+| `root_height_below_minimum` | **0.406** | **0.121** |
+| **合计** | **1.000** | **1.004** |
+| ep_len | 30.7 | 33.0 |
+
+**合计一样**：旧 s0 只是把摔倒方式从"被臂顶翻（倾角）"换成"趴窝（高度）"。
+（这也是为什么本节把 s0 的锚点改成低位锚点。）
+
+### 4. 本轮修复（`codex/ll-height-stability`）
+
+| # | 改动 | 位置 | 依据 |
+|---|---|---|---|
+| 1 | **EE 课程 s0 = 低位锚点**（p_l=0.41、p_pitch=−0.08、p_yaw=0、o_*=0），s1/s2/s3 由 `mdp.apply_range_stages` 按 25k/50k/75k 步逐步放宽到完整区间 | `flat_env_wbc_cfg.py`（`Flat/RoughEnvWBCConfig.__post_init__` + `WBCCurriculumCfg.ee_goal_stages`） | 上面第 2 节：锁低位 1.0% vs 锁默认位姿 55.5% vs 无课程 25.8% |
+| 2 | `body_pose.height_range` 上界 **0.60 → 0.55**（命令 + 课程 + PLAY + 高层 `target_height` 同步） | `flat_env_wbc_cfg.py`、`pre_trained_pick_wbc_action.py`、`teleop_ll_action.py` | 实测 (0.51,0.55] 桶已系统性偏低 +0.019 m、(0.55,0.60] 桶 +0.043~0.091 m（够不到），且这两个桶的 `root_z<0.30` 比例最高（5.6%~11.1%） |
+| 3 | **扰动课程**：push(±0.5 m/s) / 外力(±10 N·m) 从 30% 线性放大到 100%（25k 步） | `curriculums.py::apply_event_scale` + `WBCCurriculumCfg.disturbance_ramp` | 关掉 push 时 20s 触发率 22.9%、全量开启 25.8%（+3 个百分点），且早期"一被推就趴窝" |
+| 4 | 新增稳态指标 `Metrics/body_pose/height_error_bias_steady`（误差裁剪 ±0.15 m 后取均值） | `commands.py::BodyPoseCommand._update_metrics` + `steady_error_clip` | `height_error_bias` 的均值被塌陷瞬间（±0.35 m）拉高，稳态其实只有 +0.02~0.03 m（见 known_issues #20） |
+| 5 | `target_blend_pos/_orn` 机制保留但默认 1.0（课程改用区间阶梯） | `commands.py` | 混合比例适合"按比例释放"；本课程用区间更直观，二者都幂等 |
+
+**验收怎么看**：`bad_orientation_2 + root_height_below_minimum` 的**合计**应随迭代下降，
+并且 s0 阶段（<25k 步）应该两者都接近 0；`height_error_bias_steady` 用来单独看"没摔的时候跟得怎么样"。
+
+### 5. 复现命令
+
+```bash
+# 诊断（4 组：none / default / low × 是否保留 push）
+python scripts/reinforcement_learning/rsl_rl/probe_root_height_termination.py \
+  --task History-Adaptation-Deeprobotics-M20-v0 --headless --num_envs 512 --steps 1000 \
+  --keep_push --action_noise_std 1.0 --freeze_ee_preset low \
+  --policy logs/rsl_rl/history_adaptation/<run>/exported_deploy_19999/policy.pt
+
+# 课程自检（区间阶梯 + slerp）
+python scripts/reinforcement_learning/rsl_rl/probe_ee_curriculum.py \
+  --task Flat-Deeprobotics-M20-Piper-WBC-v0 --headless --num_envs 16 --steps 150
+```
+
 ### ✅ 对照实验实测（2026-09-19，`codex/ll-ee-goal-curriculum`）
 
 同一份代码、同一 seed、`--num_envs 64 --max_iterations 120`，只改 EE 目标混合比例：

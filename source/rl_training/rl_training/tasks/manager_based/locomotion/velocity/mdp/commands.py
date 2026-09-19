@@ -1071,6 +1071,15 @@ class BodyPoseCommand(CommandTerm):
         self.metrics["pitch_error_bias"]  = pitch_error
         self.metrics["roll_error_bias"]   = roll_error
 
+        # ── 稳态口径（known_issues #20）：把误差裁剪到 ±clip 再平均 ──────────────
+        # 实测：`height_error_bias` 的均值会被"塌陷瞬间"（单次误差 ~0.35 m）拉高，
+        # 让人误以为"机器人系统性蹲得比命令低 10~20 cm"，而稳态其实只有 2~3 cm。
+        # 这个裁剪版用来单独看"没摔的时候跟得怎么样"；塌陷本身看
+        # Episode_Termination/root_height_below_minimum。
+        clip = getattr(self.cfg, "steady_error_clip", None)
+        if clip is not None:
+            self.metrics["height_error_bias_steady"] = height_error.clamp(-clip, clip)
+
     def _set_debug_vis_impl(self, debug_vis: bool):
         """创建 / 销毁可视化 marker。"""
         if debug_vis:
@@ -1174,3 +1183,8 @@ class BodyPoseCommandCfg(CommandTermCfg):
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
     feet_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*wheel")
     debug_vis: bool = False
+
+    # 稳态高度误差的裁剪阈值（m）：非 None 时额外记录
+    # `Metrics/body_pose/height_error_bias_steady` = 把误差裁剪到 ±clip 后的均值。
+    # 用途：`height_error_bias` 的均值会被塌陷瞬间（±0.3 m 级）拉偏，见 known_issues #20。
+    steady_error_clip: float | None = None
