@@ -19,21 +19,27 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import check_file_path, read_file
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
 from isaaclab.managers import SceneEntityCfg
+from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_policy_action import (
+    LowLevelPolicyActionBase,
+)
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-
-
-class PreTrainedNavAction(ActionTerm):
+class PreTrainedNavAction(LowLevelPolicyActionBase):
     r"""Pre-trained policy action term (chassis only).
 
-    This action term infers a pre-trained policy and applies the corresponding low-level actions
-    to the robot chassis (legs + wheels). The arm-related joints are removed.
+    清单 ⑤ 的 R1 步骤：**继承 :class:`LowLevelPolicyActionBase`**，只保留 nav 自己的语义 ——
 
-    The raw actions correspond to the base velocity commands for the pre-trained policy:
-        [vx, vy, wz]  —  3-dimensional chassis velocity command.
+    * 高层动作 = 3 维底盘速度命令 ``[vx, vy, wz]``（``raw_actions`` = 剪裁后的命令）；
+    * 低层策略只输出腿 + 轮（16 维），没有机械臂 / IK 槽位：cfg 里不给
+      ``low_level_ee_actions`` ⇒ 布局的 ``ee_ik`` 维度自动为 0。
+
+    以前这个类自己抄了一份"载入策略 / 就地改低层观测 cfg / last_action 闭包 / 低层 tick 循环"，
+    而且**没有** ``ll_command`` 属性 —— 奖励项 ``lateral_velocity_penalty`` /
+    ``angular_velocity_penalty`` 一读 ``action_term.ll_command`` 就 AttributeError。
+    现在 ``ll_command`` / ``ll_command_w`` 由基类统一提供（清单 ①③）。
     """
 
     cfg: PreTrainedNavActionCfg
@@ -66,82 +72,16 @@ class PreTrainedNavAction(ActionTerm):
     joint_names = leg_joint_names + wheel_joint_names + arm_joint_names
 
     def __init__(self, cfg: PreTrainedNavActionCfg, env: ManagerBasedRLEnv) -> None:
+        # `_raw_actions` 必须在 super().__init__ 之前分配：基类构造低层观测时会用到它
+        self._raw_actions = torch.zeros(env.num_envs, 3, device=env.device)
         super().__init__(cfg, env)
 
-        self.robot: Articulation = env.scene[cfg.asset_name]
-
-        # ── load low-level policy ───────────────────────────────────────────
-        if not check_file_path(cfg.policy_path):
-            raise FileNotFoundError(f"Policy file '{cfg.policy_path}' does not exist.")
-        file_bytes = read_file(cfg.policy_path)
-        self.policy = torch.jit.load(file_bytes).to(env.device).eval()
-
-        self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
-
-        # ── instantiate low-level action terms ─────────────────────────────
-        self._joint_pos_action_term: ActionTerm = cfg.low_level_leg_actions.class_type(
-            cfg.low_level_leg_actions, env
-        )
-        self._wheel_vel_action_term: ActionTerm = cfg.low_level_wheel_actions.class_type(
-            cfg.low_level_wheel_actions, env
-        )
-
-        self._joint_pos_dim = self._joint_pos_action_term.action_dim
-        self._wheel_vel_dim = self._wheel_vel_action_term.action_dim
-
-        self.low_level_leg_actions = torch.zeros(
-            self.num_envs, self._joint_pos_dim, device=self.device
-        )
-        self.low_level_wheel_actions = torch.zeros(
-            self.num_envs, self._wheel_vel_dim, device=self.device
-        )
-        self._joint_pos_action_term.scale = {".*_hipx_joint": 0.125, '^(?!.*_hipx_joint)(?!.*arm_joint).*': 0.25}
-        self._wheel_vel_action_term.scale = 20.0
-        self._joint_pos_action_term.clip = {".*": (-100.0, 100.0)}
-        self._wheel_vel_action_term.clip = {".*": (-100.0, 100.0)}
-        self._joint_pos_action_term.joint_names = self.leg_joint_names
-        self._wheel_vel_action_term.joint_names = self.wheel_joint_names
-
-
-        # ── wire observation lambdas ────────────────────────────────────────
-        def last_action():
-            if hasattr(env, "episode_length_buf"):
-                reset_mask = env.episode_length_buf == 0
-                self.low_level_leg_actions[reset_mask, :] = 0
-                self.low_level_wheel_actions[reset_mask, :] = 0
-                self._raw_actions[reset_mask, :] = 0
-            # 拼接两个 action term 的输出供 low-level obs 使用
-            return torch.cat(
-                [self.low_level_leg_actions, self.low_level_wheel_actions], dim=-1
-            )
-
-        cfg.low_level_observations.actions.func = lambda dummy_env: last_action()
-        cfg.low_level_observations.actions.params = dict()
-
-        cfg.low_level_observations.velocity_commands.func = (
-            lambda dummy_env: self._raw_actions[:, :3]
-        )
-        cfg.low_level_observations.velocity_commands.params = dict()
-
-        # joint_pos 观测只保留底盘关节，屏蔽轮子
-        cfg.low_level_observations.joint_pos.func = mdp.joint_pos_rel_without_wheel
-        cfg.low_level_observations.joint_pos.params["wheel_asset_cfg"] = SceneEntityCfg(
-            "robot", joint_names=self.wheel_joint_names
-        )
-        cfg.low_level_observations.base_ang_vel.scale = 0.25
-        cfg.low_level_observations.joint_pos.scale = 1.0
-        cfg.low_level_observations.joint_vel.scale = 0.05
-        # 不使用线速度观测和高度扫描
-        cfg.low_level_observations.base_lin_vel = None
-        cfg.low_level_observations.height_scan = None
-        cfg.low_level_observations.joint_pos.params["asset_cfg"].joint_names = self.joint_names
-        cfg.low_level_observations.joint_vel.params["asset_cfg"].joint_names = self.joint_names
-
-
-        self._low_level_obs_manager = ObservationManager(
-            {"ll_policy": cfg.low_level_observations}, env
-        )
-        self._counter = 0
+    def _build_low_level_obs_cfg(self, cfg: PreTrainedNavActionCfg, last_action_fn):
+        """nav 的 ``velocity_commands`` 直接用剪裁后的高层动作（基类默认用 ``_ll_command``）。"""
+        group = super()._build_low_level_obs_cfg(cfg, last_action_fn)
+        group.velocity_commands.func = lambda dummy_env: self._raw_actions[:, :3]
+        group.velocity_commands.params = {}
+        return group
 
     # ── properties ──────────────────────────────────────────────────────────
 
@@ -169,25 +109,9 @@ class PreTrainedNavAction(ActionTerm):
         self._raw_actions[:, 0].clamp_(r.lin_vel_x[0], r.lin_vel_x[1])
         self._raw_actions[:, 1].clamp_(r.lin_vel_y[0], r.lin_vel_y[1])
         self._raw_actions[:, 2].clamp_(r.ang_vel_z[0], r.ang_vel_z[1])
-
-    def apply_actions(self):
-        if self._counter % self.cfg.low_level_decimation == 0:
-            low_level_obs = self._low_level_obs_manager.compute_group("ll_policy")
-
-            # policy 输出切分给腿部和轮子两个 action term
-            policy_output = self.policy(low_level_obs)
-            self.low_level_leg_actions[:] = policy_output[:, : self._joint_pos_dim]
-            self.low_level_wheel_actions[:] = policy_output[
-                :, self._joint_pos_dim : self._joint_pos_dim + self._wheel_vel_dim
-            ]
-
-            self._joint_pos_action_term.process_actions(self.low_level_leg_actions)
-            self._wheel_vel_action_term.process_actions(self.low_level_wheel_actions)
-            self._counter = 0
-
-        self._joint_pos_action_term.apply_actions()
-        self._wheel_vel_action_term.apply_actions()
-        self._counter += 1
+        # 规范形式的 ll_command（root 系）：nav 只有底盘速度分量，其余留给 0
+        self._ll_command[:, :3] = self._raw_actions[:, :3]
+        self._ll_command_w[:, :3] = self._raw_actions[:, :3]
 
     # ── debug visualization ──────────────────────────────────────────────────
 

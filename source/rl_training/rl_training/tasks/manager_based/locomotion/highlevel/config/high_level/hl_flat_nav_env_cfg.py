@@ -1,3 +1,5 @@
+import copy
+
 from isaaclab.utils import configclass
 from .high_level_flat_env_cfg import HighLevelFlatEnvCfg
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -20,6 +22,25 @@ from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobo
 
 _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
 
+# 清单 ⑤/⑥：nav 低层 checkpoint（actor 输入 69 维 = 3+3+3+22+22+16）要求 joint_pos/joint_vel
+# 是 **22 维**（腿+轮+臂，不含夹爪）、按 leg→wheel→arm 顺序 —— 原来是在 action term 的
+# `__init__` 里就地改 `cfg.low_level_observations` 实现的（清单 ⑥ 的反模式）。
+# 现在改成在 cfg 层显式声明模板，action term 只消费、不再改 cfg。
+_NAV_POLICY_JOINT_NAMES = [
+    "fl_hipx_joint", "fl_hipy_joint", "fl_knee_joint",
+    "fr_hipx_joint", "fr_hipy_joint", "fr_knee_joint",
+    "hl_hipx_joint", "hl_hipy_joint", "hl_knee_joint",
+    "hr_hipx_joint", "hr_hipy_joint", "hr_knee_joint",
+    "fl_wheel_joint", "fr_wheel_joint", "hl_wheel_joint", "hr_wheel_joint",
+    "arm_joint1", "arm_joint2", "arm_joint3",
+    "arm_joint4", "arm_joint5", "arm_joint6",
+]
+_nav_low_level_obs_cfg = copy.deepcopy(_low_level_env_cfg.observations.policy)
+for _term_name in ("joint_pos", "joint_vel"):
+    _term = getattr(_nav_low_level_obs_cfg, _term_name, None)
+    if _term is not None and _term != "MISSING":
+        _term.params["asset_cfg"].joint_names = list(_NAV_POLICY_JOINT_NAMES)
+
 @configclass
 class HLFlatNavActionsCfg(HighLevelActionsCfg):
     pre_trained_nav_action: mdp.PreTrainedNavActionCfg = mdp.PreTrainedNavActionCfg(
@@ -28,7 +49,7 @@ class HLFlatNavActionsCfg(HighLevelActionsCfg):
         low_level_decimation=4,
         low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
         low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,
-        low_level_observations=_low_level_env_cfg.observations.policy,
+        low_level_observations=_nav_low_level_obs_cfg,
     )
 
 @configclass

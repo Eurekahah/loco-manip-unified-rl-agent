@@ -165,6 +165,34 @@ class PreTrainedPolicyAction(ActionTerm):
     def processed_actions(self) -> torch.Tensor:
         return self.raw_actions
 
+    @property
+    def ll_command(self) -> torch.Tensor:
+        """规范形式命令 ``[vx,vy,wz, ee_pos_b(3), ee_quat_b(4)]``（**root 系**）。
+
+        ⚠️ 本类**还没**迁移到 :class:`LowLevelPolicyActionBase`（它没有被任何 task 注册，
+        属于未启用的代码）。这里先补上接口，避免奖励项读 ``action_term.ll_command`` 时
+        AttributeError；EE 部分按"世界系 → root 系"换算（与 O1 规范一致）。
+        """
+        cmd = torch.zeros(self.num_envs, 10, device=self.device)
+        cmd[:, :3] = self._raw_actions[:, :3]
+        pos_b, quat_b = math_utils.subtract_frame_transforms(
+            self.robot.data.root_pos_w,
+            self.robot.data.root_quat_w,
+            self._raw_actions[:, 3:6],
+            self._raw_actions[:, 6:10],
+        )
+        cmd[:, 3:6] = pos_b
+        cmd[:, 6:10] = quat_b
+        return cmd
+
+    @property
+    def ll_command_w(self) -> torch.Tensor:
+        """``ll_command`` 的世界系副本。"""
+        cmd_w = torch.zeros(self.num_envs, 10, device=self.device)
+        cmd_w[:, :3] = self._raw_actions[:, :3]
+        cmd_w[:, 3:10] = self._raw_actions[:, 3:10]
+        return cmd_w
+
     """
     Operations.
     """
