@@ -15,6 +15,7 @@
 | `codex/export-deploy-policy` | `4276970` | `export_deploy_policy.py`：把带 history encoder 的 ROA 策略导出成部署态 `forward(policy_obs, history_flat)`；纯 torch；与 rsl_rl `act_inference` 数值一致（0.000e+00） | 两个模型导出通过 |
 | `codex/hl-fix-ll-command` | `e064bc6`（文档 `b32c515`） | **①** `PreTrainedPickAction` 补 `ll_command`/`ll_command_w`；`ll_command_world()` helper；8 处世界系奖励项改用它 | 见下 |
 | `codex/hl-fix-ee-command` | `7a22759`（文档 `749ff83`） | **②** IK 目标写 `pose_command_b` + 同步 `pose_start_b/pose_end_b`；**③** flat 的 `ee_goal` 改用 root 系 | 见下 |
+| `codex/hl-ckpt-params` | `1b6d5c8` | **任务 3⑦⑧**：低层 checkpoint 路径参数化（环境变量 `RL_TRAINING_LOW_LEVEL_POLICY_<KEY>` / hydra）+ 统一的加载报错；`LOW_LEVEL_ENV_CFG` 改懒加载 + `render_interval` 不再触发多次渲染警告 | 见下 |
 | `codex/ll-history-flat-eegoal` | `45f9e74` **（已推 GitHub）** | 训练用配置：`bad_orientation_2` 改成旋转不变 0.8 rad(45.8°) + 保留 `ee_goal` + 训练说明 `docs/train_history_flat_zh.md` + 导出脚本 | History-Adaptation 2 iter exit 0，policy 83 / history 700 |
 
 ## 二、关键实测数据
@@ -68,9 +69,9 @@ checkpoint `actor.0.weight (512,115)=83+32latent`、`history_encoder.conv.0 (32,
 | 项 | 说明 | 预估 |
 |---|---|---|
 | **bad_orientation 课程**（详见 `bad_orientation_analysis_zh.md`） | EE 目标 s0→s3 课程 + 姿态 slerp +（可选）执行器刚度课程 | 先测默认半径，再改 `WBCCurriculumCfg`；验证 ~30 min/组 |
-| **history 回放**（`history_low_level_policy_todo.md`） | 回放侧 10 步 history 窗口 + 双输入调用；导出侧已完成 | 与 L2 分支同量级 |
-| P1 ⑦ checkpoint 路径参数化 | 目前 `_LOW_LEVEL_WBC_POLICY` 是一处常量，改成环境变量/CLI | 小 |
-| P1 ⑧ 模块级 `LOW_LEVEL_ENV_CFG` + `render_interval` 警告 | `high_level_env_cfg.py:30/456-458` | 小 |
+| **history 回放**（`history_low_level_policy_todo.md`） | ✅ 已完成（`codex/hl-replay-history` `0d37c99`）：10 步窗口 + 单/双输入调用 + 低层 last_action；导出侧另在 `codex/export-deploy-policy` | 见上实测 |
+| P1 ⑦ checkpoint 路径参数化 | ✅ 已完成（`codex/hl-ckpt-params` `1b6d5c8`）：`resolve_policy_path` + 环境变量 `RL_TRAINING_LOW_LEVEL_POLICY_<KEY>` + hydra 覆盖 + `load_low_level_policy` 统一报错 | 实测：无效路径给出三种修法；有效覆盖 83=83 |
+| P1 ⑧ 模块级 `LOW_LEVEL_ENV_CFG` + `render_interval` 警告 | ✅ 已完成（`codex/hl-ckpt-params` `1b6d5c8`）：改懒加载单例；`render_interval = decimation`（`Rendering step-size: 0.2`） | 警告消失、reward 不回归 |
 | ⑤ 的 R1 步：抽 `LowLevelPolicyActionBase` | 把 nav/openvla/`pre_trained_policy` 也纳入；顺带修 nav 奖励项读不存在的 `ll_command` | 中 |
 | 低层 known_issues ⑤⑥⑦ | `body_names=""` 占位符、`disable_zero_weight_rewards` 脆弱、`feet_distance_y_exp` 类型错误 | 小 |
 | ⑯ 剩下的低层侧 | 低层 env 自己也加布局打印/断言；`joint_pos_rel_without_wheel` 补断言 | 小 |
