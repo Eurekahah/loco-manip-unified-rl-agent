@@ -30,6 +30,7 @@ from isaaclab.markers import VisualizationMarkers
 from isaaclab.markers.config import GREEN_ARROW_X_MARKER_CFG, BLUE_ARROW_X_MARKER_CFG
 
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
+from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import load_low_level_policy
 
 class VLAPickAction(ActionTerm):
     """
@@ -65,10 +66,8 @@ class VLAPickAction(ActionTerm):
         self.robot: Articulation = env.scene[cfg.asset_name]
 
         # ── 加载低层 policy.pt（与原版完全相同）─────────────────────────
-        if not check_file_path(cfg.policy_path):
-            raise FileNotFoundError(f"Policy file '{cfg.policy_path}' does not exist.")
-        file_bytes = read_file(cfg.policy_path)
-        self.policy = torch.jit.load(file_bytes).to(env.device).eval()
+        # 统一的加载 + 明确的报错（清单 ⑦）：见 low_level_replay.load_low_level_policy
+        self.policy = load_low_level_policy(cfg.policy_path, env, tag=type(self).__name__)
 
         # raw_actions: [vel(3) | ee_pose(7) | gripper(1)] = 11 维
         # vel(3) 由外部高层传入；ee_pose(7) 由 VLA 覆写；gripper(1) 由 VLA 覆写

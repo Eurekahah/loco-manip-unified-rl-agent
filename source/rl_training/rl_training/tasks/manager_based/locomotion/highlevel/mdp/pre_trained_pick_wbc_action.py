@@ -24,6 +24,7 @@ from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay i
     build_low_level_observation_group,
     check_low_level_action_cfgs,
     expected_policy_obs_dim,
+    load_low_level_policy,
     push_ee_target_to_ik,
     resolve_layout,
     verify_low_level_layout,
@@ -83,10 +84,8 @@ class PreTrainedPickWBCAction(ActionTerm):
         self.robot: Articulation = env.scene[cfg.asset_name]
 
         # load policy
-        if not check_file_path(cfg.policy_path):
-            raise FileNotFoundError(f"Policy file '{cfg.policy_path}' does not exist.")
-        file_bytes = read_file(cfg.policy_path)
-        self.policy = torch.jit.load(file_bytes).to(env.device).eval()
+        # 统一的加载 + 明确的报错（清单 ⑦）：见 low_level_replay.load_low_level_policy
+        self.policy = load_low_level_policy(cfg.policy_path, env, tag=type(self).__name__)
 
         self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)     # [vx, vy, wz,  Δx, Δy, Δz,  Δr, Δp, Δy,      Δbody_height, Δbody_pitch, Δbody_roll]
         self._ll_command = torch.zeros(self.num_envs, self.action_dim + 1, device=self.device)  # [vx, vy, wz,  x, y, z,     qw, qx, qy, qz,  body_height, body_pitch, body_roll]

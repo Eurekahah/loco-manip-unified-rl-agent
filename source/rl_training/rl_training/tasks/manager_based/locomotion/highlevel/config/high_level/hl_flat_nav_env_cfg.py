@@ -17,6 +17,7 @@ from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg imp
 from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import TerminationsCfg as HighLevelTerminationsCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import RewardsCfg as HighLevelRewardsCfg
 from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.flat_env_nav_cfg import DeeproboticsM20FlatNavEnvCfg as LOW_LEVEL_ENV_CFG
+from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import resolve_policy_path
 
 _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
 
@@ -24,7 +25,11 @@ _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
 class HLFlatNavActionsCfg(HighLevelActionsCfg):
     pre_trained_nav_action: mdp.PreTrainedNavActionCfg = mdp.PreTrainedNavActionCfg(
         asset_name="robot",
-        policy_path=f"logs/rsl_rl/deeprobotics_m20_nav_flat/2026-03-20_22-13-56/exported/policy.pt",
+        # 清单 ⑦：路径参数化（环境变量 RL_TRAINING_LOW_LEVEL_POLICY_NAV 可覆盖）
+        policy_path=resolve_policy_path(
+            "logs/rsl_rl/deeprobotics_m20_nav_flat/2026-03-20_22-13-56/exported/policy.pt",
+            key="nav",
+        ),
         low_level_decimation=4,
         low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
         low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,

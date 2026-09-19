@@ -18,6 +18,7 @@ from isaaclab.markers.config import BLUE_ARROW_X_MARKER_CFG, GREEN_ARROW_X_MARKE
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import check_file_path, read_file
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
+from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import load_low_level_policy
 from isaaclab.managers import SceneEntityCfg
 
 if TYPE_CHECKING:
@@ -71,10 +72,8 @@ class PreTrainedNavAction(ActionTerm):
         self.robot: Articulation = env.scene[cfg.asset_name]
 
         # ── load low-level policy ───────────────────────────────────────────
-        if not check_file_path(cfg.policy_path):
-            raise FileNotFoundError(f"Policy file '{cfg.policy_path}' does not exist.")
-        file_bytes = read_file(cfg.policy_path)
-        self.policy = torch.jit.load(file_bytes).to(env.device).eval()
+        # 统一的加载 + 明确的报错（清单 ⑦）：见 low_level_replay.load_low_level_policy
+        self.policy = load_low_level_policy(cfg.policy_path, env, tag=type(self).__name__)
 
         self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
 

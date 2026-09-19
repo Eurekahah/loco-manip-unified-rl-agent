@@ -27,7 +27,18 @@ from rl_training.tasks.manager_based.locomotion.velocity.velocity_env_cfg import
 from rl_training.tasks.manager_based.locomotion.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
 from rl_training.assets.deeprobotics import DEEPROBOTICS_M20_PIPER_CFG
 
-LOW_LEVEL_ENV_CFG = DeeproboticsM20RoughEnvCfg()
+# 清单 ⑧：**不要**在 import 期实例化整个低层 env cfg（它内部会 deepcopy 所有嵌套配置，
+# 而且"只为拿 dt / decimation 就建一份低层 cfg"是隐式耦合的来源）。改成懒加载单例：
+# 第一次真正用到时才构造，语义与原来完全一致。
+_LOW_LEVEL_ENV_CFG: DeeproboticsM20RoughEnvCfg | None = None
+
+
+def low_level_env_cfg() -> DeeproboticsM20RoughEnvCfg:
+    """低层（rough）env cfg 的懒加载单例：只用于取 ``sim.dt`` / ``decimation``。"""
+    global _LOW_LEVEL_ENV_CFG
+    if _LOW_LEVEL_ENV_CFG is None:
+        _LOW_LEVEL_ENV_CFG = DeeproboticsM20RoughEnvCfg()
+    return _LOW_LEVEL_ENV_CFG
 
     
     
@@ -453,9 +464,16 @@ class HighLevelEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self):
         """Post initialization."""
 
-        self.sim.dt = LOW_LEVEL_ENV_CFG.sim.dt
-        self.sim.render_interval = LOW_LEVEL_ENV_CFG.decimation
-        self.decimation = LOW_LEVEL_ENV_CFG.decimation * 10
+        low_level_cfg = low_level_env_cfg()
+        self.sim.dt = low_level_cfg.sim.dt
+        # 清单 ⑧：原来 render_interval = 低层 decimation (4)，而高层 decimation = 4*10 = 40
+        # ⇒ 每个 env step 会触发 10 次渲染（IsaacLab 也会给 WARNING）。
+        # 现在设成与高层 decimation 一致（= 每个 env step 渲染一次）。
+        # 如果你要更平滑的画面/相机更新，可以把下面这行换成
+        #   self.sim.render_interval = self.actions.<term>.low_level_decimation
+        # （= 低层策略的步长，代价是每个 env step 渲染多次）。
+        self.decimation = low_level_cfg.decimation * 10
+        self.sim.render_interval = self.decimation
         self.episode_length_s = 8.0
 
         # if self.scene.height_scanner is not None:

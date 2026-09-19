@@ -22,6 +22,7 @@ from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg imp
 from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.flat_env_cfg import DeeproboticsM20FlatEnvCfg as LOW_LEVEL_ENV_CFG
 
 from rl_training.tasks.manager_based.locomotion.velocity.mdp.commands import HeightInvariantEECommandCfg
+from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import resolve_policy_path
 
 _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
 
@@ -29,7 +30,11 @@ _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
 class HLFlatOpenvlaActionsCfg(HighLevelActionsCfg):
     pre_trained_pick_action: mdp.PreTrainedPickActionCfg = mdp.PreTrainedPickActionCfg(
         asset_name="robot",
-        policy_path=f"logs/rsl_rl/deeprobotics_m20_flat/2026-03-18_18-06-34/exported/policy.pt",
+        # 清单 ⑦：路径参数化（环境变量 RL_TRAINING_LOW_LEVEL_POLICY_FLAT 可覆盖）
+        policy_path=resolve_policy_path(
+            "logs/rsl_rl/deeprobotics_m20_flat/2026-03-18_18-06-34/exported/policy.pt",
+            key="flat",
+        ),
         low_level_decimation=4,
         low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
         low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,
@@ -39,7 +44,10 @@ class HLFlatOpenvlaActionsCfg(HighLevelActionsCfg):
 
     openvla_ee_action: mdp.VLAPickActionCfg = mdp.VLAPickActionCfg(
         asset_name="robot",
-        policy_path=f"logs/rsl_rl/deeprobotics_m20_flat/2026-03-18_18-06-34/exported/policy.pt",
+        policy_path=resolve_policy_path(
+            "logs/rsl_rl/deeprobotics_m20_flat/2026-03-18_18-06-34/exported/policy.pt",
+            key="flat",
+        ),
         ee_body_name="gripper_base",            
         camera_sensor_name="arm_camera",
         low_level_decimation=4,
