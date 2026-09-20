@@ -31,6 +31,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 from tensordict import TensorDict
@@ -67,8 +69,13 @@ class ActorCriticHistory(nn.Module):
         activation: str = "elu",
         init_noise_std: float = 1.0,
         noise_std_type: str = "scalar",
+        max_noise_std: float | None = 0.0,
         **kwargs: dict[str, Any],
     ) -> None:
+        # 0 / None = 不限制（旧行为）；正数 = 给探索噪声封顶
+        max_noise_std = float(max_noise_std) if max_noise_std else None
+        if max_noise_std is not None and max_noise_std <= 0:
+            max_noise_std = None
         if kwargs:
             print(
                 "ActorCriticHistory.__init__ got unexpected arguments, which will be ignored: "
@@ -153,12 +160,22 @@ class ActorCriticHistory(nn.Module):
 
         # ---- Action noise (identical mechanism to rsl_rl.modules.ActorCritic) ----
         self.noise_std_type = noise_std_type
+        # 探索噪声上界（P1-1）：None = 不限制（旧行为）；给了值就把 std 投影到 [0, max_noise_std]。
+        # 为什么需要它：`loss = ... - entropy_coef * entropy`（默认 0.01）持续给熵正奖励，而
+        # `log_std`/`std` 是**无上界**的自由参数 ⇒ 实测两个 run 都把 mean_noise_std 顶到 ~1.5
+        # （约等于动作量纲的 1.5 倍标准差）并停在那，同时 adaptive 调度把学习率压到地板（1e-5）。
+        # 实现是"投影梯度"：采样处 clamp（保证行为有界）+ 每次 optimizer.step() 后把参数本身
+        # 投影回可行域（见 `clamp_noise_std_`），这样日志里的 Policy/mean_noise_std 才是真实值。
+        self.max_noise_std = max_noise_std
+        self._max_log_std = math.log(max_noise_std) if max_noise_std is not None else None
         if self.noise_std_type == "scalar":
             self.std = nn.Parameter(init_noise_std * torch.ones(num_actions))
         elif self.noise_std_type == "log":
             self.log_std = nn.Parameter(torch.log(init_noise_std * torch.ones(num_actions)))
         else:
             raise ValueError(f"Unknown standard deviation type: {self.noise_std_type}. Should be 'scalar' or 'log'")
+        # 初始化即越界的话（init_noise_std > max_noise_std）直接投影一次，避免第 0 迭代就超
+        self.clamp_noise_std_()
 
         self.distribution = None
         Normal.set_default_validate_args(False)
@@ -167,6 +184,21 @@ class ActorCriticHistory(nn.Module):
         # the encoder-regularization loss without recomputing the encoders from scratch.
         self._last_history_latent: torch.Tensor | None = None
         self._last_privileged_latent: torch.Tensor | None = None
+
+    def clamp_noise_std_(self) -> None:
+        """把探索噪声参数投影回 [0, max_noise_std]（无上界时是空操作）。
+
+        调用点：① `__init__` 末尾；② `PPORoA.update` 每次 `optimizer.step()` 之后。
+        只在采样处 clamp 是不够的 —— 参数本身会沿着 entropy bonus 一路爬到无界，
+        `Policy/mean_noise_std` 也就会显示成"一直在涨"的假象。
+        """
+        if self.max_noise_std is None:
+            return
+        with torch.no_grad():
+            if self.noise_std_type == "scalar":
+                self.std.data.clamp_(min=1e-6, max=self.max_noise_std)
+            elif self.noise_std_type == "log":
+                self.log_std.data.clamp_(max=self._max_log_std)
 
     # ------------------------------------------------------------------------------------- #
     # Boilerplate to match the rsl_rl.modules.ActorCritic interface expected by rsl_rl.PPO  #
@@ -249,9 +281,10 @@ class ActorCriticHistory(nn.Module):
     def _update_distribution(self, actor_in: torch.Tensor) -> None:
         mean = self.actor(actor_in)
         if self.noise_std_type == "scalar":
-            std = self.std.expand_as(mean)
+            std = self.std.clamp(max=self.max_noise_std).expand_as(mean) if self.max_noise_std is not None else self.std.expand_as(mean)
         elif self.noise_std_type == "log":
-            std = torch.exp(self.log_std).expand_as(mean)
+            log_std = self.log_std.clamp(max=self._max_log_std) if self._max_log_std is not None else self.log_std
+            std = torch.exp(log_std).expand_as(mean)
         else:
             raise ValueError(f"Unknown standard deviation type: {self.noise_std_type}. Should be 'scalar' or 'log'")
         self.distribution = Normal(mean, std)

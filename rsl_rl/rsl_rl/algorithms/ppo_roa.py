@@ -302,6 +302,10 @@ class PPORoA(PPO):
 
             nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
             self.optimizer.step()
+            # 探索噪声上界（P1-1）：entropy bonus 会把 log_std 一路顶高，这里投影回可行域。
+            # 没有配置上界（max_noise_std=None）时是空操作。
+            if hasattr(self.policy, "clamp_noise_std_"):
+                self.policy.clamp_noise_std_()
             if self.rnd_optimizer:
                 self.rnd_optimizer.step()
 

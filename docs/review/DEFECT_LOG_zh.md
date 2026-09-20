@@ -16,10 +16,70 @@
 | 2026-09-20 | 新增 DEF-020：导出部署态策略时增加 ONNX（含"绝对误差阈值误判 fp32 舍入"的教训）；run `2026-09-20_00-50-31` 用 iter=19999 重新导出 | `708ca53` |
 | 2026-09-20 | 新增 DEF-021：sim2sim/sim2real 部署参考文档 + 部署规格探针（实测出"Isaac 原生关节序 ≠ MuJoCo 关节序"等关键事实） | `7458672` |
 | 2026-09-20 | 新增 DEF-022（部署基线固化：`main @ 2d49f47` + 产物 sha256 + 训练代码核对 + tag `deploy-baseline-2026-09-20`）、DEF-023（P1-1 归因：`noise_std` 是饱和平台、`error_vel_xy` 是命令课程口径产物；含 P1-2 新证据） | 工具 `dc3a5b9` / 文档 `eb22401` |
+| 2026-09-20 | 新增 DEF-024：探索噪声上界 `max_noise_std`（默认 0 = 不限制）+ 投影梯度实现 + hydra 覆盖踩坑；P1-1 的 A/B（cap 1.2 / entropy_coef 0.002）已启动，结果待回填 | 代码 + `docs: P1-1 A/B` 提交 |
 
 ---
 
 # 记录（新→旧）
+
+### DEF-024 `2026-09-20` 探索噪声上界可配置（`max_noise_std`）+ P1-1 的 A/B 设计
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 特性（训练配置开关）+ 实验设计 |
+| 状态 | **代码已完成并冒烟验收；A/B 训练进行中**（结果见本节"4. 结果"补记 / `TODO_zh.md` P1-1） |
+| 关联 | `rsl_rl/rsl_rl/modules/actor_critic_history.py`（`max_noise_std` / `clamp_noise_std_`）、`rsl_rl/rsl_rl/algorithms/ppo_roa.py`（step 后投影）、`.../deeprobotics_m20/agents/rsl_rl_ppo_cfg.py:RslRlPpoActorCriticHistoryCfg`；上游归因 `DEF-023` |
+
+**1. 需求（为什么做）**
+
+`DEF-023` 把 P1-1 归因成"`log_std` 无上界 + `entropy_coef` 的熵奖励 ⇒ `Policy/mean_noise_std`
+顶到 ~1.5 的平台，同时 adaptive 调度把学习率压到 1e-5"。要验证这个归因、并给"精度上界被压住"
+一个可选的解，需要一个**能开能关**的探索噪声上界，且必须能在不改代码的情况下做 A/B。
+
+**2. 实现**
+
+* `ActorCriticHistory(..., max_noise_std=0.0)`：`0`/`None` = 不限制（**旧行为，默认**）；
+  正数 = 上界。`log` 型噪声在上界处转成 `log(max_noise_std)`。
+* `clamp_noise_std_()`：把噪声参数**投影**回 `[0, max_noise_std]`。调用点两处：
+  ① `__init__` 末尾（`init_noise_std > 上界` 时第 0 迭代就生效）；
+  ② `PPORoA.update` 里每次 `optimizer.step()` 之后（投影梯度）。
+  另外 `_update_distribution` 里采样用的 std 也 clamp 一次 —— **只在采样处 clamp 不够**：
+  参数本身会沿熵奖励一路爬到无界，`Policy/mean_noise_std` 就还是"一直在涨"，看不出真实行为。
+* cfg 字段 `RslRlPpoActorCriticHistoryCfg.max_noise_std: float = 0.0`，用 hydra 直接覆盖：
+  `python scripts/reinforcement_learning/rsl_rl/train.py --task <task> --headless agent.policy.max_noise_std=1.2`。
+* **踩坑（写下来免得再踩）**：这里**不能**声明成 `float | None = None` —— IsaacLab 的
+  `update_class_from_dict` 是按**当前值的类型**校验覆盖值的
+  （`value is None or isinstance(value, type(obj_mem))`，见 `isaaclab/utils/dict.py`），
+  默认 `None` 时 `agent.policy.max_noise_std=1.2` 会直接报
+  `[Config]: Incorrect type under namespace: /policy/max_noise_std. Expected: <class 'NoneType'>`（实测撞上）。
+
+**3. 冒烟验收（改完先验证"封顶链路真的会封顶"）**
+
+| 命令（64 envs × 2 iter） | 观测 | 结论 |
+|---|---|---|
+| `agent.policy.max_noise_std=0.05` | `Policy/mean_noise_std` = **0.05**（iter 0）/ 0.04999 | 上界**低于** `init_noise_std=1.0` 时被投影下来 ⇒ `__init__` + 采样 + step 后投影三段都生效 |
+| `agent.policy.max_noise_std=1.2` | `Policy/mean_noise_std` = 1.0 / 0.9995 | 未越界时不干预（无副作用） |
+| 默认（`0.0`）跑两个低层任务 | EXIT=0 | 旧行为不变 |
+
+run 目录：`logs/rsl_rl/history_adaptation/2026-09-20_18-52-54`（cap=0.05）、`2026-09-20_18-53-32`（cap=1.2）。
+
+**4. 结果（A/B 实测）——*进行中，跑完后补* **
+
+设计（同一 seed=42、4096 envs、同任务，只改一个变量，与现有基线逐迭代对比）：
+
+| 组 | run 目录 | 改了什么 | 迭代数 |
+|---|---|---|---|
+| 基线 | `2026-09-20_00-50-31` | — | 20000（已完成） |
+| 变体 1（cap） | `2026-09-20_18-54-34_cap_noise_std` | `agent.policy.max_noise_std=1.2` | 4000 |
+| 变体 2（ent） | 计划 `*_ent_coef_low` | `agent.algorithm.entropy_coef=0.002` | 4000 |
+
+判定口径（写死，避免事后挑指标）：`Policy/mean_noise_std` 平台 ≤1.2（cap）或显著低于基线（ent）
+**且**同迭代点的 `Train/mean_reward`、`Train/mean_episode_length` 不劣于基线 **且**
+s3 段（iter ≥3125）的"合计摔倒"（`bad_orientation_2 + root_height_below_minimum`）不高于基线。
+
+**运行经验（同一台 A4000，16 GB）**：两个 Isaac 训练**同时**跑会把每个的 collection time
+从 ~1.9 s 抬到 ~7.6 s/iter（互相拖累，总吞吐也不划算）⇒ **串行跑**；
+机器有其他负载时单跑也可能只有 ~5.5 s/iter（实测 19:00 前后）。
 
 ### DEF-023 `2026-09-20` P1-1「训练退化」归因：`noise_std` 是**饱和平台**、`error_vel_xy` 是**命令课程漂移**
 

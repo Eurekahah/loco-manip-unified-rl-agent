@@ -99,6 +99,20 @@ class RslRlPpoActorCriticHistoryCfg(RslRlPpoActorCriticCfg):
     privileged_encoder_hidden_dims: tuple[int, ...] = MISSING
     """特权信息编码器的隐藏层维度。"""
 
+    max_noise_std: float = 0.0
+    """探索噪声（动作标准差）的上界；**0（默认）= 不限制**，即旧行为。
+
+    P1-1（见 docs/review/DEFECT_LOG_zh.md DEF-023）：`entropy_coef` 的熵奖励 + 无上界的
+    `log_std` 会把 `Policy/mean_noise_std` 顶到 ~1.5 并停在那，同时 adaptive 调度把学习率
+    压到 1e-5（高熵 + 低学习率，精度上界被压住）。设成 1.2 之类可给探索噪声封顶：
+    采样处 clamp + 每次 `optimizer.step()` 后把参数投影回可行域（`ActorCriticHistory.clamp_noise_std_`）。
+
+    注意：这里不用 `float | None` —— IsaacLab 的 `update_class_from_dict` 是按**当前值的类型**
+    校验 hydra 覆盖的（`value is None or isinstance(value, type(obj_mem))`），默认 None 会让
+    `agent.policy.max_noise_std=1.2` 报 "Incorrect type ... Expected NoneType"。
+    用法：`python .../train.py --task ... agent.policy.max_noise_std=1.2`
+    """
+
 @configclass
 class RslRlPpoAlgorithmHistoryCfg(RslRlPpoAlgorithmCfg):
     """PPORoA 专用的配置,在原配置基础上新增字段。"""
