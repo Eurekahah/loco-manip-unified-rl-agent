@@ -70,15 +70,27 @@ history 的 70 维 = `base_ang_vel(3) + projected_gravity(3) + joint_pos(24) + j
 **这一步是必做项**（部署 / sim2sim / 高层 replay 都只认部署态策略）。
 
 ```bash
-# 导出成高层 replay / 部署能直接加载的 TorchScript（纯 torch，不用起仿真）
+# 导出成高层 replay / 部署能直接加载的 TorchScript + ONNX（纯 torch，不用起仿真）
 # 训练结束时 train.py 会把这条命令连同 run 目录一起打印出来，可直接复制。
 python scripts/reinforcement_learning/rsl_rl/export_deploy_policy.py \
     --run logs/rsl_rl/history_adaptation/<你的时间戳> --checkpoint model_19999.pt
 ```
 
-默认写到 **`<run>/exported_deploy/{policy.pt,policy_layout.json}`**
+默认写到 **`<run>/exported_deploy/{policy.pt,policy.onnx,policy_layout.json}`**
 （`kind=history, policy_obs_dim=83, history_single_step_dim=70, history_length=10, action_dim=16`）。
-导出时脚本会自检 scripted 与 `ActorCriticHistory.act_inference` 的数值一致性（应为 0）。
+导出时会自检：scripted ↔ eager、scripted ↔ `ActorCriticHistory.act_inference`（都应为 0），
+以及 ONNX ↔ TorchScript 的相对误差（fp32 舍入量级，~1e-07）。
+
+ONNX 的接口与 `policy.pt` 一致（`--no-onnx` 可跳过、`--opset` 改 opset，默认 17）：
+
+```
+输入: policy_obs   (batch, 83)      输入: history_flat (batch, 700)  = 10 步 x 70 维，最旧→最新
+输出: action       (batch, 16)
+```
+
+batch 维是动态的（部署时通常是 1）。`history_flat` 需要**调用方自己维护环形缓冲**：
+每步 70 维 = `base_ang_vel(3) + projected_gravity(3) + joint_pos(24) + joint_vel(24) + last_action(16)`，
+reset 后第一次推进用整窗填满同一帧（详见 `policy_layout.json` 的 `history_note`）。
 
 ⚠️ 两个必须区分的目录：
 

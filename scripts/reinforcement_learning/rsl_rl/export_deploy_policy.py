@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Deep Robotics
 # SPDX-License-Identifier: BSD-3-Clause
 #
-"""把低层 checkpoint 导出成「高层 replay 可直接加载」的 TorchScript 部署策略。
+"""把低层 checkpoint 导出成「高层 replay / sim2sim / 部署」可直接加载的部署策略。
 
 为什么需要它
 ------------
@@ -17,7 +17,15 @@ actor 的输入是 ``policy_obs + latent``，而 latent 由**另一个模块**
         latent = history_encoder(history_flat)     # history_length 步展平
         return actor(cat([policy_obs, latent], -1))
 
-同时写 ``policy_layout.json`` 描述需要的输入维度，让 replay 侧显式校验而不是猜。
+产物（默认写到 ``<run>/exported_deploy/``）：
+
+* ``policy.pt`` —— TorchScript（高层 replay 用它，单/双输入按 ``kind`` 分支）；
+* ``policy.onnx`` —— ONNX（部署 / sim2sim；batch 维是动态的，输入输出同名同序）；
+* ``policy_layout.json`` —— 输入维度与顺序，让 replay / 部署侧**显式校验**而不是猜。
+
+导 ONNX 时会做三步自检：``onnx.checker``、onnxruntime 与 TorchScript 的逐数值对比
+（最大绝对误差，默认要求 < 1e-5）、以及 batch=1/5 两种输入形状的动态维验证。
+没有装 ``onnx``/``onnxruntime`` 时跳过并打印提示（用 ``--no-onnx`` 可静默跳过）。
 
 用法
 ----
@@ -26,6 +34,9 @@ actor 的输入是 ``policy_obs + latent``，而 latent 由**另一个模块**
         --checkpoint model_7500.pt
 
 不传 ``--checkpoint`` 时取该 run 里迭代号最大的一个。**不需要启动 Isaac Sim**（纯 torch）。
+
+部署侧要点：``history_flat`` 由调用方自己维护的 10 步环形缓冲拼成，
+顺序是**最旧 → 最新**（IsaacLab ``CircularBuffer`` 的顺序），每步 70 维。
 """
 
 from __future__ import annotations
@@ -222,6 +233,134 @@ def _latest_checkpoint(run_dir: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# ONNX 导出
+# ---------------------------------------------------------------------------
+
+
+def _dummy_inputs(layout: dict, batch: int) -> tuple[torch.Tensor, ...]:
+    """按 layout 造一组确定性输入（导出与自检都用它，保证可比）。"""
+    g = torch.Generator().manual_seed(0)
+    po = torch.randn(batch, layout["policy_obs_dim"], generator=g)
+    if layout["kind"] != "history":
+        return (po,)
+    hf = torch.randn(
+        batch, layout["history_length"] * layout["history_single_step_dim"], generator=g
+    )
+    return (po, hf)
+
+
+def onnx_io_spec(layout: dict) -> tuple[list[str], list[str], dict]:
+    """ONNX 的输入名 / 输出名 / 动态轴（batch 动态，其余固定）。"""
+    input_names = ["policy_obs"]
+    dynamic_axes = {"policy_obs": {0: "batch"}, "action": {0: "batch"}}
+    if layout["kind"] == "history":
+        input_names.append("history_flat")
+        dynamic_axes["history_flat"] = {0: "batch"}
+    return input_names, ["action"], dynamic_axes
+
+
+def export_onnx(scripted, layout: dict, onnx_path: str, *, opset: int) -> dict:
+    """导出 ONNX 并自检；返回写进 ``policy_layout.json`` 的 ``onnx`` 段。
+
+    自检三步：① ``onnx.checker`` 结构校验；② onnxruntime 与 TorchScript 逐数值对比；
+    ③ batch=1 / batch=5 的动态维验证（部署时 batch 常常是 1）。
+    """
+    try:
+        import onnx
+        import onnxruntime as ort
+    except ImportError as e:
+        raise RuntimeError(
+            f"导 ONNX 需要 onnx + onnxruntime（{e}）；装好后重跑，或用 --no-onnx 跳过。"
+        ) from e
+
+    input_names, output_names, dynamic_axes = onnx_io_spec(layout)
+    dummy = _dummy_inputs(layout, batch=2)
+    torch.onnx.export(
+        scripted,
+        dummy,
+        onnx_path,
+        input_names=input_names,
+        output_names=output_names,
+        dynamic_axes=dynamic_axes,
+        opset_version=opset,
+        do_constant_folding=True,
+    )
+    onnx.checker.check_model(onnx_path)
+
+    # ② 与 TorchScript 逐数值对比（同一组随机输入）
+    #    判据用**相对**误差：低层策略输出没归一化（实测 |a| 最大 ~184），
+    #    拿绝对误差当阈值会把纯 fp32 舍入（1.9e-07）误判成"不一致"。
+    sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+    feed = {n: t.numpy() for n, t in zip(input_names, dummy)}
+    with torch.no_grad():
+        ref = scripted(*dummy).numpy()
+    got = sess.run(output_names, feed)[0]
+    max_diff = float(abs(got - ref).max())
+    ref_scale = max(1.0, float(abs(ref).max()))
+    rel_diff = max_diff / ref_scale
+    if rel_diff > 1e-5:
+        raise RuntimeError(
+            f"ONNX 与 TorchScript 不一致：最大绝对误差 {max_diff:.3e}"
+            f"（相对 {rel_diff:.3e}，参考输出幅值 {ref_scale:.3f}）"
+        )
+    print(
+        f"[export] onnx vs torchscript 最大误差: {max_diff:.3e} "
+        f"(相对 {rel_diff:.2e}，输出幅值 {ref_scale:.3f})  (opset={opset})"
+    )
+
+    # ③ 动态 batch：1 与 5 都跑一遍
+    dyn_ok = {}
+    for b in (1, 5):
+        probe = _dummy_inputs(layout, batch=b)
+        got_b = sess.run(output_names, {n: t.numpy() for n, t in zip(input_names, probe)})[0]
+        with torch.no_grad():
+            ref_b = scripted(*probe).numpy()
+        dyn_ok[b] = (
+            tuple(got_b.shape),
+            float(abs(got_b - ref_b).max()),
+            float(abs(got_b - ref_b).max()) / max(1.0, float(abs(ref_b).max())),
+        )
+    print(
+        "[export] 动态 batch 检查: "
+        + "  ".join(
+            f"B={b}->{shape}(err {err:.3e}/rel {rel:.2e})"
+            for b, (shape, err, rel) in dyn_ok.items()
+        )
+    )
+
+    return {
+        "file": os.path.basename(onnx_path),
+        "opset": opset,
+        "inputs": [
+            {"name": n, "shape": ["batch"] + list(dummy[i].shape[1:])}
+            for i, n in enumerate(input_names)
+        ],
+        "outputs": [{"name": output_names[0], "shape": ["batch", layout["action_dim"]]}],
+        "dynamic_axes": {"batch": "所有输入/输出的第 0 维（部署时通常是 1）"},
+        "max_abs_diff_vs_torchscript": max_diff,
+        "max_rel_diff_vs_torchscript": rel_diff,
+        "tolerance": "相对误差 < 1e-5（判据按输出幅值归一，见本文件脚本注释）",
+        "verified_batches": {str(b): list(shape) for b, (shape, _, _) in dyn_ok.items()},
+        "runtime": f"onnxruntime {ort.__version__} / onnx {onnx.__version__}",
+    }
+
+
+def _history_order_note(layout: dict) -> dict:
+    """给部署侧看的 history 语义（拼错顺序 = 静默算错）。"""
+    if layout["kind"] != "history":
+        return {}
+    return {
+        "history_order": "oldest -> newest",
+        "history_note": (
+            f"history_flat = {layout['history_length']} x {layout['history_single_step_dim']} 展平，"
+            "由调用方自己维护的环形缓冲按『最旧→最新』拼接（每步 "
+            "[base_ang_vel3, projected_gravity3, joint_pos24, joint_vel24, last_action16]）；"
+            "reset 后第一次推进时用整窗填满同一帧。"
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 
 
 def _cross_check_with_rsl_rl(sd, policy_cfg, layout, scripted, activation) -> None:
@@ -301,6 +440,13 @@ def main() -> int:
         help="默认 <run>/exported_deploy"
         "（**不要**用 play.py 的 <run>/exported：那里是 actor-only，缺 history encoder）",
     )
+    parser.add_argument(
+        "--onnx",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="同时导出 policy.onnx（默认开；--no-onnx 跳过）",
+    )
+    parser.add_argument("--opset", type=int, default=17, help="ONNX opset 版本（默认 17）")
     args = parser.parse_args()
 
     run_dir = args.run
@@ -337,9 +483,6 @@ def main() -> int:
     scripted = torch.jit.script(module)
     policy_path = os.path.join(out_dir, "policy.pt")
     scripted.save(policy_path)
-    layout_path = os.path.join(out_dir, "policy_layout.json")
-    with open(layout_path, "w", encoding="utf-8") as f:
-        json.dump(layout, f, indent=2, ensure_ascii=False)
 
     print(f"[export] checkpoint  : {ckpt_path} (iter={layout['source_iteration']})")
     print(f"[export] kind        : {layout['kind']}")
@@ -348,7 +491,6 @@ def main() -> int:
              if layout["kind"] == "history" else ""))
     print(f"[export] 输出维度    : action={layout['action_dim']}")
     print(f"[export] 写出        : {policy_path}")
-    print(f"[export] 写出        : {layout_path}")
 
     torch.manual_seed(0)
     if layout["kind"] == "history":
@@ -365,6 +507,21 @@ def main() -> int:
         raise RuntimeError("TorchScript 导出与 eager 前向不一致")
 
     _cross_check_with_rsl_rl(sd, policy_cfg, layout, scripted, layout["activation"])
+
+    # ONNX：自检放在写 json 之前，保证 json 里记录的结论是"已经验过"的
+    if args.onnx:
+        onnx_path = os.path.join(out_dir, "policy.onnx")
+        layout["onnx"] = export_onnx(scripted, layout, onnx_path, opset=args.opset)
+        print(f"[export] 写出        : {onnx_path}")
+    else:
+        print("[export] 跳过 ONNX（--no-onnx）")
+    layout.update(_history_order_note(layout))
+
+    # json 最后写：包含上面所有检查的结论 + ONNX 段
+    layout_path = os.path.join(out_dir, "policy_layout.json")
+    with open(layout_path, "w", encoding="utf-8") as f:
+        json.dump(layout, f, indent=2, ensure_ascii=False)
+    print(f"[export] 写出        : {layout_path}")
     return 0
 
 
