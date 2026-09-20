@@ -10,13 +10,14 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
         并需要 escalate 才能 checkout/commit/push；`git checkout` 可能被"stat-dirty 的假 M"挡住，
         确认内容一致（git hash-object == rev-parse HEAD:path）后用 `git checkout -f`）
 
-【当前状态】main = 498e847（**低层 + 高层都已并入 main，P0 已清空**）：
+【当前状态】main = e78d479（**低层 + 高层都已并入 main，P0 已清空**）：
   7ff5b86 fix(lowlevel): root_height 专项（低位锚点 / height_range 0.55 / 扰动课程 / 稳态指标）
   129848e merge(highlevel): P0-1 第一步 —— replay 布局 / L2 / ll_command / ee_command / history
   af4602d merge(highlevel): P0-1 第二步 —— ⑦ checkpoint 路径参数化 + ⑧ 懒加载低层 cfg
   07601e9 merge(highlevel): P0-1 第三步 —— ⑤ 的 R1（抽 LowLevelPolicyActionBase + 迁移 nav）
   30d5411 / 0772757 docs: 删掉分支带来的旧 docs/review/*.md（含 Windows 大小写冲突那个）
   498e847 feat(tool): P0-2 部署态导出固化（默认 exported_deploy/ + train 收尾提示 + 训练说明）
+  e78d479 docs: P0 收尾（TODO 清空 P0 / DONE 第五节 / DEFECT_LOG DEF-018·019）
   ⇒ main 上 4 个低层任务 + 4 个高层任务 2 iter 全部 EXIT=0（高层 reward 1.11/1.28/0.15/10.25）。
   ⇒ 合并冲突的两处解法见 DEFECT_LOG_zh.md DEF-018（大小写路径）/ DEF-019（⑦⑧ × R1）。
 
