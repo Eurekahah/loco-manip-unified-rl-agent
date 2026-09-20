@@ -18,6 +18,17 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import check_file_path, read_file
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
 from isaaclab.managers import SceneEntityCfg
+from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import (
+    build_low_level_obs_manager,
+    build_low_level_observation_group,
+    build_history_window,
+    check_low_level_action_cfgs,
+    expected_policy_obs_dim,
+    push_ee_target_to_ik,
+    resolve_layout,
+    run_low_level_policy,
+    verify_low_level_layout,
+)
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -78,6 +89,18 @@ class PreTrainedPickAction(ActionTerm):
 
         self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
 
+        # ── ll_command：给外部（奖励项 / 低层观测 / IK）读的"高层下发的命令" ──
+        # 语义与 PreTrainedPickWBCAction / TeleopLLAction 一致：
+        #   [vx, vy, wz, ee_pos_b(3), ee_quat_b(4)]      ← root 系（规范形式）
+        # 另存一份世界系副本给需要世界系的消费者（奖励项要和物体世界坐标比较）：
+        #   [vx, vy, wz, ee_pos_w(3), ee_quat_w(4)]
+        # 本类内部的位置增量仍在世界系里累积（见 _target_pos_w），root 系那一份在
+        # 每次 process_actions 末尾由世界系目标换算得到。
+        # 注意：必须在构造低层观测组之前分配 —— 观测组的 lambda 会立刻被
+        # ObservationManager 调用一次来推断维度。
+        self._ll_command = torch.zeros(self.num_envs, 10, device=self.device)
+        self._ll_command_w = torch.zeros(self.num_envs, 10, device=self.device)
+
         # 分别初始化三个 low level action term
         self._joint_pos_action_term: ActionTerm = cfg.low_level_leg_actions.class_type(
             cfg.low_level_leg_actions, env
@@ -89,11 +112,30 @@ class PreTrainedPickAction(ActionTerm):
             cfg.low_level_ee_actions, env
         )
 
-        # 各自的动作维度
-        self._joint_pos_dim = self._joint_pos_action_term.action_dim
-        self._wheel_vel_dim = self._wheel_vel_action_term.action_dim
-        self._ee_ik_dim = self._ee_ik_action_term.action_dim
-        
+        # ── 低层 replay 布局（清单 ④⑤⑥⑯）──────────────────────────────
+        # 布局描述「产生该 checkpoint 的那次低层训练」的动作分块与观测列顺序。
+        # scale / clip / 关节名单的唯一来源是低层 action cfg（cfg.low_level_*_actions），
+        # 这里只做一致性校验，不再手抄，也不再事后给 action term 赋值
+        # （JointAction 在 __init__ 里就把 cfg 编译成内部张量，事后赋值无效）。
+        self._layout = resolve_layout(
+            robot=self.robot,
+            low_level_obs_cfg=cfg.low_level_observations,
+            low_level_leg_cfg=cfg.low_level_leg_actions,
+            low_level_wheel_cfg=cfg.low_level_wheel_actions,
+            declared_ee_action_dim=cfg.ee_action_dim,
+            actual_ee_ik_action_dim=self._ee_ik_action_term.action_dim,
+            tag=type(self).__name__,
+        )
+        check_low_level_action_cfgs(
+            tag=type(self).__name__,
+            layout=self._layout,
+            leg_cfg=cfg.low_level_leg_actions,
+            wheel_cfg=cfg.low_level_wheel_actions,
+        )
+
+        self._joint_pos_dim = self._layout.leg_dim
+        self._wheel_vel_dim = self._layout.wheel_dim
+        self._ee_ik_dim = self._layout.ee_action_dim
 
         self.low_level_leg_actions = torch.zeros(
             self.num_envs, self._joint_pos_dim, device=self.device
@@ -105,48 +147,66 @@ class PreTrainedPickAction(ActionTerm):
             self.num_envs, self._ee_ik_dim, device=self.device
         )
 
-        self._joint_pos_action_term.scale = {".*_hipx_joint": 0.125, '^(?!.*_hipx_joint)(?!.*arm_joint).*': 0.25}
-        self._wheel_vel_action_term.scale = 20.0
-        self._joint_pos_action_term.clip = {".*": (-100.0, 100.0)}
-        self._wheel_vel_action_term.clip = {".*": (-100.0, 100.0)}
-        self._joint_pos_action_term.joint_names = self.leg_joint_names 
-        self._wheel_vel_action_term.joint_names = self.wheel_joint_names
-
         def last_action():
-            if hasattr(env, "episode_length_buf"):
-                reset_mask = env.episode_length_buf == 0
-                self.low_level_leg_actions[reset_mask, :] = 0
-                self.low_level_wheel_actions[reset_mask, :] = 0
-                self.low_level_ee_actions[reset_mask, :] = 0
-                self._raw_actions[reset_mask, :] = 0
-            # 拼接两个 action term 的输出，供 low-level obs 使用
-            return torch.cat([self.low_level_leg_actions, self.low_level_wheel_actions, self.low_level_ee_actions], dim=-1)
+            # 低层 policy 训练时的 actions 观测 = 完整动作向量 [leg | wheel | ee_ik]，
+            # 必须逐维对齐（含不再被 IK 消费的 ee_ik 槽位），见 low_level_replay.py
+            # 复位清空统一交给 LowLevelReplayState.on_tick()（原因见该类的文档字符串）；
+            # 注意 _raw_actions 也一起清（本 term 的 velocity_commands 槽位直接取自它）。
+            return torch.cat(
+                [self.low_level_leg_actions, self.low_level_wheel_actions, self.low_level_ee_actions],
+                dim=-1,
+            )
 
-        cfg.low_level_observations.actions.func = lambda dummy_env: last_action()
-        cfg.low_level_observations.actions.params = dict()
-
-        cfg.low_level_observations.velocity_commands.func = lambda dummy_env: self._raw_actions[:, :3]
-        cfg.low_level_observations.velocity_commands.params = dict()
-
-        cfg.low_level_observations.ee_goal.func = lambda dummy_env: self._raw_actions[:, 3:10]
-        cfg.low_level_observations.ee_goal.params = dict()
-
-        cfg.low_level_observations.joint_pos.func = mdp.joint_pos_rel_without_wheel
-        cfg.low_level_observations.joint_pos.params["wheel_asset_cfg"] = SceneEntityCfg(
-            "robot", joint_names=self.wheel_joint_names
+        self._low_level_obs_cfg = build_low_level_observation_group(
+            cfg.low_level_observations,
+            layout=self._layout,
+            actions_fn=lambda dummy_env: last_action(),
+            velocity_commands_fn=lambda dummy_env: self._raw_actions[:, :3],
+            # 低层 policy 训练时的 ee_goal = HeightInvariantEECommand.pose_command_b（root 系）；
+            # 回放必须喂 root 系（ll_command 的前 10 维就是它），不能喂世界系目标。
+            ee_goal_fn=lambda dummy_env: self._ll_command[:, 3:10],
         )
-        # cfg.low_level_observations.base_lin_vel.scale = 2.0
-        cfg.low_level_observations.base_ang_vel.scale = 0.25
-        cfg.low_level_observations.joint_pos.scale = 1.0
-        cfg.low_level_observations.joint_vel.scale = 0.05
-        cfg.low_level_observations.base_lin_vel = None
-        cfg.low_level_observations.height_scan = None
-        cfg.low_level_observations.joint_pos.params["asset_cfg"].joint_names = self.joint_names
-        cfg.low_level_observations.joint_vel.params["asset_cfg"].joint_names = self.joint_names
         # 在 __init__ 末尾添加，提前缓存引用避免每步查找
         self._ee_command_term = env.command_manager.get_term(cfg.ee_command_name)
-
-        self._low_level_obs_manager = ObservationManager({"ll_policy": cfg.low_level_observations}, env)
+        # 按 checkpoint 的实际观测维度决定要不要喂 ee_goal（低层 cfg 与 checkpoint
+        # 必须一致，不一致直接报错，不做猜测性拼凑）
+        self._expected_ll_obs_dim, self._policy_layout_json = expected_policy_obs_dim(
+            self.policy, cfg.policy_path, tag=type(self).__name__
+        )
+        self._low_level_obs_manager, self._low_level_obs_cfg, self._ll_used_ee_goal = (
+            build_low_level_obs_manager(
+                env=env,
+                obs_cfg=self._low_level_obs_cfg,
+                group_name="ll_policy",
+                expected_obs_dim=self._expected_ll_obs_dim,
+                tag=type(self).__name__,
+            )
+        )
+        verify_low_level_layout(
+            tag=type(self).__name__,
+            robot=self.robot,
+            layout=self._layout,
+            obs_manager=self._low_level_obs_manager,
+            group_name="ll_policy",
+            policy=self.policy,
+            expected_obs_dim=self._expected_ll_obs_dim,
+            policy_layout_json=self._policy_layout_json,
+        )
+        # 回放侧的低层 tick 状态：复位检测 + 低层动作缓存清零 + （history 策略时的）10 步窗口
+        self._ll_replay_state = build_history_window(
+            env=env,
+            layout=self._layout,
+            policy_layout_json=self._policy_layout_json,
+            last_action_fn=last_action,
+            cache_tensors=[
+                self._raw_actions,
+                self.low_level_leg_actions,
+                self.low_level_wheel_actions,
+                self.low_level_ee_actions,
+            ],
+            asset_name=cfg.asset_name,
+            tag=type(self).__name__,
+        )
         self._counter = 0
 
         # ── 增量模式：缓存上一时刻的目标位姿（world 系） ──────────────────────
@@ -181,6 +241,42 @@ class PreTrainedPickAction(ActionTerm):
     @property
     def processed_actions(self) -> torch.Tensor:
         return self.raw_actions
+
+    @property
+    def ll_command(self) -> torch.Tensor:
+        """高层下发给低层的命令，**root 系**（规范形式）。
+
+        形状 ``(N, 10)``：``[vx, vy, wz, ee_pos_b(3), ee_quat_b(4)]``。
+        与 ``PreTrainedPickWBCAction`` / ``TeleopLLAction`` 的 ``ll_command`` 前 10 维同义，
+        便于低层观测与 IK 直接使用（IK 吃 root 系目标）。
+        """
+        return self._ll_command
+
+    @property
+    def ll_command_w(self) -> torch.Tensor:
+        """同一命令的**世界系**副本，形状 ``(N, 10)``。
+
+        奖励项里需要拿 EE 目标位置和物体的世界坐标比较时用它
+        （``ll_command[:, 3:6]`` 是 root 系，直接和世界坐标比会算错）。
+        """
+        return self._ll_command_w
+
+    def _update_ll_command(self):
+        """从本步的世界系目标换算 root 系命令，并刷新两份缓冲区。"""
+        root_pos_w = self.robot.data.root_pos_w
+        root_quat_w = self.robot.data.root_quat_w
+        pos_b, quat_b = math_utils.subtract_frame_transforms(
+            root_pos_w, root_quat_w, self._target_pos_w, self._target_quat_w
+        )
+
+        # 线/角速度指令与坐标系无关
+        self._ll_command[:, 0:3] = self._raw_actions[:, 0:3]
+        self._ll_command_w[:, 0:3] = self._raw_actions[:, 0:3]
+        # EE 目标：root 系（规范）与世界系副本
+        self._ll_command[:, 3:6] = pos_b
+        self._ll_command[:, 6:10] = quat_b
+        self._ll_command_w[:, 3:6] = self._target_pos_w
+        self._ll_command_w[:, 6:10] = self._target_quat_w
 
     """
     Operations.
@@ -296,6 +392,8 @@ class PreTrainedPickAction(ActionTerm):
         self._raw_actions[:, 3:6]  = self._target_pos_w
         self._raw_actions[:, 6:10] = self._target_quat_w
         # 位置直接保留 step 3 写入的 world 坐标，无需再变换
+        # 刷新 ll_command（root 系规范 + 世界系副本）
+        self._update_ll_command()
         
 
     def apply_actions(self):
@@ -308,23 +406,24 @@ class PreTrainedPickAction(ActionTerm):
 
         
         if self._counter % self.cfg.low_level_decimation == 0:
+            # 低层 tick：先复位处理 + 推 history 帧，再算观测/跑策略（顺序不能反）
+            history_flat = self._ll_replay_state.on_tick()
             low_level_obs = self._low_level_obs_manager.compute_group("ll_policy")
 
             # policy 输出切分给3个 action term
-            policy_output = self.policy(low_level_obs)
-            self.low_level_leg_actions[:] = policy_output[:, :self._joint_pos_dim]
-            self.low_level_wheel_actions[:] = policy_output[:, self._joint_pos_dim:self._joint_pos_dim + self._wheel_vel_dim]
-            self.low_level_ee_actions[:] = policy_output[:, self._joint_pos_dim + self._wheel_vel_dim:self._joint_pos_dim + self._wheel_vel_dim + self._ee_ik_dim]
-            # 在 apply_actions 里写入 command 之前
-            # target_pos  = self._raw_actions[:, 3:6]    # (num_envs, 3)
-            # target_quat = self._raw_actions[:, 6:10]   # (num_envs, 4)  qw, qx, qy, qz
-
-            # # 归一化，防止非单位四元数导致坐标轴歪斜
-            # target_quat = torch.nn.functional.normalize(target_quat, p=2, dim=-1)
-
-            # self._ee_command_term.pose_command_w[:, 0:3] = target_pos
-            # self._ee_command_term.pose_command_w[:, 3:7] = target_quat
-            self._ee_command_term.pose_command_w[:] = self._raw_actions[:, 3:10] # 更新 CommandManager 中的 ee_pose 命令，供 IK controller 使用
+            policy_output = run_low_level_policy(self.policy, low_level_obs, history_flat)
+            leg, wheel, ee = self._layout.split(policy_output)
+            self.low_level_leg_actions[:] = leg
+            self.low_level_wheel_actions[:] = wheel
+            self.low_level_ee_actions[:] = ee
+            # 把高层目标写给 IK：IK（CommandDrivenIKAction）读的是
+            # command_manager.get_command("ee_pose") == HeightInvariantEECommand.pose_command_b，
+            # 它是 **root 系**目标（与 DifferentialIKController 的误差计算同系）。
+            # 之前写的是 pose_command_w —— 那个字段只被父类 _update_metrics/debug vis 用，
+            # 写进去等于没写，IK 一直在跟 command 自己采样出来的随机目标。
+            push_ee_target_to_ik(
+                self._ee_command_term, self._ll_command[:, 3:10], tag=type(self).__name__
+            )
 
             self._joint_pos_action_term.process_actions(self.low_level_leg_actions)
             self._wheel_vel_action_term.process_actions(self.low_level_wheel_actions)
@@ -390,9 +489,9 @@ class PreTrainedPickAction(ActionTerm):
         self.base_vel_visualizer.visualize(base_pos_w, vel_arrow_quat, vel_arrow_scale)
 
         # ── ee_pose 目标可视化 ✅ ──────────────────────────────────────
-        # raw_actions[:, 3:10] = [x, y, z, qw, qx, qy, qz]
-        ee_goal_pos  = self.raw_actions[:, 3:6]   # (N, 3)
-        ee_goal_quat = self.raw_actions[:, 6:10]  # (N, 4) wxyz
+        # marker 要画在世界系里，所以用 ll_command_w（ll_command 是 root 系）
+        ee_goal_pos  = self.ll_command_w[:, 3:6]   # (N, 3)
+        ee_goal_quat = self.ll_command_w[:, 6:10]  # (N, 4) wxyz
 
         # 四元数全零时（reset后还没收到命令）跳过可视化，避免除零
         valid_mask = torch.norm(ee_goal_quat, dim=-1) > 0.1
@@ -450,6 +549,15 @@ class PreTrainedPickActionCfg(ActionTermCfg):
     """Low level end-effector action configuration."""
     low_level_observations: ObservationGroupCfg = MISSING
     """Low level observation configuration."""
+    ee_action_dim: int = -1
+    """低层 checkpoint 动作输出里 IK 槽位的数量。
+
+    ``-1``（默认）= **L2**：关节列顺序与 IK 槽位数都从低层 cfg / action term 实测推导，
+    用于**用当前代码新训**的低层 checkpoint。
+    ``>=0`` = **L1**：显式声明，用于那些"当时的低层 cfg 已经变了"的旧 checkpoint
+    （旧 WBC/flat checkpoint 训练时 IK 还是普通 action term，槽位数是 7）。
+    两种模式不一致时会在建 env 阶段直接报错，不会静默跑偏。
+    """
     ee_command_name: str = "ee_pose"
     """The command name in CommandManager that this action term outputs to. Should correspond to a command in CommandsCfg."""
     debug_vis: bool = False
