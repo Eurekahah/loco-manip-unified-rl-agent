@@ -15,10 +15,139 @@
 | 2026-09-20 | 新增 DEF-019（⑦⑧ × R1 同段冲突的合并解法）、DEF-018（Windows 大小写路径冲突）；高层链并入 main | `codex/hl-merge-p0`（`af4602d`/`07601e9`/`30d5411`/`0772757`） |
 | 2026-09-20 | 新增 DEF-020：导出部署态策略时增加 ONNX（含"绝对误差阈值误判 fp32 舍入"的教训）；run `2026-09-20_00-50-31` 用 iter=19999 重新导出 | `708ca53` |
 | 2026-09-20 | 新增 DEF-021：sim2sim/sim2real 部署参考文档 + 部署规格探针（实测出"Isaac 原生关节序 ≠ MuJoCo 关节序"等关键事实） | `7458672` |
+| 2026-09-20 | 新增 DEF-022（部署基线固化：`main @ 2d49f47` + 产物 sha256 + 训练代码核对）、DEF-023（P1-1 归因：`noise_std` 是饱和平台、`error_vel_xy` 是命令课程口径产物；含 P1-2 新证据） | `summarize_run.py` 新增 |
 
 ---
 
 # 记录（新→旧）
+
+### DEF-023 `2026-09-20` P1-1「训练退化」归因：`noise_std` 是**饱和平台**、`error_vel_xy` 是**命令课程漂移**
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 诊断（训练质量 / 指标口径） |
+| 状态 | 部分已修（归因已定，A/B 修法未跑 —— 见 `TODO_zh.md` P1-1） |
+| 关联 | `scripts/reinforcement_learning/rsl_rl/summarize_run.py`（本条目新增）；run `2026-09-20_00-50-31`（A）vs `2026-09-19_09-02-50`（B）；`rsl_rl/rsl_rl/algorithms/ppo_roa.py`、`.../deeprobotics_m20/agents/rsl_rl_ppo_cfg.py:HistoryAdaptationPPORunnerCfg` |
+
+**1. 现象**
+
+TODO P1-1 原来写的是"`mean_noise_std` 1.0→~1.49、`error_vel_xy` 0.38→~0.89 长期退化"。
+本次用 `summarize_run.py` 把 20k 迭代按**课程阶段**（s0<1042、s1<2083、s2<3125、s3 之后）
+和采样网格聚合后，发现这两条曲线**形状完全不同**，不能并称"退化"：
+
+| 指标 | run A s0 / s1 / s2 / s3 | A 末 1000 | run B s0 / s1 / s2 / s3 | B 末 1000 |
+|---|---|---|---|---|
+| `Policy/mean_noise_std` | 0.973 / 1.009 / 1.132 / **1.473** | 1.477 | 1.236 / 1.332 / 1.404 / **1.505** | 1.507 |
+| `Metrics/base_velocity/error_vel_xy` | 0.525 / 0.385 / 0.457 / **0.851** | 0.891 | 0.154 / 0.274 / 0.456 / **0.768** | 0.769 |
+| `Train/mean_reward` | 24.8 / 34.6 / 43.8 / **22.9** | 23.6 | 0.98 / 4.52 / 13.96 / **17.26** | 17.83 |
+| `Train/mean_episode_length` | 921 / 960 / 968 / **910** | 917 | 216 / 455 / 710 / **777** | 768 |
+| `Episode_Termination/root_height_below_minimum` | 0.0258 / 0.0208 / 0.0275 / **0.1181** | 0.1151 | — | — |
+| `Metrics/ee_pose/orientation_error` | 0.341 / 0.325 / 0.317 / **0.852** | 0.864 | 0.844 / 0.991 / 0.957 / **0.955** | 0.964 |
+
+复现命令（A/B 一次出表，缓存命中后 <1 s）：
+
+```powershell
+python scripts/reinforcement_learning/rsl_rl/summarize_run.py `
+  --run logs/rsl_rl/history_adaptation/2026-09-20_00-50-31 `
+  --baseline logs/rsl_rl/history_adaptation/2026-09-19_09-02-50 `
+  --derive "合计摔倒=Episode_Termination/bad_orientation_2+Episode_Termination/root_height_below_minimum" `
+  --tags mean_noise_std --tags error_vel_xy --tags 合计摔倒 `
+  --tags Train/mean_reward --tags Train/mean_episode_length --tags orientation_error
+```
+
+**2. 根因**
+
+① `noise_std` 不是发散而是**有界平台**：A 在 iter≈5000 就进入 1.43~1.49 的抖动带
+（逐点 1.432/1.486/1.481/1.493/1.479/1.483/1.487/1.477），B 更早（iter=1000 已 1.278）
+并停在同一高度 1.51 —— **换掉课程/EE 改动都一样**，说明它是 optimizer 的平衡点，不是任务变难。
+机制（读码确认，不是猜）：`actor_critic_history.py:log_std` 是**无上界**自由参数，
+而 `ppo_roa.py:238` 的 `loss = surrogate + value_loss_coef*value_loss - entropy_coef*entropy`
+持续给熵**正奖励**（`entropy_coef=0.01`），`Loss/entropy` 实测 21.5→28.1 一路涨到平台；
+同时 `schedule="adaptive"`/`desired_kl=0.01` 因 KL 超标把 `Loss/learning_rate` 一路压到地板
+（s3 均值 2.3e-4、最低触到 **1e-5**）。⇒ **高熵 + 低学习率**：策略分布被撑宽、精度上界被压住，
+但训练本身没有崩（reward/ep_len 都不降）。
+
+② `error_vel_xy` 上升**与课程阶段同形**：B（当时**没有** EE 课程/root_height 改动）在同一批
+阶段上从 0.15 → 0.77 单调上升，形状与 A 一致 ⇒ 主导因素是 `base_velocity` 命令范围随课程
+放宽（终值 vx ±5 m/s），**绝对**速度误差天然变大；A 的 s3 反而比"本该更容易"的直觉更好：
+末 1000 reward **23.6 vs 17.8**、ep_len **917 vs 768**、合计摔倒 **0.122 vs 0.331**。
+⇒ 用"绝对 `error_vel_xy`"跨阶段/跨 run 判优劣是**错的口径**（这条就是 P1-1 原来的误判来源）。
+
+③ P1-2 的剩余摔倒**与臂相关**（新证据）：A 的 `root_height_below_minimum` 只在 s3 抬头
+（0.021~0.027 → 0.118），**同期** `ee_pose/orientation_error` 从 0.32 抬到 0.85
+（= s3 才放开臂的大范围摆动）；而高度跟踪的稳态偏差仍只有 1.3~1.8 cm
+（`height_error_bias_steady` 末 0.013）⇒ 是**臂摆动时倾覆**，不是高度控制失效。
+
+**3. 修正**
+
+本条目只改**口径 + 归因**（工具 `summarize_run.py`），不改训练配置；配置侧的候选修法已经
+收敛成两条，写进 `TODO_zh.md` P1-1（要 A/B）：
+① 给 `log_std` 加上界（`max_noise_std` 之类，目标平台 ≤1.2）；
+② 调低 `entropy_coef` 0.01 → 0.005/0.002（直接削弱把 std 撑大的那一项）。
+原来的"调 `body_*_rew_s3` 的 num_steps / 查 `track_lin_vel_xy_exp` 权重"两条**降级**：
+实测 `Curriculum/body_pitch_rew_s3|body_roll_rew_s3` 在 iter≈3125 就到达终值 0.8、
+`body_height_rew_s2` 在 s1 就到 0.8，与 `noise_std` 平台、`error_vel_xy` 抬升**不同期**，
+不构成解释。
+
+**4. 结果（验收）**
+
+* 工具：`summarize_run.py` 新增 run 后首次解析 70 MB 事件文件 ≈ 30~50 s，之后走
+  `<run>/.summary_cache.npz`（按事件文件 size+mtime 失效）<1 s；输出阶段均值表 +
+  采样网格表 + 两 run 对比（步进取值）。
+* 归因结论：`noise_std` = 有界平台（A/B 同形，Δ末 = −0.035）；`error_vel_xy` = 任务变难的
+  口径产物（B 同形）；P1-2 的剩余摔倒与 EE 姿态误差同期、与高度稳态误差无关。
+* 未覆盖 / 风险：`Metrics/*` 是"复位那一刻"的均值，抖动大 —— 本条目全部结论都建立在
+  **阶段均值**上，单点读数不作证据；**没有**跑新的 A/B 训练（要 GPU 时间，见 TODO P1-1）。
+
+### DEF-022 `2026-09-20` 部署基线没固化：交接 prompt 的 main 哈希滞后 + 产物无指纹
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 文档 / 交付物（部署可回溯性） |
+| 状态 | 已修 |
+| 关联 | `main @ 2d49f47`；`docs/review/DONE_zh.md` 第六节；`docs/review/NEXT_SESSION_PROMPT.md`；run `logs/rsl_rl/history_adaptation/2026-09-20_00-50-31` |
+
+**1. 现象**
+
+① `NEXT_SESSION_PROMPT.md` 的【当前状态】写的是 `main = e78d479`，但实际 main 已经走到
+`2d49f47`（`093be1a`/`79b1626`/`75bcd63`/`7458672`/`2d49f47` 五个提交之后）—— 下一个
+session 按 prompt 里的哈希去 checkout 会拿到**旧代码**（不含 ONNX 导出、部署文档、探针）。
+② "当前拿去部署的代码 + 对应哪个 run 的策略"这件事只散落在 DONE 第五节的两行里，
+没有**单一入口**，也没有产物指纹：`exported_deploy/policy.pt|onnx|policy_layout.json`
+改了/重导了没法判断。
+③ 训练代码与部署代码是否同一份，**没有核对过**：run 里的
+`git/loco-manip-unified-rl-agent.diff`（rsl_rl 启动时 dump）显示该 run 是在分支
+`codex/ll-height-stability @ 96e1b66` 上训的，工作区还有一处未提交改动。
+
+**2. 根因**
+
+prompt 里的哈希是**人肉回填**的（`093be1a` 那条提交就叫"回填 NEXT_SESSION_PROMPT 的 main
+哈希"），main 一动就滞后；"部署基线"从来没有被定义成一条**不可漂移**的记录，
+所以没人知道该拿哪个 commit 去部署。
+
+**3. 修正**
+
+① `DONE_zh.md` 新增**第六节「部署基线」**：基线 commit、对应 run、checkpoint、
+四个产物的 sha256、接口契约，并写清"基线一旦记录就不再漂"；
+② `NEXT_SESSION_PROMPT.md` 的【当前状态】改成"部署基线 = `2d49f47`（见 DONE 第六节）"，
+并加一条踩坑说明（prompt 里的哈希会滞后 ⇒ 以 DONE 第六节为准）；
+③ 核对训练代码 vs `main`：run 的未提交改动是**注释掉死代码** `FKReachableEECommand`
+（无 task/配置引用），`git diff 96e1b66 main -- <低层路径>` 只剩占位符清理
+（`body_names=""`→`None`）、`stance_width=float`→数值（weight=0）、新增启动自检
+`check_policy_layout`、注释/文档 —— **无动力学与观测布局变化**。
+
+**4. 结果（验收）**
+
+* `git rev-parse HEAD` = `2d49f47c46c4f136b47ab3983a4a690761464741`；
+  `git rev-list --left-right --count origin/main...main` = `0 0`（基线已推送）。
+* `Get-FileHash -Algorithm SHA256`：`policy.pt 43C63D19…F6510`、
+  `policy.onnx 77757542…B8D1`、`policy_layout.json 7E3B11EB…A7947`、
+  `model_19999.pt 592A50D6…AC14`（完整值见 DONE 第六节）。
+* `policy_layout.json` 自述 `source_run/source_checkpoint/source_iteration = 19999`、
+  `policy_obs 83 / history 10×70 / latent 32 / action 16 / opset 17 / 相对误差 1.87e-07`
+  ⇒ 与上面 run 一一对应，可回溯。
+* 遗留：**没有**打 tag（要写 `.git` 需提权），所以基线目前靠"commit 哈希 + 本节"固定；
+  若日后要更稳，可 `git tag deploy-baseline-2026-09-20 2d49f47`。
 
 ### DEF-021 `2026-09-20` 部署交接：sim2sim/sim2real 参考文档 + 部署规格探针
 

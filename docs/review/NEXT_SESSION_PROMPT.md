@@ -10,7 +10,14 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
         并需要 escalate 才能 checkout/commit/push；`git checkout` 可能被"stat-dirty 的假 M"挡住，
         确认内容一致（git hash-object == rev-parse HEAD:path）后用 `git checkout -f`）
 
-【当前状态】main = e78d479（**低层 + 高层都已并入 main，P0 已清空**）：
+【当前状态】**部署基线 = main @ 2d49f47**（低层 + 高层都已并入 main，P0 已清空）：
+  这个 commit 就是"现在拿去部署"的代码，对应 run
+  logs/rsl_rl/history_adaptation/2026-09-20_00-50-31 的 exported_deploy/*
+  （产物 sha256 与"训练代码 vs main"的核对见 DONE_zh.md 第六节 / DEF-022）。
+  main 之后还会继续往前走 ⇒ **部署时 checkout 2d49f47，不要用"当时的 main"**。
+  之后的提交（按时间）：
+  79b1626 docs 清悬空引用 / 708ca53 ONNX 导出（DEF-020）/ 7458672 部署文档 + probe_deploy_layout（DEF-021）
+  / 2d49f47 部署交接（DEF-021 收尾）
   7ff5b86 fix(lowlevel): root_height 专项（低位锚点 / height_range 0.55 / 扰动课程 / 稳态指标）
   129848e merge(highlevel): P0-1 第一步 —— replay 布局 / L2 / ll_command / ee_command / history
   af4602d merge(highlevel): P0-1 第二步 —— ⑦ checkpoint 路径参数化 + ⑧ 懒加载低层 cfg
@@ -40,10 +47,18 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   原文在分支上（见 TODO_zh.md 末尾"旧文档去哪了"）。
 
 【本 session 已完成 P0；下个 session 建议进 P1（训练质量）】
-  P1-1 训练稳定性：mean_noise_std 1.0→~1.49、error_vel_xy 0.38→~0.89 的长期退化（要 A/B）。
-  P1-2 s3 阶段臂扰动鲁棒性：root_height_below_minimum 在 s3 后 0.09~0.15（s0~s2 只有 0.01~0.04）。
+  P1-1 **已归因（2026-09-20，DEF-023）**：mean_noise_std 不是发散而是**有界平台**（新 run s0~s3
+      0.973/1.009/1.132/1.473，旧 run 1.236→1.505，Δ末 -0.035）⇒ 机制是"log_std 无上界 +
+      entropy_coef=0.01 的熵奖励 + adaptive 调度把 LR 压到 1e-5"；error_vel_xy 的上升**与命令
+      课程同形**（旧 run 0.15→0.77 也升）⇒ 是口径产物，不是退化（新 run 末 1000 reward 23.6 vs 17.8、
+      ep_len 917 vs 768、合计摔倒 0.122 vs 0.331）。**待做**：配置侧 A/B（log_std 上界 / entropy_coef
+      降到 0.005~0.002，~5k iter 即可看出平台），验收口径已改成"平台 ≤1.2 + 固定命令 eval"。
+  P1-2 s3 阶段臂扰动鲁棒性：root_height_below_minimum s0~s2 = 0.021~0.027 → **s3 = 0.118**，
+      同期 ee_pose/orientation_error 0.32 → 0.85、height_error_bias_steady 全程仅 1.3~1.8 cm
+      ⇒ 剩余摔倒是"臂摆动时倾覆"（bad_orientation_2 在 s3 反而降到 0.014，所以要看合计 0.1325）。
   P1-3 低层 known_issues 剩余条目（①⑧⑩⑪⑫⑬⑭⑮⑱，清单见 TODO_zh.md P1）。
   之后：P2（高层迁移到基类 + 工程债）、P3（回归矩阵脚本化 / summarize_run.py / 文档收尾）。
+  ※ P3 的 summarize_run.py **已做完**（本轮）：阶段均值 + 采样网格 + 两 run 对比 + `--derive`。
 
 【命令备忘】
   # 部署（sim2sim/MuJoCo → sim2real）先看 docs/deploy_sim2sim_sim2real_zh.md（DEF-021）
@@ -59,6 +74,14 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   # 导出部署态策略（默认写 <run>/exported_deploy/：policy.pt + policy.onnx + policy_layout.json）
   python scripts/reinforcement_learning/rsl_rl/export_deploy_policy.py \
       --run logs/rsl_rl/history_adaptation/<run> --checkpoint model_19999.pt   # --no-onnx / --opset 可选
+  # 训练曲线分析（不启动 Isaac；首次解析 30~50 s，之后走 <run>/.summary_cache.npz，<1 s）
+  python scripts/reinforcement_learning/rsl_rl/summarize_run.py \
+      --run logs/rsl_rl/history_adaptation/2026-09-20_00-50-31 --list-tags      # 先看有哪些 tag
+  python scripts/reinforcement_learning/rsl_rl/summarize_run.py \
+      --run logs/rsl_rl/history_adaptation/2026-09-20_00-50-31 \
+      --baseline logs/rsl_rl/history_adaptation/2026-09-19_09-02-50 \
+      --derive "合计摔倒=Episode_Termination/bad_orientation_2+Episode_Termination/root_height_below_minimum" \
+      --tags mean_noise_std --tags error_vel_xy --tags 合计摔倒 --tags Train/mean_reward
   # 诊断探针
   python scripts/reinforcement_learning/rsl_rl/probe_root_height_termination.py \
       --task History-Adaptation-Deeprobotics-M20-v0 --headless --num_envs 512 --steps 1000 \
@@ -67,6 +90,14 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
       --task Flat-Deeprobotics-M20-Piper-WBC-v0 --headless --num_envs 16 --steps 150
 
 【踩坑备忘（累计）】
+  * **本文件里的 main 哈希会滞后**（人肉回填，main 一动就旧）：要"拿去部署的那份代码"一律看
+    docs/review/DONE_zh.md 第六节「部署基线」（现在 = 2d49f47 + run 2026-09-20_00-50-31 的导出物指纹）。
+  * run 目录里有 rsl_rl 自动 dump 的 `<run>/git/loco-manip-unified-rl-agent.diff`（训练启动时的
+    branch + 工作区改动）——这是"这个 checkpoint 是哪份代码训的"的**唯一证据**，迁移/重训前先看它。
+    实测 2026-09-20_00-50-31 = 分支 codex/ll-height-stability @ 96e1b66 + 注释掉死代码
+    FKReachableEECommand；与 main 的差异只有占位符清理/启动自检（无动力学变化），见 DEF-022。
+  * `Metrics/*` 全是"复位那一刻"的均值，单点抖动很大（同一阶段逐点能差 0.2）——判趋势用
+    summarize_run.py 的**阶段均值**，不要看单迭代数字。
   * **关节顺序有三套**（部署最容易错）：① 动作序 = 12 腿(fl,fr,hl,hr) + 4 轮；
     ② articulation 原生序（观测 joint_pos/joint_vel 的 24 维）= 四个 hipx → arm1 → 四个 hipy
     → arm2 → 四个 knee → arm3 → 四个 wheel(15..18) → arm4-6 → 夹爪；③ MuJoCo MJCF 序 =

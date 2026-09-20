@@ -12,6 +12,7 @@
 |---|---|---|
 | 2026-09-20 | 初版：合并 6 份旧文档里的"已修"条目；记录低层内容并入 main | `main @ 7ff5b86` |
 | 2026-09-20 | 新增第五节：高层链并入 `main`（4 个高层任务 2 iter 全 EXIT=0）+ 导出部署态策略固化成流程；第二节标题去掉"未合并 main" | `codex/hl-merge-p0`（`129848e`/`af4602d`/`07601e9`/`0772757`） |
+| 2026-09-20 | 新增第六节 **部署基线**：`main @ 2d49f47` = 部署口径代码，对应 run `2026-09-20_00-50-31` 的 `exported_deploy/*`（含 sha256 与"训练代码 vs main"的差异核对） | `2d49f47` |
 
 ---
 
@@ -60,6 +61,10 @@
   history 窗口/`ll_command` 辅助）。
 * `mdp.check_policy_layout`（低层 startup 事件）：打印观测/动作布局并断言
   "`actions` 槽位宽度 == 动作总维度"。
+* `summarize_run.py`（2026-09-20 新增）：把 run 的 tensorboard 标量压成
+  "关键指标 × 课程阶段 / × 迭代采样"表，支持两 run 对齐对比；`--derive` 可把终止项
+  求和（"合计摔倒"）；首次解析 70 MB 事件文件 30~50 s，之后走 `<run>/.summary_cache.npz`。
+  用它做完了 P1-1 归因与 P1-2 证据（`DEFECT_LOG_zh.md` DEF-023）。
 
 ## 五、高层链并入 `main`（P0-1）+ 导出流程固化（P0-2）
 
@@ -71,3 +76,47 @@
 | 2026-09-20 | **P0-2 导出流程固化**：`export_deploy_policy.py` 默认输出目录 `<run>/exported` → **`<run>/exported_deploy`**（并把 actor-only 陷阱写成显式警告）；`train.py` 训练结束打印可直接复制的导出命令；`docs/train_history_flat_zh.md` 补"训练完成后"章节 + 修正"高层 replay 还不支持 history"的过时说明 | `2026-09-20_00-50-31/model_15000.pt` 实测导出 `exported_deploy/{policy.pt 1001636 B, policy_layout.json}`：scripted vs eager **0.000e+00**、与 `ActorCriticHistory.act_inference` 交叉校验 **0.000e+00**、`kind=history / policy_obs_dim=83 / 10×70 / latent32 / action16` | `498e847` |
 | 2026-09-20 | **ONNX 导出**：`--onnx/--no-onnx`（默认开）+ `--opset`（默认 17）；自检 = `onnx.checker` + onnxruntime↔TorchScript **相对**误差 + batch 1/5 动态维验证；`policy_layout.json` 增补 `onnx` 段与 `history_order/history_note`（见 DEF-020） | run `2026-09-20_00-50-31` **重新导出最新 checkpoint `model_19999.pt`**：`exported_deploy/{policy.pt, policy.onnx 981 KB, policy_layout.json}`；相对误差 **1.87e-07**（绝对 3.43e-05 / 幅值 183.6）；独立复核 B=1/3/8 相对误差 1.5e-07~2.7e-07；图 = opset17、`policy_obs['batch',83]`+`history_flat['batch',700]` → `action['batch',16]` | `708ca53` |
 | 2026-09-20 | **部署交接**：`probe_deploy_layout.py`（一次性打印关节序/默认角/限位/动作增益/观测逐项 scale·clip·noise/关键 body/默认姿态几何）+ `docs/deploy_sim2sim_sim2real_zh.md`（接口契约、IK 复刻、MuJoCo 参数、七步上线顺序、失败模式表） | 探针实测：**动作增益 hipx 0.125 / 其余腿 0.25 / 轮速 5.0**；原生关节序 wheel=15..18；观测 policy **83**/critic 86/history **700**/privileged 89；MuJoCo 默认姿态 `gripper_base` 相对 base `(0.3492,0,0.4326)` vs Isaac `(0.3492,0,0.4327)` | `7458672` |
+
+## 六、部署基线（deploy baseline）
+
+**当前拿去部署的基线 = `main @ 2d49f47`**（`git rev-list --left-right --count origin/main...main` = `0 0`，
+即与 `origin/main` 完全一致、已推送）。基线一旦记录就不再"漂"：后续代码/文档提交只在
+`main` 上往前走，**要部署就 checkout 这个 commit（或用 tag）**，不要用"当时的 main"。
+
+| 项 | 值 / 位置 |
+|---|---|
+| 部署口径代码 | `main @ 2d49f47`（含低层 root_height 专项 + 高层链 + 导出/部署工具链） |
+| 对应训练 run | `logs/rsl_rl/history_adaptation/2026-09-20_00-50-31`（4096 envs，iter 0 → 19999） |
+| checkpoint | `<run>/model_19999.pt` |
+| 部署态策略 | `<run>/exported_deploy/{policy.pt, policy.onnx, policy_layout.json}` |
+| 接口契约 | `policy_obs 83` + `history_flat 700`（10×70，**最旧→最新**）→ `action 16`；ONNX opset 17，与 TorchScript 相对误差 **1.87e-07** |
+
+导出物指纹（`Get-FileHash -Algorithm SHA256`，2026-09-20 记录；换 checkpoint/改环境
+重导出后**必须**重新记录）：
+
+| 文件 | 字节 | sha256 |
+|---|---|---|
+| `exported_deploy/policy.pt` | 1001636 | `43C63D19…4522F6510` |
+| `exported_deploy/policy.onnx` | 981002 | `77757542…B2FF53B8D1` |
+| `exported_deploy/policy_layout.json` | 1640 | `7E3B11EB…B9E6A7947` |
+| `model_19999.pt`（源头） | — | `592A50D6…89A87AC14` |
+
+### 训练代码 vs 部署代码（这条必须能回溯）
+
+run 目录里的 `<run>/git/loco-manip-unified-rl-agent.diff`（rsl_rl 训练启动时自动 dump）显示：
+该 run 训练时在分支 `codex/ll-height-stability @ 96e1b66`，工作区唯一改动是
+**注释掉 `FKReachableEECommand`**（该类没有任何 task/配置引用，`rough_env_cfg.py` 里只有一行
+注释指向它 ⇒ 死代码，注释掉不影响训练）。
+
+`main` 与它在这条低层链上的差异（`git diff 96e1b66 main -- source/rl_training/.../velocity ...`）
+只有以下四类，**没有动力学 / 观测布局变化**：
+
+1. `SceneEntityCfg(body_names="")` / `joint_names=""` → `None` 的占位符清理（weight=0 的死配置）；
+2. `stance_width=float`（类型对象）→ 数值（同样是 weight=0）；
+3. 新增启动期自检事件 `mdp.check_policy_layout`（只打印 + 断言，不改动力学）；
+4. `observations.py` 的索引空间断言与文档注释、`deeprobotics.py` 删掉一段标定注释、
+   `flat_env_wbc_cfg.py` 里旧文档路径改指 `DEFECT_LOG_zh.md`。
+
+⇒ **结论**：在当前口径下"main 的代码 = 训出这个策略的代码"成立。要复现旧 checkpoint 时
+只需注意别改 `ee_ik` 这类 action 维度（DEF-013：布局一变旧 checkpoint 静默失效）。
+详见 `DEFECT_LOG_zh.md` DEF-022。

@@ -17,6 +17,7 @@
 | 2026-09-20 | **P0 清空**：高层链合并进 `main`（3 个 merge commit）+ 导出部署态策略固化（脚本默认目录/训练收尾提示/训练说明）；新增 DEF-018/019；P3"文档收尾"整条完成（旧 `docs/review/*.md` 已删 + 全部悬空引用改指新文档） | `codex/hl-merge-p0`（`129848e`/`af4602d`/`07601e9`/`30d5411`/`0772757`） |
 | 2026-09-20 | 导出增加 **ONNX**（`--onnx/--opset`，含 onnxruntime 自检；DEF-020）；run `2026-09-20_00-50-31` 用最新 `model_19999.pt` 重新导出 | `708ca53` |
 | 2026-09-20 | 新增**部署交接**：`docs/deploy_sim2sim_sim2real_zh.md` + `probe_deploy_layout.py`（DEF-021）；P1/P2/P3 待办不变 | `7458672` |
+| 2026-09-20 | **部署基线固化**（`main @ 2d49f47` ↔ run `2026-09-20_00-50-31`，含产物 sha256，DONE 第六节 / DEF-022）；新增 `summarize_run.py`（P3 提前做，DEF-023）；**P1-1 改为"口径 + 配置"两条修法**、P1-2 补臂相关证据 | `2d49f47` + 本轮提交 |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -38,20 +39,38 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
 
 ## P1 —— 训练质量（决定上限）
 
-- [ ] **训练稳定性：`mean_noise_std` 与 `error_vel_xy` 的长期退化**
-  - 现象：新旧两个 run 都出现 `Policy/mean_noise_std` 1.0 → ~1.49、
-    `Metrics/base_velocity/error_vel_xy` 0.38 → ~0.89（**与 EE 课程/root_height 改动无关**）。
-  - 候选改法（要 A/B）：① 约束 `init_noise_std` / 噪声上限；②
-    `body_pitch_rew_s3`、`body_roll_rew_s3` 的 `num_steps` 50k → 25k，让奖励权重跟上难度；
-    ③ 检查 `track_lin_vel_xy_exp` 权重与课程速度上界（现在课程会推到 ±5 m/s）是否匹配。
-  - 验收：`error_vel_xy` 随迭代单调下降、`noise_std` 稳定 ≤1.2。
+- [ ] **探明"探索噪声平台 ~1.5"（原"`noise_std`/`error_vel_xy` 长期退化"已归因，见 DEF-023）**
+  - **已归因（2026-09-20，用 `summarize_run.py` 做阶段聚合）**：
+    ① `Policy/mean_noise_std` **不是发散而是有界平台**：新 run 0.973/1.009/1.132/**1.473**（s0~s3），
+    iter≈5000 起就在 1.43~1.49 抖动；旧 run（无课程）1.236→**1.505**，Δ末 = −0.035。
+    机制：`log_std` 无上界 + `loss = surrogate + value_loss − entropy_coef*entropy`（`entropy_coef=0.01`）
+    持续给熵正奖励，同时 `schedule="adaptive"`/`desired_kl=0.01` 把 `Loss/learning_rate` 压到地板
+    （最低 1e-5）⇒ 高熵 + 低学习率，精度上界被压住（但 reward/ep_len 不降，训练没崩）。
+    ② `Metrics/base_velocity/error_vel_xy` 的上升**与命令课程同形**（旧 run 0.15→0.77 同样升）
+    ⇒ 是"命令范围放宽到 vx ±5 m/s"后的**口径产物**，不是策略退化：新 run 末 1000 的
+    reward **23.6 vs 17.8**、ep_len **917 vs 768**、合计摔倒 **0.122 vs 0.331** 全面更好。
+  - 要做什么（**改配置**，要 A/B）：① 给 `log_std` 加上界（`max_noise_std`/clamp，目标平台 ≤1.2）；
+    ② `entropy_coef` 0.01 → 0.005/0.002。落点：
+    `source/rl_training/rl_training/tasks/manager_based/locomotion/velocity/config/wheeled/deeprobotics_m20/agents/rsl_rl_ppo_cfg.py:HistoryAdaptationPPORunnerCfg`
+    （`policy.init_noise_std` / `noise_std_type="log"` / `algorithm.entropy_coef`）
+    + `rsl_rl/rsl_rl/modules/actor_critic_history.py`（`log_std` 的取用处）。
+    原候选"调 `body_*_rew_s3` 的 `num_steps` / 查 `track_lin_vel_xy_exp` 权重"**已降级**：
+    实测 `Curriculum/body_pitch_rew_s3|body_roll_rew_s3` 在 iter≈3125 就到终值 0.8、
+    `body_height_rew_s2` 在 s1 就到 0.8，与 `noise_std` 平台**不同期**，不构成解释。
+  - 验收（**口径已改**）：(a) `noise_std` 平台 ≤1.2 且 `Loss/learning_rate` 不再长期贴地板（≥1e-4）；
+    (b) 固定命令 eval（play/eval 探针，固定 vx/vy/yaw）下的 reward 与速度误差不劣于基线
+    `2026-09-20_00-50-31`。跨阶段/跨 run 一律用 `summarize_run.py` 的**阶段均值**，不看单点。
+  - 成本：`noise_std` 在 iter≈5000 已饱和 ⇒ A/B 可只跑 ~5k iter（比全量 20k 省 3/4），要更稳再补全量。
 
 - [ ] **s3（完整任务）阶段的臂扰动鲁棒性**
-  - 现象：`2026-09-20_00-50-31` 里 `root_height_below_minimum` 在 s3 后稳定 0.09~0.15
-    （s0~s2 阶段是 0.01~0.04），说明剩下的摔倒集中在"臂大范围摆动"时。
+  - 现象（2026-09-20 用阶段均值复核）：`root_height_below_minimum` s0/s1/s2 = 0.0258 / 0.0208 / 0.0275，
+    **s3 = 0.1181**（末 1000 0.1151）；同期 `Metrics/ee_pose/orientation_error` 从 0.32 抬到 **0.85**
+    （s3 才放开臂的大范围摆动），而 `height_error_bias_steady` 全程只有 1.3~1.8 cm
+    ⇒ 剩余摔倒 = **臂摆动时倾覆**，不是高度控制失效。
   - 候选：① 收紧 EE 区间上界（`p_pitch` 上界 +36° ≈ 让臂举高、重心上移）；
     ② 延长 s1/s2 停留步数（现在各 25k）；③ 再评估 `root_height_below_minimum` 0.30 → 0.26。
-  - 注意：**单独降阈值没用**（阈值反事实 0.30→0.26 只把 20s 触发率从 25.8% 降到 24.4%）。
+  - 注意：**单独降阈值没用**（阈值反事实 0.30→0.26 只把 20s 触发率从 25.8% 降到 24.4%）；
+    且 `bad_orientation_2` 在 s3 是**下降**的（0.0756→0.0144）⇒ 两个终止项必须看合计（s3 = 0.1325）。
 
 - [ ] **低层 `known_issues` 剩余条目**（原编号）
   - ① `joint_mirror` 用平方差做镜像惩罚（左右关节符号约定可能相反）；
@@ -105,10 +124,14 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
     `Flat-Deeprobotics-M20-Piper-Arm-v0` —— 各 `--headless --num_envs 64 --max_iterations 2`。
   - 高层（合并高层链后）：Pick-Flat / Pick-WBC-Flat / Teleop / Nav-Flat-Teacher 同上。
 
-- [ ] **训练曲线自动分析脚本**（`scripts/reinforcement_learning/rsl_rl/summarize_run.py`）
+- [x] **训练曲线自动分析脚本**（`scripts/reinforcement_learning/rsl_rl/summarize_run.py`）—— 2026-09-20 完成，见 `DONE_zh.md` 第四节
   - 依据：现在每次手抠 tensorboard（57 MB events，读一次 30~60 s）。
   - 内容：输入 run 目录 → 输出"关键指标 × 迭代"表（终止构成、ep_len、reward、
     `error_vel_xy`、`noise_std`、`height_error_*`、课程权重），支持两 run 对比。
+  - 实现：阶段均值表（按课程阶段 s0~s3，边界从 `params/agent.yaml` 的 `num_steps_per_env` 推）
+    + 采样网格表 + 两 run 对比（`--derive` 可把终止项求和，如"合计摔倒"）；
+    首次解析 70 MB 事件文件 30~50 s，之后走 `<run>/.summary_cache.npz`（<1 s）。
+  - 已用它完成 DEF-023（P1-1 归因 + P1-2 新证据）。
 
 - [ ] **sim2sim(MuJoCo) 落地**（承接 DEF-021 的部署文档）
   - 现在只有"接口契约 + 探针 + 文档"，**还没有可运行的 MuJoCo 部署脚本**。
