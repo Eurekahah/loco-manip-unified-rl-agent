@@ -227,6 +227,41 @@ class VLAPickAction(ActionTerm):
     def processed_actions(self) -> torch.Tensor:
         return self._raw_actions
 
+    @property
+    def ll_command(self) -> torch.Tensor:
+        """规范形式命令 ``[vx,vy,wz, ee_pos_b(3), ee_quat_b(4)]``（**root 系**）。
+
+        ⚠️ 本类**还没**迁移到 :class:`LowLevelPolicyActionBase`（它需要 OpenVLA 7B 模型，
+        本地没有可跑的 task 做验证）。这里先补上这个接口，避免奖励项读
+        ``action_term.ll_command`` 时 AttributeError：
+
+        * 前 3 维 = 剪裁后的底盘速度命令；
+        * EE 部分：``_raw_actions[:, 3:10]`` 里是 **VLA 给的世界系目标**，
+          这里按"世界系 → root 系"换算一次（与 O1 规范一致，见 ``low_level_replay``）。
+
+        完整迁移（布局校验 / history 窗口 / 单一来源的低层观测）留待后续分支 ——
+        迁移前请不要把这个 term 用于正式训练。
+        """
+        cmd = torch.zeros(self.num_envs, 10, device=self.device)
+        cmd[:, :3] = self._raw_actions[:, :3]
+        pos_b, quat_b = math_utils.subtract_frame_transforms(
+            self.robot.data.root_pos_w,
+            self.robot.data.root_quat_w,
+            self._raw_actions[:, 3:6],
+            self._raw_actions[:, 6:10],
+        )
+        cmd[:, 3:6] = pos_b
+        cmd[:, 6:10] = quat_b
+        return cmd
+
+    @property
+    def ll_command_w(self) -> torch.Tensor:
+        """``ll_command`` 的世界系副本（``[vx,vy,wz, ee_pos_w(3), ee_quat_w(4)]``）。"""
+        cmd_w = torch.zeros(self.num_envs, 10, device=self.device)
+        cmd_w[:, :3] = self._raw_actions[:, :3]
+        cmd_w[:, 3:10] = self._raw_actions[:, 3:10]
+        return cmd_w
+
     def process_actions(self, actions: torch.Tensor):
         """
         与原版逻辑相同，负责处理 vel 命令并做限幅。

@@ -171,6 +171,30 @@
 建议：抽一个 `LowLevelPolicyReplayMixin`（或把"低层观测构造"收拢成单一函数），
 让"训练用什么、回放就用什么"成为结构性保证。
 
+> **R1（抽基类）已做**（`codex/hl-replay-base-class`，commit `2c5a85a`）：
+>
+> * 新增 `highlevel/mdp/low_level_policy_action.py::LowLevelPolicyActionBase`，
+>   把"载入策略 / 布局与观测 / 低层 tick 状态（含 history 窗口）/ 调策略 / 路由给低层
+>   action term / `ll_command`、`ll_command_w`"收敛成唯一一份；子类只实现自己的
+>   "高层动作 → ll_command"语义。
+> * **已迁移**：`PreTrainedNavAction`（删掉自己那份策略载入、就地改
+>   `cfg.low_level_observations`、`last_action` 闭包、tick 循环）。nav 的低层观测模板
+>   （22 关节 = 腿+轮+臂、不含夹爪）改由 `hl_flat_nav_env_cfg.py` 在 **cfg 层**显式声明
+>   （清单 ⑥ 的反模式也一起消掉）。
+> * **顺带修**：`PreTrainedNavAction` 以前没有 `ll_command`，而 nav 的
+>   `lateral_velocity_penalty`(weight −0.5) / `angular_velocity_penalty`(−0.2) 会读它 ——
+>   一读就 `AttributeError`。现在由基类提供。
+> * **未迁移**（本次只补了接口）：`pre_trained_policy_action`（没有任何 task 注册它）与
+>   `openvla_pick_action`（需要 OpenVLA 7B 模型，本地没有可跑 task 验证）——
+>   两者补上了 `ll_command` / `ll_command_w`（世界系 → root 系换算）避免奖励项崩，
+>   完整迁移留待后续分支。
+>
+> 实测：`Isaac-Deeprobotics-High-Level-Nav-Flat-Teacher-v0 --num_envs 64 --max_iterations 2`
+> → **EXIT=0**，`低层 obs 69 = checkpoint 期望 69`（3+3+3+22+22+16），动作分块
+> `leg12/wheel4/ee_ik0`、轮关节列下标 `[12,13,14,15]`，reward 2.68 → 10.25；
+> `Episode_Reward/lateral_velocity_penalty = -0.0750`、
+> `angular_velocity_penalty = -0.0275`（这两项以前会因缺 `ll_command` 直接崩）。
+
 ### 6. `[已修]` `__init__` 里就地修改传入的 cfg
 
 > 修复于 `codex/hl-replay-layout`。`build_low_level_observation_group()`
