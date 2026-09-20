@@ -301,8 +301,76 @@ class WBCCurriculumCfg(DeeproboticsM20CurriculumsCfg):
         },
     )
 
+    # ── EE 目标课程 s0→s3：先把机械臂「按住」，再逐步放开 ────────────────────
+    #
+    # 背景（docs/review/bad_orientation_analysis_zh.md）：9 月起 bad_orientation_2 终止率
+    # 从 0.6~3.3% 涨到 62~78%，归因是"机械臂扰动底盘的能力"变了（资产换成
+    # M20_Piper_own、执行器 40/8 → 300/20、EE 参考系换成 gripper_base+0、目标半径收到
+    # 0.3~0.52），而不是 IK 坏了 —— 任务本身可学（已训策略倾角越限比例只有 0.02~0.06%）。
+    # 所以让"早期一直处在'一动臂就终止'的区间"这件事不再发生：从"臂不动"开始，
+    # 按训练步数逐步放开臂的移动幅度。
+    #
+    # 实现：`HeightInvariantEECommandCfg.target_blend_pos / target_blend_orn` 把
+    # 「采样出来的目标」与「重采样瞬间的真实 EE 位姿」做混合：
+    #   s0（初始；`FlatEnvWBCConfig.__post_init__` 里置 0）: 目标 = 默认位姿，臂不动
+    #   s1（25k步）: 位置放到 35%（臂开始在小范围内移动）
+    #   s2（50k步）: 姿态也放到 35%（≈ 最终姿态范围 ±22.5° 的 1/3 ≈ ±8°，接近原本设想的 ±10°）
+    #   s3（75k步）: 位置/姿态都到 100% = 原有完整任务（采样分布与原训练**完全一致**，无分布偏移）
+    #
+    # 为什么不用"把 p_l / p_pitch / p_yaw 区间收成常数点"的写法：
+    # `probe_ee_default_pose.py` 实测默认位姿在 height-invariant 坐标系下为
+    # r0=0.4035±0.0328、仰角 +72.3°±7.6°、方位 +10.0°±42.0°。
+    # 方位的逐环境差异主要来自复位时 root 的 roll/pitch 随机化（该坐标系只保留 yaw），
+    # 所以任何固定常数区间都表达不出"每个环境各自的默认位姿"；而 `o_*=(0,0)` 对应的是
+    # 把局部 +z 对齐到位置方向的姿态，实测与默认姿态差 68.5°±0.6°。
+    # 另外注意：当前 p_pitch 上界只有 +0.628 rad，而默认仰角是 +1.2615 rad —— 即使到了
+    # s3，机械臂也必须比默认位姿低至少 36°，这就是"臂被拽下来"的那段运动。
+    ee_goal_pos_blend_s1: CurrTerm = CurrTerm(
+        func=mdp.modify_term_cfg,
+        params={
+            "address": "commands.ee_pose.target_blend_pos",
+            "modify_fn": mdp.override_value,
+            "modify_params": {
+                "value": 0.35,
+                "num_steps": 25_000,
+            },
+        },
+    )
+    ee_goal_orn_blend_s2: CurrTerm = CurrTerm(
+        func=mdp.modify_term_cfg,
+        params={
+            "address": "commands.ee_pose.target_blend_orn",
+            "modify_fn": mdp.override_value,
+            "modify_params": {
+                "value": 0.35,
+                "num_steps": 50_000,
+            },
+        },
+    )
+    ee_goal_pos_blend_s3: CurrTerm = CurrTerm(
+        func=mdp.modify_term_cfg,
+        params={
+            "address": "commands.ee_pose.target_blend_pos",
+            "modify_fn": mdp.override_value,
+            "modify_params": {
+                "value": 1.0,
+                "num_steps": 75_000,
+            },
+        },
+    )
+    ee_goal_orn_blend_s3: CurrTerm = CurrTerm(
+        func=mdp.modify_term_cfg,
+        params={
+            "address": "commands.ee_pose.target_blend_orn",
+            "modify_fn": mdp.override_value,
+            "modify_params": {
+                "value": 1.0,
+                "num_steps": 75_000,
+            },
+        },
+    )
 
-    
+
 @configclass
 class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
     commands: WBCCommandsCfg = WBCCommandsCfg()
@@ -337,7 +405,13 @@ class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
         self.commands.body_pose.height_range = (0.513, 0.513)  # Stage 1 初始值
         self.commands.body_pose.pitch_range  = (0.0, 0.0)
         self.commands.body_pose.roll_range   = (0.0, 0.0)
-        
+
+        # EE 目标课程 Stage 0：目标 = 当前（reset 后即默认）EE 位姿 —— 机械臂不需要移动，
+        # 先学会"站得住 / 走得动 / 跟踪机身姿态"，之后由 `curriculum` 里的
+        # ee_goal_*_blend_s1/s2/s3 逐步放开（数值与理由见 WBCCurriculumCfg 的注释）。
+        self.commands.ee_pose.target_blend_pos = 0.0
+        self.commands.ee_pose.target_blend_orn = 0.0
+
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "FlatEnvWBCConfig":
             self.disable_zero_weight_rewards()
@@ -379,7 +453,11 @@ class RoughEnvWBCConfig(DeeproboticsM20RoughEnvCfg):
         self.commands.body_pose.height_range = (0.513, 0.513)  # Stage 1 初始值
         self.commands.body_pose.pitch_range  = (0.0, 0.0)
         self.commands.body_pose.roll_range   = (0.0, 0.0)
-        
+
+        # EE 目标课程 Stage 0（同 FlatEnvWBCConfig：目标 = 默认位姿，臂不动）
+        self.commands.ee_pose.target_blend_pos = 0.0
+        self.commands.ee_pose.target_blend_orn = 0.0
+
         self.curriculum.base_velocity_lin_vel_x_s4 = None
         self.curriculum.base_velocity_lin_vel_x_s5 = None
         self.curriculum.base_velocity_lin_vel_x_s6 = None
@@ -396,6 +474,13 @@ class FlatEnvWBCConfig_PLAY(FlatEnvWBCConfig):
         self.curriculum.body_pose_height_range_s2 = None
         self.curriculum.body_pose_pitch_range_s3 = None
         self.curriculum.body_pose_roll_range_s3 = None
+        # PLAY 直接给完整任务（不做 EE 目标课程）：关掉课程项并把混合比例放回 1.0
+        self.curriculum.ee_goal_pos_blend_s1 = None
+        self.curriculum.ee_goal_orn_blend_s2 = None
+        self.curriculum.ee_goal_pos_blend_s3 = None
+        self.curriculum.ee_goal_orn_blend_s3 = None
+        self.commands.ee_pose.target_blend_pos = 1.0
+        self.commands.ee_pose.target_blend_orn = 1.0
         self.commands.base_velocity.ranges.lin_vel_x = (-0.0, 0.0)
         self.commands.base_velocity.ranges.lin_vel_y = (-0.0, 0.0)
         self.commands.base_velocity.ranges.ang_vel_z = (-0.0, 0.0)
@@ -417,6 +502,13 @@ class RoughEnvWBCConfig_PLAY(RoughEnvWBCConfig):
         self.curriculum.body_pose_height_range_s2 = None
         self.curriculum.body_pose_pitch_range_s3 = None
         self.curriculum.body_pose_roll_range_s3 = None
+        # PLAY 直接给完整任务（不做 EE 目标课程）
+        self.curriculum.ee_goal_pos_blend_s1 = None
+        self.curriculum.ee_goal_orn_blend_s2 = None
+        self.curriculum.ee_goal_pos_blend_s3 = None
+        self.curriculum.ee_goal_orn_blend_s3 = None
+        self.commands.ee_pose.target_blend_pos = 1.0
+        self.commands.ee_pose.target_blend_orn = 1.0
         self.curriculum.base_velocity_lin_vel_x_s4 = None
         self.curriculum.base_velocity_lin_vel_x_s5 = None
         self.curriculum.base_velocity_lin_vel_x_s6 = None
