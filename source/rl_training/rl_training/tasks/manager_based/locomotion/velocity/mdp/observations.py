@@ -24,12 +24,104 @@ def joint_pos_rel_without_wheel(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     wheel_asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
-    """The joint positions of the asset w.r.t. the default joint positions.(Without the wheel joints)"""
+    """The joint positions of the asset w.r.t. the default joint positions.(Without the wheel joints)
+
+    ⚠️ 索引空间（known_issues #1 / #16）：``wheel_asset_cfg.joint_ids`` 是 articulation 的
+    **原生 joint id**，而 ``joint_pos_rel`` 的列是 ``asset_cfg.joint_ids`` 重排后的顺序 ——
+    两者只有在"列序 == 原生序"（即调用方传 ``joint_names=[".*"]`` 且 ``preserve_order``
+    不改变顺序）时才等价。这里把这个前提显式断言出来，避免又出现"清错了关节"
+    （实测过：会清掉 ``hr_wheel_joint`` + ``arm_joint1/2/3``，放行 ``fl/fr/hl_wheel``）。
+
+    如果你的观测列本来就是重排过的（例如 leg→wheel→arm），请改用
+    ``highlevel/mdp/low_level_replay.py::joint_pos_rel_without_wheel_columns()``。
+    """
     # extract the used quantities (to enable type-hinting)
     asset: Articulation = env.scene[asset_cfg.name]
+    num_joints = len(asset.data.joint_names)
+
+    def _as_index_list(ids) -> list[int]:
+        """把 SceneEntityCfg.joint_ids（可能是 slice / list / tensor）统一成列下标列表。"""
+        if isinstance(ids, slice):
+            return list(range(num_joints))[ids]
+        return [int(i) for i in ids]
+
+    if asset_cfg.joint_ids is None or wheel_asset_cfg.joint_ids is None:
+        raise RuntimeError(
+            "joint_pos_rel_without_wheel 需要已解析的 SceneEntityCfg（joint_ids 不能为 None）："
+            f"asset_cfg.joint_ids={asset_cfg.joint_ids}, wheel_asset_cfg.joint_ids={wheel_asset_cfg.joint_ids}"
+        )
+    asset_ids = _as_index_list(asset_cfg.joint_ids)
+    wheel_ids = _as_index_list(wheel_asset_cfg.joint_ids)
+    # "列序 == 原生序" 的精确条件：对每个要清零的列 c，它的列映射必须是 c 本身。
+    bad_cols = [c for c in wheel_ids if c >= len(asset_ids) or asset_ids[c] != c]
+    if bad_cols:
+        raise RuntimeError(
+            "joint_pos_rel_without_wheel 的索引空间不一致（known_issues #1）："
+            f"wheel_asset_cfg.joint_ids={wheel_ids} 里的列 {bad_cols} 并不对应同名关节，"
+            f"当前 joint_pos 的列映射是 {asset_ids}。\n"
+            "  也就是说调用方的 joint_pos 列序不是 articulation 原生序（例如 leg→wheel→arm）；"
+            "请改用 joint_pos_rel_without_wheel_columns()（按**列下标**置零）。"
+        )
     joint_pos_rel = asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
     joint_pos_rel[:, wheel_asset_cfg.joint_ids] = 0
     return joint_pos_rel
+
+
+def check_policy_layout(
+    env: ManagerBasedRLEnv,
+    env_ids,  # startup 事件不会用到（EventManager 对签名要求"env, env_ids, ..."）
+    group_name: str = "policy",
+    actions_term: str = "actions",
+    raise_on_mismatch: bool = True,
+) -> None:
+    """启动期打印低层 policy 的观测/动作布局，并断言"actions 观测宽度 == 动作总维度"。
+
+    known_issues ⑯（低层侧）：``mdp.last_action`` 观测的宽度就是
+    ``action_manager.total_action_dim``，所以**任何** action term 维度变化都会改变 policy
+    观测布局、静默让旧 checkpoint 失效（历史上 ``ee_ik`` 从 7 维变 0 维就是这么废掉一批
+    checkpoint 的）。在 env 创建时把布局打印出来 + 断言这条不变量，比等到加载 checkpoint
+    时 matmul 报 "shapes cannot be multiplied" 好定位得多。
+
+    用法：在 EventCfg 里挂一个 ``mode="startup"`` 的事件项（见 ``EventCfg.check_policy_layout``）。
+    """
+    obs_mgr = env.observation_manager
+    act_mgr = env.action_manager
+    total_action_dim = int(act_mgr.total_action_dim)
+
+    def _numel(shape) -> int:
+        n = 1
+        for s in shape:
+            n *= int(s)
+        return n
+
+    print("[layout-check] 低层 policy 布局（known_issues ⑯）:")
+    for gname in obs_mgr.active_terms.keys():
+        names = obs_mgr.active_terms[gname]
+        dims = obs_mgr.group_obs_term_dim[gname]
+        total = _numel(tuple(obs_mgr.group_obs_dim[gname]))
+        print(f"  - 观测组 '{gname}'：{total} 维 = "
+              + " + ".join(f"{n}{_numel(d)}" for n, d in zip(names, dims)))
+    for tname, term in act_mgr._terms.items():  # noqa: SLF001 - 只用于打印
+        print(f"  - 动作项 '{tname}'：{term.action_dim} 维")
+    print(f"  - 动作总维度 = {total_action_dim}")
+
+    problems = []
+    if group_name in obs_mgr.active_terms:
+        names = list(obs_mgr.active_terms[group_name])
+        if actions_term in names:
+            width = _numel(tuple(obs_mgr.group_obs_term_dim[group_name][names.index(actions_term)]))
+            if width != total_action_dim:
+                problems.append(
+                    f"观测 '{group_name}.{actions_term}' 宽度 {width} != 动作总维度 {total_action_dim}"
+                )
+    if problems:
+        msg = (
+            "[layout-check] 观测/动作布局不一致（这会让旧 checkpoint 静默失效）：\n  - "
+            + "\n  - ".join(problems)
+        )
+        if raise_on_mismatch:
+            raise RuntimeError(msg)
+        print(msg)
 
 
 def phase(env: ManagerBasedRLEnv, cycle_time: float) -> torch.Tensor:

@@ -30,11 +30,11 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
     """Action specifications for the MDP."""
 
     joint_pos = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[""], scale=0.25, use_default_offset=True, clip=None, preserve_order=True
+        asset_name="robot", joint_names=None, scale=0.25, use_default_offset=True, clip=None, preserve_order=True
     )
 
     joint_vel = mdp.JointVelocityActionCfg(
-        asset_name="robot", joint_names=[""], scale=20.0, use_default_offset=True, clip=None, preserve_order=True
+        asset_name="robot", joint_names=None, scale=20.0, use_default_offset=True, clip=None, preserve_order=True
     )
 
     # EE使用IK进行移动
@@ -103,15 +103,15 @@ class DeeproboticsM20RewardsCfg(RewardsCfg):
     """Reward terms for the MDP."""
 
     joint_vel_wheel_l2 = RewTerm(
-        func=mdp.joint_vel_l2, weight=0.0, params={"asset_cfg": SceneEntityCfg("robot", joint_names="")}
+        func=mdp.joint_vel_l2, weight=0.0, params={"asset_cfg": SceneEntityCfg("robot", joint_names=None)}
     )
 
     joint_acc_wheel_l2 = RewTerm(
-        func=mdp.joint_acc_l2, weight=0.0, params={"asset_cfg": SceneEntityCfg("robot", joint_names="")}
+        func=mdp.joint_acc_l2, weight=0.0, params={"asset_cfg": SceneEntityCfg("robot", joint_names=None)}
     )
 
     joint_torques_wheel_l2 = RewTerm(
-        func=mdp.joint_torques_l2, weight=0.0, params={"asset_cfg": SceneEntityCfg("robot", joint_names="")}
+        func=mdp.joint_torques_l2, weight=0.0, params={"asset_cfg": SceneEntityCfg("robot", joint_names=None)}
     )
 
 

@@ -19,11 +19,11 @@ class NavigationActionsCfg(ActionsCfg):
     """Action specifications for the MDP."""
 
     joint_pos = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[""], scale=0.25, use_default_offset=True, clip=None, preserve_order=True
+        asset_name="robot", joint_names=None, scale=0.25, use_default_offset=True, clip=None, preserve_order=True
     )
 
     joint_vel = mdp.JointVelocityActionCfg(
-        asset_name="robot", joint_names=[""], scale=20.0, use_default_offset=True, clip=None, preserve_order=True
+        asset_name="robot", joint_names=None, scale=20.0, use_default_offset=True, clip=None, preserve_order=True
     )
 
 

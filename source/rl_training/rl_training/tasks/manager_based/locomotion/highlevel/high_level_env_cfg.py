@@ -466,11 +466,17 @@ class HighLevelEnvCfg(ManagerBasedRLEnvCfg):
             self.scene.contact_forces.update_period = self.sim.dt
     
     def disable_zero_weight_rewards(self):
-        """If the weight of rewards is 0, set rewards to None"""
+        """把 ``weight == 0`` 的奖励项置 ``None``。
+
+        （低层那份 ``LocomotionVelocityRoughEnvCfg.disable_zero_weight_rewards`` 已按
+        known_issues ⑤⑥ 对 ``None`` 容错并支持显式 ``term_names``；这里同步同样的语义。）
+        """
         for attr in dir(self.rewards):
             if not attr.startswith("__"):
-                reward_attr = getattr(self.rewards, attr)
-                if not callable(reward_attr) and reward_attr.weight == 0:
+                reward_attr = getattr(self.rewards, attr, None)
+                if reward_attr is None or callable(reward_attr):
+                    continue
+                if getattr(reward_attr, "weight", None) == 0:
                     setattr(self.rewards, attr, None)
 
 

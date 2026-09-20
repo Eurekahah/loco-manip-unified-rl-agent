@@ -155,7 +155,7 @@ class HLFlatNavRewardsCfg(HighLevelRewardsCfg):
         func=mdp.undesired_contacts,
         weight=-1.0,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=""),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=None),
             "threshold": 5.0
         }
     )

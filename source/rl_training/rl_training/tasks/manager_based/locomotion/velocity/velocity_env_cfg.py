@@ -131,7 +131,7 @@ class ActionsCfg:
     
     joint_pos = mdp.JointPositionActionCfg(
         asset_name="robot", 
-        joint_names=[""],  
+        joint_names=None,  
         scale=0.5, 
         use_default_offset=True, 
         clip=None, 
@@ -349,7 +349,7 @@ class EventCfg:
         func=mdp.randomize_rigid_body_mass,
         mode="startup",
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=""),
+            "asset_cfg": SceneEntityCfg("robot", body_names=None),
             "mass_distribution_params": (0.85, 1.15),
             "operation": "scale",
             "recompute_inertia": True,
@@ -360,7 +360,7 @@ class EventCfg:
         func=mdp.randomize_rigid_body_mass,
         mode="startup",
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=""),
+            "asset_cfg": SceneEntityCfg("robot", body_names=None),
             "mass_distribution_params": (1.0, 3.0),
             "operation": "scale",
             "recompute_inertia": True,
@@ -371,7 +371,7 @@ class EventCfg:
         func=mdp.randomize_rigid_body_mass,
         mode="startup",
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=""),
+            "asset_cfg": SceneEntityCfg("robot", body_names=None),
             "mass_distribution_params": (-1.0, 3.0),
             "operation": "add",
             "recompute_inertia": True,
@@ -397,12 +397,22 @@ class EventCfg:
         },
     )
 
+    # ── 启动期布局自检（known_issues ⑯ 低层侧）───────────────────────────────
+    # 打印每个观测组的逐项维度 + 每个动作项的维度，并断言
+    # "policy 观测里的 actions 槽位宽度 == 动作总维度"（这条一破，旧 checkpoint 静默失效）。
+    # 想关掉就把这一项置 None。
+    check_policy_layout = EventTerm(
+        func=mdp.check_policy_layout,
+        mode="startup",
+        params={},
+    )
+
     # reset
     randomize_apply_external_force_torque = EventTerm(
         func=mdp.apply_external_force_torque,
         mode="reset",
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=""),
+            "asset_cfg": SceneEntityCfg("robot", body_names=None),
             "force_range": (-10.0, 10.0),
             "torque_range": (-10.0, 10.0),
         },
@@ -470,7 +480,7 @@ class RewardsCfg:
         func=mdp.base_height_l2,
         weight=0.0,
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=""),
+            "asset_cfg": SceneEntityCfg("robot", body_names=None),
             "sensor_cfg": SceneEntityCfg("height_scanner_base"),
             "target_height": 0.0,
         },
@@ -478,7 +488,7 @@ class RewardsCfg:
     body_lin_acc_l2 = RewTerm(
         func=mdp.body_lin_acc_l2,
         weight=0.0,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names="")},
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=None)},
     )
 
     # Joint penalties
@@ -579,8 +589,8 @@ class RewardsCfg:
         func=mdp.wheel_vel_penalty,
         weight=0.0,
         params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=""),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=""),
+            "asset_cfg": SceneEntityCfg("robot", joint_names=None),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=None),
             "command_name": "base_velocity",
             "velocity_threshold": 0.5,
             "command_threshold": 0.1,
@@ -633,7 +643,7 @@ class RewardsCfg:
         func=mdp.undesired_contacts,
         weight=0.0,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=""),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=None),
             "threshold": 1.0,
         },
     )
@@ -652,7 +662,7 @@ class RewardsCfg:
     contact_forces = RewTerm(
         func=mdp.contact_forces,
         weight=0.0,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=""), "threshold": 100.0},
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=None), "threshold": 100.0},
     )
 
     # Velocity-tracking rewards
@@ -680,14 +690,14 @@ class RewardsCfg:
         params={
             "command_name": "base_velocity",
             "threshold": 0.5,
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=""),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=None),
         },
     )
 
     feet_air_time_variance = RewTerm(
         func=mdp.feet_air_time_variance_penalty,
         weight=0,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names="")},
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=None)},
     )
 
     feet_gait = RewTerm(
@@ -709,7 +719,7 @@ class RewardsCfg:
         func=mdp.feet_contact,
         weight=0.0,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=""),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=None),
             "command_name": "base_velocity",
             "expect_contact_num": 2,
         },
@@ -719,7 +729,7 @@ class RewardsCfg:
         func=mdp.feet_contact_without_cmd,
         weight=0.0,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=""),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=None),
             "command_name": "base_velocity",
         },
     )
@@ -728,7 +738,7 @@ class RewardsCfg:
         func=mdp.feet_stumble,
         weight=0.0,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=""),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=None),
         },
     )
 
@@ -736,8 +746,8 @@ class RewardsCfg:
         func=mdp.feet_slide,
         weight=0.0,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=""),
-            "asset_cfg": SceneEntityCfg("robot", body_names=""),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=None),
+            "asset_cfg": SceneEntityCfg("robot", body_names=None),
         },
     )
 
@@ -746,7 +756,7 @@ class RewardsCfg:
         weight=0,
         params={
             "command_name": "base_velocity",
-            "asset_cfg": SceneEntityCfg("robot", joint_names=""),
+            "asset_cfg": SceneEntityCfg("robot", joint_names=None),
         },
     ) # negetive
 
@@ -754,7 +764,7 @@ class RewardsCfg:
         func=mdp.feet_height,
         weight=0.0,
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=""),
+            "asset_cfg": SceneEntityCfg("robot", body_names=None),
             "tanh_mult": 2.0,
             "target_height": 0.05,
             "command_name": "base_velocity",
@@ -765,7 +775,7 @@ class RewardsCfg:
         func=mdp.feet_height_body,
         weight=0.0,
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=""),
+            "asset_cfg": SceneEntityCfg("robot", body_names=None),
             "tanh_mult": 2.0,
             "target_height": -0.3,
             "command_name": "base_velocity",
@@ -777,8 +787,12 @@ class RewardsCfg:
         weight=0.0,
         params={
             "std": math.sqrt(0.25),
-            "asset_cfg": SceneEntityCfg("robot", body_names=""),
-            "stance_width": float,
+            "asset_cfg": SceneEntityCfg("robot", body_names=None),
+            # known_issues ⑦：原来这里传的是**类型对象** `float`（不是数值），
+            # 只要把 weight 打开就会在 `stance_width * torch.ones(...)` 处炸。
+            # 0.34 m 是该机型"左右髋/足横向间距"的量级占位值：本项默认 weight=0，
+            # 启用前请按机器人实际几何标定（在仿真里打印左右 hipy/knee body 的 y 坐标）。
+            "stance_width": 0.34,
         },
     )
 
@@ -823,7 +837,7 @@ class TerminationsCfg:
     # Contact sensor
     illegal_contact = DoneTerm(
         func=mdp.illegal_contact,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=""), "threshold": 1.0},
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=None), "threshold": 1.0},
     )
 
     # 倾角阈值可调：0.8 rad ≈ 45.8°（旧实现等价于"单轴约 30°"，对本任务的
@@ -917,13 +931,32 @@ class LocomotionVelocityRoughEnvCfg(ManagerBasedRLEnvCfg):
             if self.scene.terrain.terrain_generator is not None:
                 self.scene.terrain.terrain_generator.curriculum = False
 
-    def disable_zero_weight_rewards(self):
-        """If the weight of rewards is 0, set rewards to None"""
-        for attr in dir(self.rewards):
-            if not attr.startswith("__"):
-                reward_attr = getattr(self.rewards, attr)
-                if not callable(reward_attr) and reward_attr.weight == 0:
-                    setattr(self.rewards, attr, None)
+    def disable_zero_weight_rewards(self, term_names: list[str] | None = None):
+        """把 ``weight == 0`` 的奖励项置 ``None``（= 不参与计算）。
+
+        known_issues ⑤⑥：原来这个函数有两处脆弱的地方，这里都修掉：
+
+        1. 直接读 ``reward_attr.weight``：如果**某一项已经被置成 None**（例如父类已经清过，
+           或者被人手动关掉）就会抛 ``AttributeError: 'NoneType' object has no attribute 'weight'``。
+           现在跳过 ``None``。
+        2. 调用点在子类里靠 ``if self.__class__.__name__ == "XXX":`` 守卫 —— 新加的子类会**静默**
+           跳过清理（带 ``body_names=""`` 占位的项就会一直留着、直到某次真的触发解析异常）。
+           现在支持显式 ``term_names``：子类可以直接
+           ``self.disable_zero_weight_rewards(term_names=[...])`` 指定要检查的项，不依赖类名。
+
+        Args:
+            term_names: 只处理这些奖励项；``None`` = 遍历 ``self.rewards`` 里的全部项。
+        """
+        names = list(term_names) if term_names is not None else dir(self.rewards)
+        for attr in names:
+            if attr.startswith("__"):
+                continue
+            reward_attr = getattr(self.rewards, attr, None)
+            # 已经不是 RewardTermCfg（例如上一次调用已经置 None）→ 跳过，不再 AttributeError
+            if reward_attr is None or callable(reward_attr):
+                continue
+            if getattr(reward_attr, "weight", None) == 0:
+                setattr(self.rewards, attr, None)
 
 
 def create_obsgroup_class(class_name, terms, enable_corruption=False, concatenate_terms=True):
