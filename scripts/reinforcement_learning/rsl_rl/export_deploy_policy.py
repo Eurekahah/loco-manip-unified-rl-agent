@@ -295,14 +295,33 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", required=True, help="run 目录 logs/rsl_rl/<exp>/<timestamp>")
     parser.add_argument("--checkpoint", default=None, help="模型文件名；默认取迭代号最大的")
-    parser.add_argument("--out_dir", default=None, help="默认 <run>/exported")
+    parser.add_argument(
+        "--out_dir",
+        default=None,
+        help="默认 <run>/exported_deploy"
+        "（**不要**用 play.py 的 <run>/exported：那里是 actor-only，缺 history encoder）",
+    )
     args = parser.parse_args()
 
     run_dir = args.run
     ckpt_name = args.checkpoint or _latest_checkpoint(run_dir)
     ckpt_path = os.path.join(run_dir, ckpt_name)
-    out_dir = args.out_dir or os.path.join(run_dir, "exported")
+    out_dir = args.out_dir or os.path.join(run_dir, "exported_deploy")
     os.makedirs(out_dir, exist_ok=True)
+
+    # 部署态导出必须落在 exported_deploy/：play.py 的 exported/policy.pt 是 actor-only
+    # （只有 actor，history 策略缺 encoder），拿去 sim2sim 会静默算错。
+    actor_only_dir = os.path.join(run_dir, "exported")
+    if os.path.basename(os.path.normpath(out_dir)) == "exported":
+        print(
+            "[export] ⚠️  --out_dir 指向 <run>/exported，那是 play.py 的 actor-only 导出目录。"
+            "默认的 <run>/exported_deploy 才是部署态（含 history encoder）。"
+        )
+    elif os.path.exists(os.path.join(actor_only_dir, "policy.pt")):
+        print(
+            f"[export] 提示：{actor_only_dir} 下已有一份 play.py 导出的 actor-only policy.pt，"
+            "本次写出的是它的部署态版本（本目录），两者不要混用。"
+        )
 
     policy_cfg = _load_agent_cfg(run_dir)
     payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)

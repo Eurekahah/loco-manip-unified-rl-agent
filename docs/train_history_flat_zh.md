@@ -68,20 +68,31 @@ history 的 70 维 = `base_ang_vel(3) + projected_gravity(3) + joint_pos(24) + j
 
 ## 训练完成后
 
+**这一步是必做项**（部署 / sim2sim / 高层 replay 都只认部署态策略）。
+
 ```bash
-# 导出成高层 replay 能直接加载的 TorchScript（纯 torch，不用起仿真）
+# 导出成高层 replay / 部署能直接加载的 TorchScript（纯 torch，不用起仿真）
+# 训练结束时 train.py 会把这条命令连同 run 目录一起打印出来，可直接复制。
 python scripts/reinforcement_learning/rsl_rl/export_deploy_policy.py \
     --run logs/rsl_rl/history_adaptation/<你的时间戳> --checkpoint model_19999.pt
 ```
 
-会写出 `<run>/exported/policy.pt` 与 `policy_layout.json`
+默认写到 **`<run>/exported_deploy/{policy.pt,policy_layout.json}`**
 （`kind=history, policy_obs_dim=83, history_single_step_dim=70, history_length=10, action_dim=16`）。
 导出时脚本会自检 scripted 与 `ActorCriticHistory.act_inference` 的数值一致性（应为 0）。
 
-⚠️ 注意：**高层 replay 目前还不支持 history 策略**（缺 10 步窗口回放）。
-要把它接到高层，需要先实现 `docs/review/history_low_level_policy_todo.md` 里
-那三件事（该文件在 `codex/hl-replay-l2` 分支上）。在此之前，`policy_layout.json`
-是给 replay 侧做维度校验用的，replay 遇到 `kind=history` 会明确报错并指向那份待办。
+⚠️ 两个必须区分的目录：
+
+- `<run>/exported_deploy/policy.pt` —— 本脚本出的**部署态**策略（含 history encoder，双输入）；
+- `<run>/exported/policy.pt` —— `play.py` 出的 **actor-only** 策略（输入 115 = 83 + 32 latent，
+  latent 没有来源）。**拿去 sim2sim 是错的**，脚本会在这种情况下打印警告。
+
+高层 replay 侧现在**已支持** history 策略（10 步窗口回放已并入 `main`）：
+把低层 checkpoint 指过去即可，replay 按 `policy_layout.json` 自动走双输入 forward，例如
+
+```bash
+RL_TRAINING_LOW_LEVEL_POLICY_WBC=<run>/exported_deploy/policy.pt   # 见 TODO_zh.md P0-1 的 ⑦
+```
 
 ## 其它注意
 

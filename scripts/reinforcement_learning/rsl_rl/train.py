@@ -191,6 +191,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # run training
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
 
+    # 训练收尾提醒（清单 P0-2）：部署 / sim2sim 要的是"部署态"策略（含 history encoder），
+    # 不能用 play.py 导出的 <run>/exported/policy.pt（actor-only，缺 encoder 输入）。
+    run_rel = os.path.relpath(log_dir).replace("\\", "/")
+    print(
+        "\n[INFO] ======== 训练结束：导出部署态策略（部署 / sim2sim 前必做）========\n"
+        "[INFO] python scripts/reinforcement_learning/rsl_rl/export_deploy_policy.py "
+        f"--run {run_rel} --checkpoint model_<iteration>.pt\n"
+        f"[INFO] 产物：{run_rel}/exported_deploy/{{policy.pt,policy_layout.json}}"
+        "（脚本会自检，误差应为 0.000e+00）\n"
+        f"[INFO] 不要用 {run_rel}/exported/policy.pt —— 那是 play.py 的 actor-only 导出。\n"
+        "[INFO] ====================================================================\n",
+        flush=True,
+    )
+
     # close the simulator
     env.close()
 
