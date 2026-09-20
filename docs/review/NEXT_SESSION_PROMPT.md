@@ -10,12 +10,15 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
         并需要 escalate 才能 checkout/commit/push；`git checkout` 可能被"stat-dirty 的假 M"挡住，
         确认内容一致（git hash-object == rev-parse HEAD:path）后用 `git checkout -f`）
 
-【当前状态】main = 7ff5b86（**低层内容已并入 main**）：
-  26584e9 merge: 低层训练配置（bad_orientation_2=0.8rad + 保留 ee_goal）+ 训练说明 + 导出脚本
-  469fbd4 feat(lowlevel): EE 目标课程 s0-s3（低位锚点 + 区间阶梯）+ 姿态 slerp + 两个探针
-  fef34a7 fix(lowlevel): known_issues ⑤⑥⑦ + ⑯（占位符→None / 奖励清理 / 类型参数 / 布局断言）
+【当前状态】main = 498e847（**低层 + 高层都已并入 main，P0 已清空**）：
   7ff5b86 fix(lowlevel): root_height 专项（低位锚点 / height_range 0.55 / 扰动课程 / 稳态指标）
-  ⇒ 现在 main 上 4 个低层任务 2 iter 全部 EXIT=0，可以直接训练。
+  129848e merge(highlevel): P0-1 第一步 —— replay 布局 / L2 / ll_command / ee_command / history
+  af4602d merge(highlevel): P0-1 第二步 —— ⑦ checkpoint 路径参数化 + ⑧ 懒加载低层 cfg
+  07601e9 merge(highlevel): P0-1 第三步 —— ⑤ 的 R1（抽 LowLevelPolicyActionBase + 迁移 nav）
+  30d5411 / 0772757 docs: 删掉分支带来的旧 docs/review/*.md（含 Windows 大小写冲突那个）
+  498e847 feat(tool): P0-2 部署态导出固化（默认 exported_deploy/ + train 收尾提示 + 训练说明）
+  ⇒ main 上 4 个低层任务 + 4 个高层任务 2 iter 全部 EXIT=0（高层 reward 1.11/1.28/0.15/10.25）。
+  ⇒ 合并冲突的两处解法见 DEFECT_LOG_zh.md DEF-018（大小写路径）/ DEF-019（⑦⑧ × R1）。
 
 【已验证结果】4096 envs、iter=14000 同口径对比：
   旧 2026-09-19_09-02-50（无课程）: root_height 0.361、bad_orientation 0.010、ep_len 805、reward 15.4
@@ -34,15 +37,11 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   bad_orientation_analysis_zh / progress_summary_zh / todo_master）已并入上面三份，
   原文在分支上（见 TODO_zh.md 末尾"旧文档去哪了"）。
 
-【本 session 建议按 TODO_zh.md 的 P0 开始】
-  P0-1 高层链合并（main 上的高层任务仍是旧代码，会崩）：
-       hl-replay-layout(dc45d0e) → hl-replay-l2(1f56b6e) → hl-fix-ll-command(e064bc6)
-       → hl-fix-ee-command(0389253) → hl-replay-history(47519b7) → hl-ckpt-params(e9edc34)
-       → hl-replay-base-class(7ec8b4c)；已知冲突点与解法写在 TODO_zh.md P0-1；
-       合并时删掉它们带来的旧 docs/review/*.md（会与新文档重复）。
-       验收：4 个高层任务 --headless --num_envs 64 --max_iterations 2 全 exit 0。
-  P0-2 把"训练完必须用 export_deploy_policy.py 导出部署态策略"写进训练流程/说明。
-  之后进 P1（训练稳定性：noise_std/error_vel_xy）、P2（高层迁移与工程债）、P3（工具与文档）。
+【本 session 已完成 P0；下个 session 建议进 P1（训练质量）】
+  P1-1 训练稳定性：mean_noise_std 1.0→~1.49、error_vel_xy 0.38→~0.89 的长期退化（要 A/B）。
+  P1-2 s3 阶段臂扰动鲁棒性：root_height_below_minimum 在 s3 后 0.09~0.15（s0~s2 只有 0.01~0.04）。
+  P1-3 低层 known_issues 剩余条目（①⑧⑩⑪⑫⑬⑭⑮⑱，清单见 TODO_zh.md P1）。
+  之后：P2（高层迁移到基类 + 工程债）、P3（回归矩阵脚本化 / summarize_run.py / 文档收尾）。
 
 【命令备忘】
   # 训练（低层主线）
@@ -63,6 +62,15 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
       --task Flat-Deeprobotics-M20-Piper-WBC-v0 --headless --num_envs 16 --steps 150
 
 【踩坑备忘（累计）】
+  * **Windows 大小写不敏感**：合并"两边各自新增、只差大小写"的文件（本轮是
+    next_session_prompt.md vs NEXT_SESSION_PROMPT.md）时，git 会把它当两个路径 ——
+    别用 `git commit -- <path>`（会解析到另一个文件、提交成"内容替换"），
+    先 `git rm --cached` 清掉多余那份、`git add -A` 再提交。
+  * 合并 ⑦⑧（横切所有 action term 的载入段）与 R1（纵切这批 `__init__` 的骨架）必然冲突：
+    解法是"并集 + 保留基类写法 + 基类里调 load_low_level_policy"，见 DEF-019。
+  * `export_deploy_policy.py` 默认输出目录已改成 `<run>/exported_deploy`；
+    `play.py` 的 `<run>/exported/policy.pt` 是 **actor-only**（115 = 83 + 32 latent，latent 无来源），
+    两者别混用（脚本会打印警告/提示）。
   * 一个进程只建一个 Isaac env；probe 用 os._exit(0) 退出。
   * 课程只在 **env reset** 时推进（curriculum_manager.compute）；若关掉终止/超时做实验，
     课程不会动 —— 要手动把终态区间写进 cfg。

@@ -12,10 +12,76 @@
 | 日期 | 更新内容 | 相关 commit / 分支 |
 |---|---|---|
 | 2026-09-20 | 初版：把 6 份旧文档里散落的修复记录归一成 DEF-001~017 | `main @ 7ff5b86` |
+| 2026-09-20 | 新增 DEF-019（⑦⑧ × R1 同段冲突的合并解法）、DEF-018（Windows 大小写路径冲突）；高层链并入 main | `codex/hl-merge-p0`（`af4602d`/`07601e9`/`30d5411`/`0772757`） |
 
 ---
 
 # 记录（新→旧）
+
+### DEF-019 `2026-09-20` 合并 ⑦⑧ 与 R1：同一批 `__init__` 的两侧改写（冲突解法）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 缺陷（合并冲突 / 重构耦合） |
+| 状态 | 已修（已并入 main） |
+| 关联 | `e9edc34`（⑦⑧）、`2c5a85a`（R1）、合并提交 `af4602d`/`07601e9`；`mdp/low_level_policy_action.py`、`mdp/low_level_replay.py`、`mdp/pre_trained_nav_action.py` |
+
+**现象**：把 `codex/hl-ckpt-params`（⑦ checkpoint 路径参数化 + ⑧ 懒加载低层 cfg）与
+`codex/hl-replay-base-class`（⑤ 的 R1：抽 `LowLevelPolicyActionBase`、迁移 nav）先后合进 main 时冲突：
+① `low_level_replay.py` 两侧都在文件同一处**追加了一段**（⑦ 的 `resolve_policy_path`/
+`load_low_level_policy` vs history 回放的 `history_single_step_ll`/`run_low_level_policy`/
+`build_history_window`），git 把它们当成同一 hunk；
+② `pre_trained_nav_action.py` 的 `__init__`：⑦ 侧是"老式类 + 内联加载 + 就地改观测 cfg"的完整函数体，
+R1 侧把这整段删掉换成 `_build_low_level_obs_cfg()` 钩子；
+③ 更隐蔽的一条：R1 新加的基类文件里**内联**复刻了一份 `check_file_path + torch.jit.load`，
+而 ⑦ 把它抽成了 `load_low_level_policy` —— 这条不会报冲突（文件在 ⑦ 那侧根本不存在），
+只能靠代码里的注释（"合并后可直接替换"）发现。
+
+**根因**：两条分支都从 `codex/hl-fix-ee-command` 派生的同一段代码上做"同位置结构改写"：
+⑦ 是**横切**所有 action term 的载入段，R1 是**纵切**这批 `__init__` 的骨架；
+两个方向都改同一批行 ⇒ 文本合并必然失败，且失败原因与"哪一侧更正确"无关。
+
+**修正**（按 TODO P0-1 的既定顺序，先 ⑦⑧ 再 R1）：
+① `low_level_replay.py` 取**并集**：import 行合并（`base_ang_vel/joint_pos_rel/joint_vel_rel/
+projected_gravity` + `check_file_path/read_file`），文件尾部保留两段（history 回放段 + ⑦ 段），
+并补回被 marker 吃掉的 `# ---` 分隔行；
+② `pre_trained_nav_action.py` 取 R1 侧（基类写法）——R1 已经把 nav 的加载/布局/观测/tick
+全部上移进基类，老式函数体是**重复**实现；
+③ `low_level_policy_action.py`（基类）：删掉内联加载与"兼容用的 `load_low_level_policy_inline`"，
+统一调用 `load_low_level_policy(cfg.policy_path, env, tag=...)`；顺手把 `verify_low_level_layout`
+的 `policy_layout_json=self._policy_layout_json` 补上（R1 注释里预留的那一步，可多打印
+"actor 输入 = policy_obs + latent"）。
+
+**结果**：合并后 4 个高层任务 2 iter 全 EXIT=0、启动打印的 obs 维度与 checkpoint 一致
+（Pick-Flat 83、Pick-WBC/Teleop 76、Nav 69）、reward 与分支上一致（1.11/1.28/0.15/10.25）：
+即"⑦ 的统一报错"与"R1 的单一骨架"两件事同时生效，没有一边被另一个 merge 吃掉。
+
+### DEF-018 `2026-09-20` 合并高层分支时的 Windows 大小写路径冲突（`next_session_prompt.md`）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 缺陷（工具链 / 跨平台路径） |
+| 状态 | 已修（已并入 main） |
+| 关联 | 合并提交 `129848e`；修复 `30d5411`；`docs/review/next_session_prompt.md`、`docs/review/NEXT_SESSION_PROMPT.md` |
+
+**现象**：合并高层链后 `git status` 报 `docs/review/NEXT_SESSION_PROMPT.md` 被修改（内容变成分支上那份
+旧 prompt），而磁盘上只剩 `next_session_prompt.md`；随后 `git commit -- <该路径>` 又**把内容写进了错误的那个
+路径**（提交里 `next_session_prompt.md` 被"改写"成 main 的版本，而不是被删除）。
+
+**根因**：Windows 文件系统大小写不敏感 —— `NEXT_SESSION_PROMPT.md`（main 侧新增）与
+`next_session_prompt.md`（分支侧新增）是**同一个物理文件**，但 git 索引是大小写敏感的，
+于是同一条路径在索引里出现两份；`git checkout` 按分支那侧写盘后，索引里 main 的那份就被判成"被修改"。
+而 `git commit -- <pathspec>` 是按**路径**去工作区取内容，在大小写不敏感的文件系统上解析到了另一个文件，
+所以它提交的是"内容替换"而不是"删除"。
+
+**修正**：① 把分支那份从索引里摘掉（`git rm --cached docs/review/next_session_prompt.md`，
+不动工作区文件），再 `git checkout HEAD -- docs/review/NEXT_SESSION_PROMPT.md` 恢复 main 的内容；
+② 路径解析搞错的那次提交用 `git reset --soft <上一个 merge commit>` 回退后重提（只动本地提交，
+工作区不变）；③ 后续 5 份旧文档改用不带 pathspec 的普通提交删除。
+
+**结果**：合并后 `docs/review/` 只剩 TODO/DONE/DEFECT_LOG/NEXT_SESSION_PROMPT（`30d5411`、`0772757`），
+`git status` 干净、`git ls-tree HEAD docs/review` 只有正确的大小写。教训：在 Windows 上合并
+"两边各自新增、只差大小写"的文件时，**不要用 `git commit -- <path>`**，先清索引再 `git add -A`。
 
 ### DEF-017 `2026-09-18` 三条独立缺陷：手臂奖励坐标系 / privileged 缓存 / legacy 权重
 

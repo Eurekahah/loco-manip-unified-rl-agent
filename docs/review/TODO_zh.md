@@ -14,6 +14,7 @@
 | 日期 | 更新内容 | 相关 commit / 分支 |
 |---|---|---|
 | 2026-09-20 | 初版：把 6 份旧清单合并成 TODO/DONE/DEFECT_LOG 三份；低层内容并入 `main`，P0 变成"高层链合并 + 导出流程固化" | `main @ 7ff5b86` |
+| 2026-09-20 | **P0 清空**：高层链合并进 `main`（3 个 merge commit）+ 导出部署态策略固化（脚本默认目录/训练收尾提示/训练说明）；新增 DEF-018/019；P3"文档收尾"完成一半（旧 `docs/review/*.md` 已删） | `codex/hl-merge-p0`（`129848e`/`af4602d`/`07601e9`/`30d5411`/`0772757`） |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -22,31 +23,14 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
 
 ## P0 —— 挡在主线前面
 
-- [ ] **高层 P0/P1 链合并**（现在 main 上的高层任务仍是旧代码）
-  - 现象：main 上跑 `Isaac-Deeprobotics-High-Level-Pick-Flat-Teacher-v0` 会在第一次
-    `env.step()` 崩（`PreTrainedPickAction` 没有 `ll_command`）、IK 目标写进死字段
-    `pose_command_w`、replay 的 `ee_goal` 喂的是世界系 —— 三条 P0 加"actions 观测少 7 维"
-    都只在分支上修好了。
-  - 要做什么：按下面顺序合并（低层已在 main）：
-    `codex/hl-replay-layout`(`dc45d0e`) → `codex/hl-replay-l2`(`1f56b6e`) →
-    `codex/hl-fix-ll-command`(`e064bc6`) → `codex/hl-fix-ee-command`(`0389253`) →
-    `codex/hl-replay-history`(`47519b7`) → `codex/hl-ckpt-params`(`e9edc34`) →
-    `codex/hl-replay-base-class`(`7ec8b4c`)
-  - 已知冲突：`hl-ckpt-params`(⑦⑧，改了 6 个 action term 的载入段) 与
-    `hl-replay-base-class`(R1，重写其中 3 个) 在同一批 `__init__` 上冲突 —— 先合 ⑦⑧，
-    R1 里保留基类写法并把 `torch.jit.load(...)` 换成 `load_low_level_policy(...)`。
-  - 验收：4 个高层任务 `--headless --num_envs 64 --max_iterations 2` 全 exit 0，
-    且启动打印的 obs 维度与 checkpoint 一致（`ll-replay` 打印）。
-  - **不要合** `codex/docs-review`（旧清单来源）；合并高层分支时注意它们带着旧
-    `docs/review/*.md`，会和新文档重复（合并时删掉旧的）。
+**已清空**（2026-09-20）。原先两条都已完成，见 `DONE_zh.md` 第五节：
 
-- [ ] **固化"训练完必须导出部署态策略"这一步**
-  - 依据：`play.py` 导出的 `exported/policy.pt` 是 actor-only（输入 115 = 83 + 32 latent，
-    latent 没来源），拿去 sim2sim 是错的。`2026-09-20_00-50-31/model_15000.pt` 我已经用
-    `export_deploy_policy.py` 导出好放在 `exported_deploy/`（自检 0.000e+00）。
-  - 要做什么：把导出步骤写进 `docs/train_history_flat_zh.md`（或训练脚本的收尾提示），
-    并在 `local_export` 之外的每次训练都执行。
-  - 验收：新 run 目录里 `exported_deploy/{policy.pt,policy_layout.json}` 存在且自检通过。
+- 高层 P0/P1 链合并 → 已并入 `main`（`codex/hl-merge-p0`：`129848e`/`af4602d`/`07601e9`），
+  4 个高层任务 2 iter 全 EXIT=0，启动打印 obs 维度与 checkpoint 一致；
+- "训练完必须导出部署态策略" → 已固化（`export_deploy_policy.py` 默认 `exported_deploy/` +
+  训练收尾打印命令 + `docs/train_history_flat_zh.md` 补章节），验收实测自检 0.000e+00。
+
+> 仍**不要合** `codex/docs-review`（旧清单来源，内容已并入三份新文档）。
 
 ---
 
@@ -132,7 +116,9 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
   - 代码/文档里指向旧文档的路径（`bad_orientation_analysis_zh.md`、`known_issues.md`、
     `progress_summary_zh.md`、`high_level_todo.md`、`todo_master_zh.md`）要更新为
     `TODO_zh.md` / `DONE_zh.md` / `DEFECT_LOG_zh.md`；
-  - 合并高层分支时删掉它们带来的旧 `docs/review/*.md`，避免与新文档重复。
+    **仍待办**（`grep -rn` 还能在代码注释/cfg 里找到这些名字）。
+  - [x] 合并高层分支时删掉它们带来的旧 `docs/review/*.md`（2026-09-20，`0772757`）：
+    `docs/review/` 现在只剩 TODO/DONE/DEFECT_LOG/NEXT_SESSION_PROMPT + `templates/`。
 
 ---
 

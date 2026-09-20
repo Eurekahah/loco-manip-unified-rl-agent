@@ -11,6 +11,7 @@
 | 日期 | 更新内容 | 相关 commit / 分支 |
 |---|---|---|
 | 2026-09-20 | 初版：合并 6 份旧文档里的"已修"条目；记录低层内容并入 main | `main @ 7ff5b86` |
+| 2026-09-20 | 新增第五节：高层链并入 `main`（4 个高层任务 2 iter 全 EXIT=0）+ 导出部署态策略固化成流程；第二节标题去掉"未合并 main" | `codex/hl-merge-p0`（`129848e`/`af4602d`/`07601e9`/`0772757`） |
 
 ---
 
@@ -27,7 +28,7 @@
 | 2026-09-19 | 低层 `known_issues` ⑤⑥⑦ + ⑯ 剩余：占位符 → `None`、`disable_zero_weight_rewards` 对 None 容错 + `term_names`、`stance_width` 改数值、启动期布局打印/断言（`mdp.check_policy_layout`）、`joint_pos_rel_without_wheel` 列序断言 | Arm/WBC/History 三任务 2 iter EXIT=0；启动打印 `policy 86 = … + actions22`、`history 700` | `fef34a7`（原 `6d22006`） |
 | 2026-09-18 | 手臂奖励坐标系修复（root 系统一）+ EE body 索引缓存；privileged 观测缓存 reset 感知；手臂隔离 env | 见 `DEFECT_LOG_zh.md` DEF-017 | `b3496a5` / `905c2df` |
 
-## 二、高层 replay（分支上，**未合并 main**，见 TODO P0）
+## 二、高层 replay（2026-09-20 起**已并入 main**，合并过程见第五节）
 
 | 日期 | 内容 | 关键实测 | commit |
 |---|---|---|---|
@@ -59,3 +60,12 @@
   history 窗口/`ll_command` 辅助）。
 * `mdp.check_policy_layout`（低层 startup 事件）：打印观测/动作布局并断言
   "`actions` 槽位宽度 == 动作总维度"。
+
+## 五、高层链并入 `main`（P0-1）+ 导出流程固化（P0-2）
+
+| 日期 | 内容 | 关键实测 | commit |
+|---|---|---|---|
+| 2026-09-20 | **P0-1 高层 replay 链合并进 `main`**（replay 布局：`actions` 观测少 7 维 + 轮关节掩码 → L2 布局推导 → ① `ll_command` → ② IK 目标写 `pose_command_b` + ③ `ee_goal` 用 root 系 → history 回放 → ⑦ checkpoint 参数化 + ⑧ 懒加载低层 cfg → ⑤ 的 R1 抽 `LowLevelPolicyActionBase` + 迁移 nav） | 4 个高层任务 `--headless --num_envs 64 --max_iterations 2` **全 EXIT=0**：Pick-Flat-Teacher reward **1.11**、Pick-WBC-Flat **1.28**、Teleop **0.15**、Nav-Flat-Teacher **10.25**；启动打印 "低层 obs 维度 == checkpoint 期望"（83/76/76/69）、动作分块 `leg12+wheel4+ee_ik{0,7}`；4 份日志均无 Traceback | `129848e`（第一步）、`af4602d`（⑦⑧）、`07601e9`（R1） |
+| 2026-09-20 | 合并冲突按 TODO 约定解决：R1 保留基类写法，基类里的内联加载换成 ⑦ 的 `load_low_level_policy(...)`，并给 `verify_low_level_layout` 补传 `policy_layout_json` | 见 `DEFECT_LOG_zh.md` DEF-018 | `07601e9` |
+| 2026-09-20 | 删掉高层分支带来的旧 `docs/review/*.md`（其中 `next_session_prompt.md` 与 main 的 `NEXT_SESSION_PROMPT.md` 只差大小写） | `docs/review/` 现在只剩 TODO/DONE/DEFECT_LOG/NEXT_SESSION_PROMPT + `templates/`；`git status` 干净 | `30d5411`、`0772757` |
+| 2026-09-20 | **P0-2 导出流程固化**：`export_deploy_policy.py` 默认输出目录 `<run>/exported` → **`<run>/exported_deploy`**（并把 actor-only 陷阱写成显式警告）；`train.py` 训练结束打印可直接复制的导出命令；`docs/train_history_flat_zh.md` 补"训练完成后"章节 + 修正"高层 replay 还不支持 history"的过时说明 | `2026-09-20_00-50-31/model_15000.pt` 实测导出 `exported_deploy/{policy.pt 1001636 B, policy_layout.json}`：scripted vs eager **0.000e+00**、与 `ActorCriticHistory.act_inference` 交叉校验 **0.000e+00**、`kind=history / policy_obs_dim=83 / 10×70 / latent32 / action16` | `498e847` |
