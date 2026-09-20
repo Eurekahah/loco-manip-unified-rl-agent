@@ -44,6 +44,7 @@ import torch
 
 from isaaclab.managers import ObservationGroupCfg, SceneEntityCfg
 from isaaclab.envs.mdp import base_ang_vel, joint_pos_rel, joint_vel_rel, projected_gravity
+from isaaclab.utils.assets import check_file_path, read_file
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
@@ -768,3 +769,67 @@ def build_history_window(
         asset_name=asset_name,
         tag=tag,
     )
+
+
+# ---------------------------------------------------------------------------
+# 低层 checkpoint 路径：参数化 + 明确的加载报错（清单 ⑦）
+# ---------------------------------------------------------------------------
+
+LOW_LEVEL_POLICY_ENV_PREFIX = "RL_TRAINING_LOW_LEVEL_POLICY"
+"""低层 checkpoint 路径的环境变量前缀。
+
+约定：``RL_TRAINING_LOW_LEVEL_POLICY_<KEY>``（KEY 见 :func:`resolve_policy_path` 的
+``key`` 参数，例如 ``WBC`` / ``FLAT`` / ``NAV`` / ``OPENVLA``）= policy.pt 的路径。
+这样可以不动代码就把高层任务指到别的低层 checkpoint 上（换机器 / 清过 logs 之后尤其有用）。
+"""
+
+
+def resolve_policy_path(default: str, *, key: str) -> str:
+    """解析低层 checkpoint 路径：**环境变量优先**，否则用 cfg 里的默认值。
+
+    不做文件存在性检查（cfg 在 import 期就会被实例化，这里抛异常会让整个 task 包都
+    无法 import）；真正加载时的报错见 :func:`load_low_level_policy`。
+
+    Args:
+        default: cfg 里写的默认路径（相对仓库根目录或绝对路径均可）。
+        key: 短名，用于拼环境变量名，例如 ``"wbc"`` -> ``RL_TRAINING_LOW_LEVEL_POLICY_WBC``。
+    """
+    env_name = f"{LOW_LEVEL_POLICY_ENV_PREFIX}_{key.upper()}"
+    override = os.environ.get(env_name)
+    if override:
+        print(f"[ll-replay] 低层 checkpoint 路径被环境变量 {env_name} 覆盖: {override}")
+        return override
+    return default
+
+
+def load_low_level_policy(policy_path: str, env, *, tag: str):
+    """加载低层 TorchScript 策略；文件不存在 / 加载失败时给出可操作的报错。
+
+    三个 action term 以前各写一遍 ``check_file_path(...)`` + ``torch.jit.load``，
+    报错只有一句 "Policy file ... does not exist."，换机器或清过 ``logs/`` 之后
+    不知道该改哪里。这里统一给出：① 环境变量名；② 命令行（hydra）覆盖写法；
+    ③ 导出命令。
+    """
+    if not check_file_path(policy_path):
+        raise FileNotFoundError(
+            f"[{tag}] 低层 policy 文件不存在：'{policy_path}'\n"
+            "  三种修法（任选其一）：\n"
+            f"    1) 环境变量：set {LOW_LEVEL_POLICY_ENV_PREFIX}_<KEY>=<abs/path/policy.pt>\n"
+            "       （KEY 见对应 cfg 里 resolve_policy_path(..., key=...) 的取值）\n"
+            "    2) 命令行覆盖（hydra）：--task <task> "
+            "env.actions.<cfg 里的 term 名>.policy_path=<abs/path/policy.pt>\n"
+            "       （term 名就是该 task 的 ActionsCfg 里的属性名，例如 teleop 是 "
+            "pre_trained_pick_action）\n"
+            "    3) 重新导出：python scripts/reinforcement_learning/rsl_rl/export_deploy_policy.py "
+            "--run <run_dir> --checkpoint <model_xxx.pt>\n"
+            "  （导出产物是 policy.pt + policy_layout.json；后者用于校验观测/动作维度）"
+        )
+    file_bytes = read_file(policy_path)
+    try:
+        return torch.jit.load(file_bytes).to(env.device).eval()
+    except Exception as e:  # noqa: BLE001 - 把底层异常也带上路径信息，便于定位
+        raise RuntimeError(
+            f"[{tag}] 低层 policy 加载失败：'{policy_path}'（{type(e).__name__}: {e}）。"
+            "若这个文件是旧版 play.py 导出的（只有 actor、没有 history encoder / "
+            "没有 policy_layout.json），请用 export_deploy_policy.py 重新导出。"
+        ) from e

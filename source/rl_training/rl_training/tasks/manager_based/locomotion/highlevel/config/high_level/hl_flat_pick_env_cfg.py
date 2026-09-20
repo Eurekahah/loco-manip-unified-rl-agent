@@ -27,17 +27,24 @@ from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobo
 import isaaclab.sim as sim_utils
 
 from rl_training.tasks.manager_based.locomotion.velocity.mdp.commands import HeightInvariantEECommandCfg
+from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import resolve_policy_path
 
 _low_level_env_cfg = LOW_LEVEL_ENV_CFG()
-# 当前用于测试的低层 checkpoint。
+# 当前用于测试的低层 checkpoint（清单 ⑦：路径已参数化，可被环境变量覆盖）。
 #
 # 现阶段用"不含 ee_goal"口径的普通 ActorCritic 策略（6300 iter）先把低层链路跑通；
 # 它的 policy_layout.json 里 policy_obs_dim=76（不含 ee_goal），replay 会据此自动
-# 省掉 ee_goal 观测项。等你用"保留 ee_goal"的配置重训完，把这里换掉即可 ——
-# 那时 layout json 里会是 83，replay 会自动把 ee_goal 加回来。
-# （清单 ⑦ 会把这一步参数化。）
-_LOW_LEVEL_WBC_POLICY = (
-    "logs/rsl_rl/deeprobotics_m20_wbc_flat/2026-09-18_01-31-58/exported/policy.pt"
+# 省掉 ee_goal 观测项。用"保留 ee_goal"的配置重训后（policy_obs_dim=83）换掉即可 ——
+# replay 会自动把 ee_goal 加回来。
+#
+# 覆盖方式（任选其一）：
+#   * 环境变量：RL_TRAINING_LOW_LEVEL_POLICY_WBC=<abs/path/policy.pt>
+#   * 命令行（hydra）：env.actions.pre_trained_pick_action.policy_path=<abs/path>
+#   * 带 history encoder 的低层策略也可以直接指过来（replay 自动走双输入 forward）：
+#     RL_TRAINING_LOW_LEVEL_POLICY_WBC=logs/rsl_rl/history_adaptation/<run>/exported_deploy/policy.pt
+_LOW_LEVEL_WBC_POLICY = resolve_policy_path(
+    "logs/rsl_rl/deeprobotics_m20_wbc_flat/2026-09-18_01-31-58/exported/policy.pt",
+    key="wbc",
 )
 # WBC 版低层 policy 的观测模板（比 flat 版多 body_pose_cmd），由 cfg 显式提供，
 # 不再由 action term 在运行时构造并覆盖 cfg.low_level_observations（清单 ⑥）。
@@ -47,8 +54,11 @@ _low_level_wbc_obs_cfg = WBCObservationsCfg()
 class HLFlatPickActionsCfg(HighLevelActionsCfg):
     pre_trained_pick_action: mdp.PreTrainedPickActionCfg = mdp.PreTrainedPickActionCfg(
         asset_name="robot",
-        # policy_path=f"logs/rsl_rl/deeprobotics_m20_flat/2026-03-18_18-06-34/exported/policy.pt",
-        policy_path=f"logs/rsl_rl/deeprobotics_m20_flat/2026-04-21_00-02-23/exported/policy.pt",
+        # 清单 ⑦：flat 低层 checkpoint 也走参数化（环境变量 RL_TRAINING_LOW_LEVEL_POLICY_FLAT）
+        policy_path=resolve_policy_path(
+            "logs/rsl_rl/deeprobotics_m20_flat/2026-04-21_00-02-23/exported/policy.pt",
+            key="flat",
+        ),
         # 这份旧 flat checkpoint 是在"IK 还是普通 action term（7 维进 policy 动作空间）"时
         # 训的，所以必须用 L1 显式布局；换成用当前代码新训的 flat checkpoint 时删掉这行（走 L2）。
         ee_action_dim=7,

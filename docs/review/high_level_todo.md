@@ -186,7 +186,9 @@
   很容易静默漂移。
 - 建议：改成显式的 `low_level_obs_cfg` 字段 + 一个构造函数，不要就地改。
 
-### 7. 硬编码的、带时间戳的 checkpoint 路径
+### 7. `[已修]` 硬编码的、带时间戳的 checkpoint 路径
+
+> 修复于 `codex/hl-ckpt-params`（commit `1b6d5c8`）。
 
 - `hl_flat_pick_env_cfg.py:37 / 57 / 70`
 - `hl_flat_nav_env_cfg.py:27`
@@ -195,13 +197,43 @@
 这些路径指向 `logs/`（`.gitignore` 里 `**/logs/*` 被忽略）→ 换机器/清理一次 logs 后，
 所有高层任务都起不来。建议改成命令行参数或环境变量，并在加载失败时给出明确报错。
 
-### 8. 模块级 `LOW_LEVEL_ENV_CFG = DeeproboticsM20RoughEnvCfg()`（`high_level_env_cfg.py:30`）
+**修法**：
+
+* `low_level_replay.resolve_policy_path(default, key=...)`：环境变量
+  `RL_TRAINING_LOW_LEVEL_POLICY_<KEY>`（`WBC` / `FLAT` / `NAV`）优先，命中时打印
+  `[ll-replay] 低层 checkpoint 路径被环境变量 ... 覆盖: ...`；命令行仍可用 hydra
+  `env.actions.<term>.policy_path=...` 覆盖（实测可用）。
+* 上面 4 处硬编码路径全部改为 `resolve_policy_path(...)`。
+* `load_low_level_policy()`：6 个 action term 里重复的
+  `check_file_path + torch.jit.load` 统一成一处；文件不存在 / 加载失败时给出
+  "环境变量名 / hydra 覆盖写法 / 重新导出命令"三种修法。
+
+**实测**：
+
+| 场景 | 结果 |
+|---|---|
+| 默认路径（`Pick-WBC-Flat-Teacher`，64 envs，2 iter） | EXIT=0，reward 0.88 → 1.28（与改动前一致） |
+| `RL_TRAINING_LOW_LEVEL_POLICY_WBC=<另一个 83 维 checkpoint>` | 打印覆盖提示、`低层 obs 维度=83 (checkpoint 期望 83)`、EXIT=0 |
+| `RL_TRAINING_LOW_LEVEL_POLICY_WBC=logs/definitely_missing/policy.pt` | 打印覆盖提示 + `FileNotFoundError`（含三种修法），EXIT=1（预期失败） |
+
+### 8. `[已修]` 模块级 `LOW_LEVEL_ENV_CFG = DeeproboticsM20RoughEnvCfg()`（`high_level_env_cfg.py:30`）
+
+> 修复于 `codex/hl-ckpt-params`（commit `1b6d5c8`）。
 
 - 只为拿低层 cfg 就在 import 期实例化整个低层 env cfg（内部还会 deepcopy 所有嵌套配置）。
 - 隐式耦合：低层 cfg 的任何改动都会静默改变高层行为（`sim.dt / render_interval / decimation`
   都是从它派生，见 `high_level_env_cfg.py:456-458`）。
 - 顺带：`render_interval = LOW_LEVEL_ENV_CFG.decimation`(4) 小于 `decimation`(40)，
   每个 env step 会触发多次渲染（IsaacLab 已给出 WARNING）。
+
+**修法**：模块级实例化改成**懒加载单例** `low_level_env_cfg()`（第一次真正用到才构造），
+语义不变、import 期不再构造；`render_interval` 改为等于高层 `decimation`（每个 env step
+渲染一次），并在注释里给出"要更平滑就把 `render_interval` 设成低层
+`low_level_decimation`"的替代写法。
+
+**实测**：`Pick-WBC-Flat-Teacher`（64 envs，2 iter）→ EXIT=0、reward 0.88 → 1.28
+（与改动前一致），启动打印 `Rendering step-size: 0.2`（= 0.005 × 40，改动前是 0.02），
+且不再出现 `render interval ... smaller than the decimation` 警告。
 
 ### 9. `[已修]` `pre_trained_policy_action.py:131` 引用不存在的观测项
 
@@ -283,6 +315,8 @@
 | ① `PreTrainedPickAction` 缺 `ll_command`（+ 奖励项改用 `ll_command_w`） | `codex/hl-fix-ll-command` | `e064bc6` |
 | ② 高层 EE 目标写进死字段、IK 收不到（含 start/end_b 同步） | `codex/hl-fix-ee-command` | `7a22759` |
 | ③ replay 的 `ee_goal` 用世界系（统一到 root 系，O1） | `codex/hl-fix-ll-command` + `codex/hl-fix-ee-command` | `e064bc6` / `7a22759` |
+| ⑦ 硬编码 checkpoint 路径 → 环境变量/hydra + 明确加载报错 | `codex/hl-ckpt-params` | `1b6d5c8` |
+| ⑧ 模块级 `LOW_LEVEL_ENV_CFG` → 懒加载 + `render_interval` 警告 | `codex/hl-ckpt-params` | `1b6d5c8` |
 
 ---
 
