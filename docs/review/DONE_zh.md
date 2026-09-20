@@ -12,7 +12,7 @@
 |---|---|---|
 | 2026-09-20 | 初版：合并 6 份旧文档里的"已修"条目；记录低层内容并入 main | `main @ 7ff5b86` |
 | 2026-09-20 | 新增第五节：高层链并入 `main`（4 个高层任务 2 iter 全 EXIT=0）+ 导出部署态策略固化成流程；第二节标题去掉"未合并 main" | `codex/hl-merge-p0`（`129848e`/`af4602d`/`07601e9`/`0772757`） |
-| 2026-09-20 | 新增第六节 **部署基线**：`main @ 2d49f47` = 部署口径代码，对应 run `2026-09-20_00-50-31` 的 `exported_deploy/*`（含 sha256 与"训练代码 vs main"的差异核对） | `2d49f47` |
+| 2026-09-20 | 新增第六节 **部署基线**：`main @ 2d49f47`（tag `deploy-baseline-2026-09-20`）= 部署口径代码，对应 run `2026-09-20_00-50-31` 的 `exported_deploy/*`（含 sha256 与"训练代码 vs main"的差异核对） | 基线 `2d49f47`；记录 `eb22401` |
 
 ---
 
@@ -82,6 +82,9 @@
 **当前拿去部署的基线 = `main @ 2d49f47`**（`git rev-list --left-right --count origin/main...main` = `0 0`，
 即与 `origin/main` 完全一致、已推送）。基线一旦记录就不再"漂"：后续代码/文档提交只在
 `main` 上往前走，**要部署就 checkout 这个 commit（或用 tag）**，不要用"当时的 main"。
+
+> 已打 **annotated tag `deploy-baseline-2026-09-20` → `2d49f47`**（已 push）。
+> 部署机取代码：`git fetch --tags && git checkout deploy-baseline-2026-09-20`。
 
 | 项 | 值 / 位置 |
 |---|---|

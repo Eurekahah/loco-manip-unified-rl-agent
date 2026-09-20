@@ -10,7 +10,8 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
         并需要 escalate 才能 checkout/commit/push；`git checkout` 可能被"stat-dirty 的假 M"挡住，
         确认内容一致（git hash-object == rev-parse HEAD:path）后用 `git checkout -f`）
 
-【当前状态】**部署基线 = main @ 2d49f47**（低层 + 高层都已并入 main，P0 已清空）：
+【当前状态】**部署基线 = main @ 2d49f47**（tag `deploy-baseline-2026-09-20`，已 push；
+  低层 + 高层都已并入 main，P0 已清空）：
   这个 commit 就是"现在拿去部署"的代码，对应 run
   logs/rsl_rl/history_adaptation/2026-09-20_00-50-31 的 exported_deploy/*
   （产物 sha256 与"训练代码 vs main"的核对见 DONE_zh.md 第六节 / DEF-022）。

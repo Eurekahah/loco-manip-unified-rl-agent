@@ -15,7 +15,7 @@
 | 2026-09-20 | 新增 DEF-019（⑦⑧ × R1 同段冲突的合并解法）、DEF-018（Windows 大小写路径冲突）；高层链并入 main | `codex/hl-merge-p0`（`af4602d`/`07601e9`/`30d5411`/`0772757`） |
 | 2026-09-20 | 新增 DEF-020：导出部署态策略时增加 ONNX（含"绝对误差阈值误判 fp32 舍入"的教训）；run `2026-09-20_00-50-31` 用 iter=19999 重新导出 | `708ca53` |
 | 2026-09-20 | 新增 DEF-021：sim2sim/sim2real 部署参考文档 + 部署规格探针（实测出"Isaac 原生关节序 ≠ MuJoCo 关节序"等关键事实） | `7458672` |
-| 2026-09-20 | 新增 DEF-022（部署基线固化：`main @ 2d49f47` + 产物 sha256 + 训练代码核对）、DEF-023（P1-1 归因：`noise_std` 是饱和平台、`error_vel_xy` 是命令课程口径产物；含 P1-2 新证据） | `summarize_run.py` 新增 |
+| 2026-09-20 | 新增 DEF-022（部署基线固化：`main @ 2d49f47` + 产物 sha256 + 训练代码核对 + tag `deploy-baseline-2026-09-20`）、DEF-023（P1-1 归因：`noise_std` 是饱和平台、`error_vel_xy` 是命令课程口径产物；含 P1-2 新证据） | 工具 `dc3a5b9` / 文档 `eb22401` |
 
 ---
 
@@ -146,8 +146,8 @@ prompt 里的哈希是**人肉回填**的（`093be1a` 那条提交就叫"回填 
 * `policy_layout.json` 自述 `source_run/source_checkpoint/source_iteration = 19999`、
   `policy_obs 83 / history 10×70 / latent 32 / action 16 / opset 17 / 相对误差 1.87e-07`
   ⇒ 与上面 run 一一对应，可回溯。
-* 遗留：**没有**打 tag（要写 `.git` 需提权），所以基线目前靠"commit 哈希 + 本节"固定；
-  若日后要更稳，可 `git tag deploy-baseline-2026-09-20 2d49f47`。
+* 基线用 **annotated tag `deploy-baseline-2026-09-20` → `2d49f47`** 固定（已 push 到 origin），
+  部署机可以直接 `git checkout deploy-baseline-2026-09-20`，不必记哈希。
 
 ### DEF-021 `2026-09-20` 部署交接：sim2sim/sim2real 参考文档 + 部署规格探针
 
