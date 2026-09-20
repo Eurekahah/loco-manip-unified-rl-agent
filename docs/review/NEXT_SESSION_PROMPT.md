@@ -46,6 +46,10 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   之后：P2（高层迁移到基类 + 工程债）、P3（回归矩阵脚本化 / summarize_run.py / 文档收尾）。
 
 【命令备忘】
+  # 部署（sim2sim/MuJoCo → sim2real）先看 docs/deploy_sim2sim_sim2real_zh.md（DEF-021）
+  # 在部署机上先跑一次拿"权威布局"（关节序/默认角/增益/观测 scale）：
+  python scripts/reinforcement_learning/rsl_rl/probe_deploy_layout.py \
+      --task History-Adaptation-Deeprobotics-M20-v0 --headless --num_envs 2
   # 训练（低层主线）
   python scripts/reinforcement_learning/rsl_rl/train.py \
       --task History-Adaptation-Deeprobotics-M20-v0 --headless --num_envs 4096
@@ -63,6 +67,11 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
       --task Flat-Deeprobotics-M20-Piper-WBC-v0 --headless --num_envs 16 --steps 150
 
 【踩坑备忘（累计）】
+  * **关节顺序有三套**（部署最容易错）：① 动作序 = 12 腿(fl,fr,hl,hr) + 4 轮；
+    ② articulation 原生序（观测 joint_pos/joint_vel 的 24 维）= 四个 hipx → arm1 → 四个 hipy
+    → arm2 → 四个 knee → arm3 → 四个 wheel(15..18) → arm4-6 → 夹爪；③ MuJoCo MJCF 序 =
+    每腿 hipx/hipy/knee/wheel 连续。一律按关节名映射。
+  * history 的 70 维用**原始值**（不乘 scale），policy_obs 的同名项乘了 scale —— 两者不能复用同一个向量。
   * **Windows 大小写不敏感**：合并"两边各自新增、只差大小写"的文件（本轮是
     next_session_prompt.md vs NEXT_SESSION_PROMPT.md）时，git 会把它当两个路径 ——
     别用 `git commit -- <path>`（会解析到另一个文件、提交成"内容替换"），

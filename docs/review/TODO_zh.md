@@ -16,6 +16,7 @@
 | 2026-09-20 | 初版：把 6 份旧清单合并成 TODO/DONE/DEFECT_LOG 三份；低层内容并入 `main`，P0 变成"高层链合并 + 导出流程固化" | `main @ 7ff5b86` |
 | 2026-09-20 | **P0 清空**：高层链合并进 `main`（3 个 merge commit）+ 导出部署态策略固化（脚本默认目录/训练收尾提示/训练说明）；新增 DEF-018/019；P3"文档收尾"整条完成（旧 `docs/review/*.md` 已删 + 全部悬空引用改指新文档） | `codex/hl-merge-p0`（`129848e`/`af4602d`/`07601e9`/`30d5411`/`0772757`） |
 | 2026-09-20 | 导出增加 **ONNX**（`--onnx/--opset`，含 onnxruntime 自检；DEF-020）；run `2026-09-20_00-50-31` 用最新 `model_19999.pt` 重新导出 | `708ca53` |
+| 2026-09-20 | 新增**部署交接**：`docs/deploy_sim2sim_sim2real_zh.md` + `probe_deploy_layout.py`（DEF-021）；P1/P2/P3 待办不变 | `7458672` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -108,6 +109,13 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
   - 依据：现在每次手抠 tensorboard（57 MB events，读一次 30~60 s）。
   - 内容：输入 run 目录 → 输出"关键指标 × 迭代"表（终止构成、ep_len、reward、
     `error_vel_xy`、`noise_std`、`height_error_*`、课程权重），支持两 run 对比。
+
+- [ ] **sim2sim(MuJoCo) 落地**（承接 DEF-021 的部署文档）
+  - 现在只有"接口契约 + 探针 + 文档"，**还没有可运行的 MuJoCo 部署脚本**。
+  - 下一步：用 `deep_robotics_model/M20_Piper_own/mjcf/M20_Piper_own.xml` 按文档第 8 节的
+    七步顺序搭（零动作站立 → 零位移命令 → 开 IK → 小步进 → 速度命令）；
+    数值验收用第 8 节的"ONNX vs TorchScript 相对误差 ~1e-6"。
+  - 已知待解：MJCF 的 `timestep=0.002` vs Isaac `0.005`；IK 需要自己实现（DLS λ=0.01）。
 
 - [ ] **把"EE 锚点 4 组对照"固化成一键脚本**
   - 现在靠 `probe_root_height_termination.py --freeze_ee_preset {none,default,low}` 手工跑

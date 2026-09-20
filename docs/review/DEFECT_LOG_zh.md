@@ -14,10 +14,51 @@
 | 2026-09-20 | 初版：把 6 份旧文档里散落的修复记录归一成 DEF-001~017 | `main @ 7ff5b86` |
 | 2026-09-20 | 新增 DEF-019（⑦⑧ × R1 同段冲突的合并解法）、DEF-018（Windows 大小写路径冲突）；高层链并入 main | `codex/hl-merge-p0`（`af4602d`/`07601e9`/`30d5411`/`0772757`） |
 | 2026-09-20 | 新增 DEF-020：导出部署态策略时增加 ONNX（含"绝对误差阈值误判 fp32 舍入"的教训）；run `2026-09-20_00-50-31` 用 iter=19999 重新导出 | `708ca53` |
+| 2026-09-20 | 新增 DEF-021：sim2sim/sim2real 部署参考文档 + 部署规格探针（实测出"Isaac 原生关节序 ≠ MuJoCo 关节序"等关键事实） | `7458672` |
 
 ---
 
 # 记录（新→旧）
+
+### DEF-021 `2026-09-20` 部署交接：sim2sim/sim2real 参考文档 + 部署规格探针
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 交付物（部署文档 + 工具） |
+| 状态 | 已完成（已并入 main） |
+| 关联 | `7458672`；`docs/deploy_sim2sim_sim2real_zh.md`、`scripts/reinforcement_learning/rsl_rl/probe_deploy_layout.py` |
+
+**需求**：策略要在**另一台电脑**上先做 sim2sim（MuJoCo）、再转 sim2real。需要一份"改部署脚本时的
+对照手册"，把"必须照抄的接口"和"必须自己实现的部分"写死，避免靠猜。
+
+**关键事实（本轮实测，写进文档当权威）**：
+
+1. **三种关节顺序互不相同**：动作序（12 腿 fl,fr,hl,hr + 4 轮）、
+   **articulation 原生序**（观测 `joint_pos/joint_vel` 用的 24 维：0-3 是四个 hipx、
+   4 是 arm1、5-8 hipy、9 是 arm2、10-13 knee、14 是 arm3、15-18 四个轮、19-21 arm4-6、
+   22-23 夹爪）、MuJoCo MJCF 序（每腿 hipx/hipy/knee/wheel 连续 + 臂 + 夹爪）。
+   历史上 `known_issues #1`/DEF-016 就是这里出的错。
+2. **动作增益不能用内部 `_scale` 张量推断**：探针改成"把动作置 1.0 看关节目标"才测准 ——
+   结论是 hipx **0.125**、其余腿关节 **0.25**、轮子速度 **5.0**（默认角偏移另计）。
+3. **history 与 policy_obs 里同名项不一样**：history 是**原始值**（`base_ang_vel` 不乘 0.25、
+   `joint_vel` 不乘 0.05），且 `joint_pos` 24 维**含轮子不置零**；policy_obs 侧则乘了 scale、
+   且 `joint_pos` 的轮子列被置零。
+4. **机械臂不由策略动作驱动**：`ee_ik` term 的 `action_dim = 0`，臂由 50 Hz 的
+   DLS IK（λ=0.01、绝对位姿、`arm_joint1..6` → `gripper_base`）从 `ee_pose` 命令驱动 ⇒
+   部署侧必须自己实现 IK，否则臂不动且观测语义崩。
+5. **MuJoCo 侧已有可用模型**：`deep_robotics_model/M20_Piper_own/mjcf/M20_Piper_own.xml`，
+   关节轴与 URDF 一致（无符号翻转）；实测默认姿态下 `gripper_base` 相对 `base_link`
+   位置 `(0.3492, 0, 0.4326)` vs Isaac `(0.3492, 0, 0.4327)` —— 差 1e-4，运动学对齐。
+   但 MJCF 自带 `timestep=0.002`（Isaac 是 0.005），需要显式处理控制周期。
+6. **命令终值**（课程跑满后）：`base_velocity` vx (-5,5)/vy (-1,1)/wz (-1,1)、
+   `body_pose` height (0.33,0.55)/pitch ±0.35/roll ±0.25、`ee_pose` 球坐标 l (0.30,0.52) 等；
+   且 `body_pose.height` 的度量是 `root_z − mean(四轮 z) + 0.09`（不是 root 绝对 z）。
+
+**产出**：① 探针 `probe_deploy_layout.py`（在部署机上跑一次即打印关节序/默认角/限位/
+动作增益/观测逐项 scale·clip·noise/关键 body 下标/默认姿态几何）；
+② 文档 `docs/deploy_sim2sim_sim2real_zh.md`（接口契约 83/700/16、动作→关节映射、
+命令来源与坐标系、IK 复刻要点、MuJoCo 建模参数、sim2sim 七步上线顺序、
+sim2real 差异清单、失败模式对照表、权威文件清单）。
 
 ### DEF-020 `2026-09-20` 部署态导出增加 ONNX（+ 自检阈值必须按输出幅值归一）
 
