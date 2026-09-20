@@ -24,8 +24,9 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
 【已验证结果】4096 envs、iter=14000 同口径对比：
   旧 2026-09-19_09-02-50（无课程）: root_height 0.361、bad_orientation 0.010、ep_len 805、reward 15.4
   新 2026-09-20_00-50-31（本代码）  : root_height 0.122、bad_orientation 0.010、ep_len 883、reward 22.7
-  部署态策略已导出：logs/rsl_rl/history_adaptation/2026-09-20_00-50-31/exported_deploy/
-  （自检 0.000e+00；注意同目录 exported/policy.pt 是 actor-only，别用）
+  部署态策略已导出（最新 checkpoint model_19999.pt）：
+  logs/rsl_rl/history_adaptation/2026-09-20_00-50-31/exported_deploy/{policy.pt, policy.onnx, policy_layout.json}
+  （TorchScript 自检 0.000e+00；ONNX 相对误差 1.9e-07；注意 <run>/exported/policy.pt 是 actor-only，别用）
 
 【文档约定（新）】docs/review/ 只保留：
   TODO_zh.md             # 唯一未完成清单（P0→P3，带日期）
@@ -51,10 +52,9 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   # 课程阶段对应迭代数（num_steps_per_env=24）：s0 <1042、s1 <2083、s2 <3125、s3 之后
   # 冒烟回归（每个改动都要跑；退出码用 `cmd *> log; $LASTEXITCODE`）
   python scripts/reinforcement_learning/rsl_rl/train.py --task <task> --headless --num_envs 64 --max_iterations 2
-  # 导出部署态策略
+  # 导出部署态策略（默认写 <run>/exported_deploy/：policy.pt + policy.onnx + policy_layout.json）
   python scripts/reinforcement_learning/rsl_rl/export_deploy_policy.py \
-      --run logs/rsl_rl/history_adaptation/<run> --checkpoint model_15000.pt \
-      --out_dir logs/rsl_rl/history_adaptation/<run>/exported_deploy
+      --run logs/rsl_rl/history_adaptation/<run> --checkpoint model_19999.pt   # --no-onnx / --opset 可选
   # 诊断探针
   python scripts/reinforcement_learning/rsl_rl/probe_root_height_termination.py \
       --task History-Adaptation-Deeprobotics-M20-v0 --headless --num_envs 512 --steps 1000 \

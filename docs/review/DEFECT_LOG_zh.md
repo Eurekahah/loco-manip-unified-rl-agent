@@ -13,10 +13,43 @@
 |---|---|---|
 | 2026-09-20 | 初版：把 6 份旧文档里散落的修复记录归一成 DEF-001~017 | `main @ 7ff5b86` |
 | 2026-09-20 | 新增 DEF-019（⑦⑧ × R1 同段冲突的合并解法）、DEF-018（Windows 大小写路径冲突）；高层链并入 main | `codex/hl-merge-p0`（`af4602d`/`07601e9`/`30d5411`/`0772757`） |
+| 2026-09-20 | 新增 DEF-020：导出部署态策略时增加 ONNX（含"绝对误差阈值误判 fp32 舍入"的教训）；run `2026-09-20_00-50-31` 用 iter=19999 重新导出 | `708ca53` |
 
 ---
 
 # 记录（新→旧）
+
+### DEF-020 `2026-09-20` 部署态导出增加 ONNX（+ 自检阈值必须按输出幅值归一）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 特性（部署工具链） |
+| 状态 | 已完成（已并入 main） |
+| 关联 | `708ca53`；`scripts/reinforcement_learning/rsl_rl/export_deploy_policy.py`、`docs/train_history_flat_zh.md` |
+
+**现象 / 需求**：`export_deploy_policy.py` 原来只出 TorchScript（`policy.pt`）；
+sim2sim 与真机侧要的是 **ONNX**。另外 `2026-09-20_00-50-31` 这个 run 实际训到
+**iter=19999**（不是先前以为的 15000），导出应该取最新 checkpoint。
+
+**根因 / 要点**：① ONNX 导出必须与 `policy.pt` **同接口同数值**，否则"换格式"等于换策略；
+② 校验判据不能用固定绝对阈值 —— 低层策略输出**没有归一化**（实测 `|a|max = 183.6`），
+纯 fp32 舍入就已有 `3.4e-05`，按 `1e-5` 的绝对阈值会把**正确的导出判成失败**（第一次跑就撞上了）；
+③ `history_flat` 是 700 维展平向量，"最旧→最新"的顺序如果拼反，ONNX 不会报错、只会静默算错。
+
+**修正**：① 新增 `--onnx/--no-onnx`（默认开）与 `--opset`（默认 17）；
+② 自检三步：`onnx.checker.check_model` → onnxruntime 与 TorchScript 在**同一组**随机输入上的
+**相对**误差（`max|Δ| / max(1, |ref|max) < 1e-5`）→ batch=1/5 的动态维验证；
+③ `policy_layout.json` 增补 `onnx` 段（文件名/opset/输入输出名与形状/相对误差/tolerance/runtime）
+与 `history_order`、`history_note`（每步 70 维的构成 + reset 后整窗填满同一帧 + 谁维护缓冲）。
+json 改成**最后写**，保证里面记录的结论都是"已经验过"的。
+
+**结果**：run `2026-09-20_00-50-31` 用 `model_19999.pt` 重新导出
+`exported_deploy/{policy.pt, policy.onnx(981 KB), policy_layout.json}`：
+scripted↔eager **0.000e+00**、与 `ActorCriticHistory.act_inference` **0.000e+00**、
+ONNX↔TorchScript 相对误差 **1.87e-07**（绝对 3.43e-05 / 输出幅值 183.6）；
+独立复核（另取随机输入、直接 `onnxruntime` + `torch.jit.load` 对比）B=1/3/8 相对误差
+**1.5e-07 ~ 2.7e-07**；ONNX 图：opset 17、`policy_obs['batch',83]` + `history_flat['batch',700]`
+→ `action['batch',16]`，batch 维动态。
 
 ### DEF-019 `2026-09-20` 合并 ⑦⑧ 与 R1：同一批 `__init__` 的两侧改写（冲突解法）
 
