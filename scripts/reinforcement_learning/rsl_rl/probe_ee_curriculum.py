@@ -14,7 +14,7 @@
    旧实现，与 slerp 版对比**命令姿态的单步变化**（即"重采样瞬间给关节一个尖峰"的度量）。
 4. **臂扰动机制 A/B**：把 ``target_blend_*`` 设成 0（s0：目标=默认位姿，臂不动）与
    1（s3：完整任务），各跑同样步数，对比臂关节速度 RMS / 底盘角速度 RMS / 最大倾角 /
-   EE 跟踪误差 —— 直接对应 `bad_orientation_analysis_zh.md` 里"臂把扰动传给底盘"的结论。
+   EE 跟踪误差 —— 直接对应 `DEFECT_LOG_zh.md` DEF-006 里"臂把扰动传给底盘"的结论。
 
 用法（必须 headless）::
 
@@ -265,7 +265,7 @@ def _arm_disturbance_stats(env, term, steps: int, ee_ranges: dict | None,
 
     会统计 `root_z < 0.30` 的比例 —— 现在 `root_height_below_minimum` 是主要的摔倒记账项
     （实测：锁低位锚点 1.0% vs 臂跟随全范围 25.8% vs 锁默认举起位姿 55.5%，
-    详见 docs/review/bad_orientation_analysis_zh.md §5F）。
+    详见 docs/review/DEFECT_LOG_zh.md DEF-006）。
     """
     if ee_ranges is not None:
         for name, value in ee_ranges.items():

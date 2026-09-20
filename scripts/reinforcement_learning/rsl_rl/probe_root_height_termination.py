@@ -3,7 +3,7 @@
 #
 """probe：`root_height_below_minimum` 终止到底在"惩罚什么"，以及"只降阈值够不够"。
 
-背景（`docs/review/known_issues.md` #19、用户 2026-09-19 的 20k run）：
+背景（`docs/review/DEFECT_LOG_zh.md` DEF-006、用户 2026-09-19 的 20k run）：
 `bad_orientation_2` 已经降到 0.7%，但 `root_height_below_minimum` 还有 ~35%；同一份日志里
 `Metrics/body_pose/height_error_bias` 长期是 **+0.08~+0.21 m**，而
 `height_error = 命令 − 实际` ⇒ **机器人系统性比命令低 8~21 cm**。

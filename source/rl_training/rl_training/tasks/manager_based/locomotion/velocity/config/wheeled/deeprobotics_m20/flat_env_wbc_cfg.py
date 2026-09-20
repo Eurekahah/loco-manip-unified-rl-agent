@@ -313,7 +313,7 @@ class WBCCurriculumCfg(DeeproboticsM20CurriculumsCfg):
 
     # ── EE 目标课程 s0→s3：先把机械臂锁在**低位**，再逐步放开 ────────────────
     #
-    # 背景（docs/review/bad_orientation_analysis_zh.md §5）：机械臂目标从"默认位姿"开始
+    # 背景（docs/review/DEFECT_LOG_zh.md DEF-006）：机械臂目标从"默认位姿"开始
     # 逐步放开。**但实测推翻了"锁在默认位姿"这个锚点**（`probe_root_height_termination.py`，
     # 512 envs × 20 s，19999 iter 的策略）：
     #

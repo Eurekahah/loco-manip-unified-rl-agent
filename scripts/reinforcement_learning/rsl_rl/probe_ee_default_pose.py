@@ -13,7 +13,7 @@
 EE 目标课程（``WBCCurriculumCfg`` 的 s0 阶段）要把目标**锁在默认位姿**上，
 而"锁"是通过把采样区间收成一个点实现的（``p_l=(r0, r0)`` 这种退化区间）——
 所以必须知道默认位姿对应的 ``(r0, pitch0, yaw0)``，否则 s0 表达不出"默认位姿"
-（这正是 `docs/review/bad_orientation_analysis_zh.md` 里留待下次 session 第一步做的事）。
+（这正是 `docs/review/DEFECT_LOG_zh.md` DEF-006 里留待下次 session 第一步做的事）。
 
 本脚本还会回答两个相关的问题：
 
@@ -153,7 +153,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     print(f"\n[probe] s0（p_l 收成一点 + o_*=0）的姿态 vs 默认姿态：")
     print(f"  夹角: {_stats(angle_diff)} rad  (deg {_stats(torch.rad2deg(angle_diff))})")
     print("  -> 角度大说明 `o_*=(0,0)` 并不等于'姿态锁默认'，s0 若要严格锁默认姿态，")
-    print("     需要给命令项加一个显式的固定姿态（见 docs/review/bad_orientation_analysis_zh.md 的方案 A）。")
+    print("     需要给命令项加一个显式的固定姿态（见 docs/review/DEFECT_LOG_zh.md DEF-006 的方案 A）。")
 
     # ── 3. step 几步，看命令项自己采样出来的目标（用于确认采样范围真的生效）──
     zero_actions = torch.zeros(env.num_envs, env.action_manager.total_action_dim, device=env.device)

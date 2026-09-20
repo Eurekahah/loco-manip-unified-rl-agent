@@ -14,7 +14,7 @@
 | 日期 | 更新内容 | 相关 commit / 分支 |
 |---|---|---|
 | 2026-09-20 | 初版：把 6 份旧清单合并成 TODO/DONE/DEFECT_LOG 三份；低层内容并入 `main`，P0 变成"高层链合并 + 导出流程固化" | `main @ 7ff5b86` |
-| 2026-09-20 | **P0 清空**：高层链合并进 `main`（3 个 merge commit）+ 导出部署态策略固化（脚本默认目录/训练收尾提示/训练说明）；新增 DEF-018/019；P3"文档收尾"完成一半（旧 `docs/review/*.md` 已删） | `codex/hl-merge-p0`（`129848e`/`af4602d`/`07601e9`/`30d5411`/`0772757`） |
+| 2026-09-20 | **P0 清空**：高层链合并进 `main`（3 个 merge commit）+ 导出部署态策略固化（脚本默认目录/训练收尾提示/训练说明）；新增 DEF-018/019；P3"文档收尾"整条完成（旧 `docs/review/*.md` 已删 + 全部悬空引用改指新文档） | `codex/hl-merge-p0`（`129848e`/`af4602d`/`07601e9`/`30d5411`/`0772757`） |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -112,13 +112,13 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
   - 现在靠 `probe_root_height_termination.py --freeze_ee_preset {none,default,low}` 手工跑
     （512 envs × 20 s ≈ 2.5 min）。以后改 EE 区间/锚点前先跑一遍。
 
-- [ ] **文档收尾**
-  - 代码/文档里指向旧文档的路径（`bad_orientation_analysis_zh.md`、`known_issues.md`、
-    `progress_summary_zh.md`、`high_level_todo.md`、`todo_master_zh.md`）要更新为
-    `TODO_zh.md` / `DONE_zh.md` / `DEFECT_LOG_zh.md`；
-    **仍待办**（`grep -rn` 还能在代码注释/cfg 里找到这些名字）。
-  - [x] 合并高层分支时删掉它们带来的旧 `docs/review/*.md`（2026-09-20，`0772757`）：
+- [x] **文档收尾**（2026-09-20 完成）
+  - [x] 合并高层分支时删掉它们带来的旧 `docs/review/*.md`（`30d5411`、`0772757`）：
     `docs/review/` 现在只剩 TODO/DONE/DEFECT_LOG/NEXT_SESSION_PROMPT + `templates/`。
+  - [x] 代码/注释/探针里指向旧文档的 9 处引用改指新文档（`bad_orientation_analysis_zh`
+    → `DEFECT_LOG_zh.md` DEF-006、`history_low_level_policy_todo` → DEF-014、
+    `known_issues #19` → `TODO_zh.md` P1-1）；`grep` 复核：仓库内（除三份文档自身的
+    "旧文档去哪了"表）已无悬空引用。
 
 ---
 

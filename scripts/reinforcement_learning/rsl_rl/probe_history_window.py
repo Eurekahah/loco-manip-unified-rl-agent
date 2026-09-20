@@ -3,7 +3,7 @@
 #
 """probe：验证高层 replay 侧构造的 **history 窗口**与低层训练口径逐位一致。
 
-对应 `docs/review/history_low_level_policy_todo.md` 的验收项。检查四件事：
+对应 `docs/review/DEFECT_LOG_zh.md` DEF-014 的验收项。检查四件事：
 
 1. **维度**：`policy_layout.json` 的 `policy_obs_dim / history_length /
    history_single_step_dim` 与 replay 建出来的 obs/窗口一致；checkpoint 的 `action_dim`

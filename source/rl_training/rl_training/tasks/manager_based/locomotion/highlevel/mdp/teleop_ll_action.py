@@ -539,7 +539,7 @@ class TeleopLLActionCfg(ActionTermCfg):
         ee_ground_clearance: float = 0.135
         ee_max_reach_above_ground: float = 1.2
         ee_pitch:  tuple[float, float] = (-math.pi / 2, 0.0)
-        target_height: tuple[float, float] = (0.33, 0.55)  # 与低层 body_pose.height_range 上界保持一致（实测 0.60 够不到，见 docs/review/bad_orientation_analysis_zh.md §5F）
+        target_height: tuple[float, float] = (0.33, 0.55)  # 与低层 body_pose.height_range 上界保持一致（实测 0.60 够不到，见 docs/review/DEFECT_LOG_zh.md DEF-006）
         target_pitch:  tuple[float, float] = (-0.35, 0.35)
         target_roll:   tuple[float, float] = (-0.25, 0.25)
 
