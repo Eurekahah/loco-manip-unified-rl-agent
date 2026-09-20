@@ -118,11 +118,14 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
 
 ## P3 —— 验证工具与文档
 
-- [ ] **回归矩阵**（每次改动后跑一遍）
+- [ ] **回归矩阵脚本化**（矩阵本身 2026-09-20 已手工整跑一遍：8/8 EXIT=0，见 `DONE_zh.md` 第六节）
   - 低层（main 已有）：`History-Adaptation-Deeprobotics-M20-v0`、
     `Flat-Deeprobotics-M20-Piper-WBC-v0`、`Flat-Deeprobotics-M20-Piper-v0`、
     `Flat-Deeprobotics-M20-Piper-Arm-v0` —— 各 `--headless --num_envs 64 --max_iterations 2`。
   - 高层（合并高层链后）：Pick-Flat / Pick-WBC-Flat / Teleop / Nav-Flat-Teacher 同上。
+  - 还缺的：把 8 条命令收成一个脚本（顺序跑、逐条记 EXIT、失败即非零退出、日志落到
+    `logs/smoke/<日期>_<task>.log`），省得每次手敲；高层四条要能透传低层 checkpoint 路径
+    （`RL_TRAINING_LOW_LEVEL_POLICY_*`）。预估 0.5~1 h（跑一次 ~6 min）。
 
 - [x] **训练曲线自动分析脚本**（`scripts/reinforcement_learning/rsl_rl/summarize_run.py`）—— 2026-09-20 完成，见 `DONE_zh.md` 第四节
   - 依据：现在每次手抠 tensorboard（57 MB events，读一次 30~60 s）。

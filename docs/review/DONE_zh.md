@@ -12,7 +12,7 @@
 |---|---|---|
 | 2026-09-20 | 初版：合并 6 份旧文档里的"已修"条目；记录低层内容并入 main | `main @ 7ff5b86` |
 | 2026-09-20 | 新增第五节：高层链并入 `main`（4 个高层任务 2 iter 全 EXIT=0）+ 导出部署态策略固化成流程；第二节标题去掉"未合并 main" | `codex/hl-merge-p0`（`129848e`/`af4602d`/`07601e9`/`0772757`） |
-| 2026-09-20 | 新增第六节 **部署基线**：`main @ 2d49f47`（tag `deploy-baseline-2026-09-20`）= 部署口径代码，对应 run `2026-09-20_00-50-31` 的 `exported_deploy/*`（含 sha256 与"训练代码 vs main"的差异核对） | 基线 `2d49f47`；记录 `eb22401` |
+| 2026-09-20 | 新增第六节 **部署基线**：`main @ 2d49f47`（tag `deploy-baseline-2026-09-20`）= 部署口径代码，对应 run `2026-09-20_00-50-31` 的 `exported_deploy/*`（含 sha256 与"训练代码 vs main"的差异核对）+ **基线可运行性验收**（8 任务冒烟回归 8/8 EXIT=0） | 基线 `2d49f47`；记录 `eb22401` |
 
 ---
 
@@ -123,3 +123,23 @@ run 目录里的 `<run>/git/loco-manip-unified-rl-agent.diff`（rsl_rl 训练启
 ⇒ **结论**：在当前口径下"main 的代码 = 训出这个策略的代码"成立。要复现旧 checkpoint 时
 只需注意别改 `ee_ik` 这类 action 维度（DEF-013：布局一变旧 checkpoint 静默失效）。
 详见 `DEFECT_LOG_zh.md` DEF-022。
+
+### 基线可运行性验收（2026-09-20，8 任务冒烟回归）
+
+冻结基线前把 TODO P3 的"回归矩阵"整体跑了一遍（每个任务单独进程，
+`python scripts/reinforcement_learning/rsl_rl/train.py --task <task> --headless --num_envs 64 --max_iterations 2`，
+日志在 `logs/smoke/2026-09-20_<task>.log`）—— **8/8 EXIT=0，无 Traceback**：
+
+| 任务 | EXIT | 关键打印 |
+|---|---|---|
+| `History-Adaptation-Deeprobotics-M20-v0` | 0 | 启动自检 `policy 83 / critic 86 / history 700 / privileged 89`；reward 0.02 / -0.01 |
+| `Flat-Deeprobotics-M20-Piper-WBC-v0` | 0 | — |
+| `Flat-Deeprobotics-M20-Piper-v0` | 0 | — |
+| `Flat-Deeprobotics-M20-Piper-Arm-v0` | 0 | — |
+| `Isaac-Deeprobotics-High-Level-Pick-Flat-Teacher-v0` | 0 | `PreTrainedPickAction: action_dim=23, 低层 obs 83（期望 83）`；reward **1.11** |
+| `Isaac-Deeprobotics-High-Level-Pick-WBC-Flat-Teacher-v0` | 0 | `PreTrainedPickWBCAction: 16 / 76（期望 76）`；reward **1.28** |
+| `Isaac-M20-Piper-Teleop-v0` | 0 | `TeleopLLAction: 16 / 76（期望 76）`；reward **0.15** |
+| `Isaac-Deeprobotics-High-Level-Nav-Flat-Teacher-v0` | 0 | `PreTrainedNavAction: 16 / 69（期望 69）`；reward **10.25** |
+
+四个高层 reward 与合并高层链时的记录（1.11 / 1.28 / 0.15 / 10.25）逐位一致 ⇒ 基线没有回归。
+日志里只有 Isaac 自带的 `failed to open .../kit/.../user.config.json` 警告（只读安装目录，无害）。
