@@ -311,8 +311,11 @@ class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
     curriculum: WBCCurriculumCfg = WBCCurriculumCfg()
     def __post_init__(self):
         super().__post_init__()
-        self.observations.policy.ee_goal = None
-        self.observations.critic.ee_goal = None
+        # 本次训练**保留** ee_goal 观测（不使用 "去掉 ee_goal" 的版本）。
+        # 代价：低层 policy 观测宽度 76 -> 83，之前在不含 ee_goal 下训出的
+        # checkpoint 都不能再复用，必须重训。
+        # self.observations.policy.ee_goal = None
+        # self.observations.critic.ee_goal = None
         self.rewards.base_height_l2.weight = 0.0  # 关闭原有的高度奖励，改用新的 body_height_tracking
         self.rewards.lin_vel_z_l2.weight = 0.0      # 降低底盘 z 轴速度惩罚
         self.rewards.ang_vel_xy_l2.weight = 0.0     # 关闭水平面角速度惩罚

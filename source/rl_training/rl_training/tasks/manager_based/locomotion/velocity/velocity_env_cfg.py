@@ -826,7 +826,9 @@ class TerminationsCfg:
         params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=""), "threshold": 1.0},
     )
 
-    bad_orientation_2 = DoneTerm(func=mdp.bad_orientation_2)
+    # 倾角阈值可调：0.8 rad ≈ 45.8°（旧实现等价于"单轴约 30°"，对本任务的
+    # body_pose 命令空间 + 实测跟踪误差来说太紧，见 mdp/events.py::bad_orientation_2）
+    bad_orientation_2 = DoneTerm(func=mdp.bad_orientation_2, params={"limit_angle": 0.8})
 
     root_height_below_minimum = DoneTerm(
         func=mdp.root_height_below_minimum,
