@@ -17,10 +17,64 @@
 | 2026-09-20 | 新增 DEF-021：sim2sim/sim2real 部署参考文档 + 部署规格探针（实测出"Isaac 原生关节序 ≠ MuJoCo 关节序"等关键事实） | `7458672` |
 | 2026-09-20 | 新增 DEF-022（部署基线固化：`main @ 2d49f47` + 产物 sha256 + 训练代码核对 + tag `deploy-baseline-2026-09-20`）、DEF-023（P1-1 归因：`noise_std` 是饱和平台、`error_vel_xy` 是命令课程口径产物；含 P1-2 新证据） | 工具 `dc3a5b9` / 文档 `eb22401` |
 | 2026-09-20 | 新增 DEF-024：探索噪声上界 `max_noise_std`（默认 0 = 不限制）+ 投影梯度实现 + hydra 覆盖踩坑；P1-1 的 A/B（cap 1.2 / entropy_coef 0.002）已启动，结果待回填 | 代码 + `docs: P1-1 A/B` 提交 |
+| 2026-09-20 | 新增 DEF-025：桌面版自动化（heartbeat / cron）的唤醒投递条目缺 `call_id`，被 deepseek `/responses` 一律 422 拒绝、并**永久污染所在线程**；两条 automation 已 `PAUSED`，P1-1 收尾改回手动 | 本次（docs-only） |
+| 2026-09-22 | 回填 **DEF-024 §4**：P1-1 A/B 实测收尾（cap=1.2 通过、**建议作为默认**；`entropy_coef=0.002` 通过但略逊；意外点 `entropy_coef=0` 反而 +15% s3 摔倒）+ **统一窗口口径修正** | 本次（docs-only） |
 
 ---
 
 # 记录（新→旧）
+
+### DEF-025 `2026-09-20` 桌面版自动化唤醒必然 422：投递条目缺 `call_id`（线程被永久污染）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 工具链缺陷（Codex 桌面版 `26.901.51231` × deepseek provider `wire_api=responses`） |
+| 状态 | **未修（外部 bug，仓库侧修不了）**；两条 automation 已置 `PAUSED`，P1-1 监控改回手动 |
+| 关联 | automation `p1-1-entropy-coef-a-b`（heartbeat，20 min）、`p1-1-cron`（cron，5 min 试跑）；线程 `01a0be53`（被污染）、`01a0bea6`（cron 试跑）；`TODO_zh.md` P1-1 |
+
+**1. 现象**
+
+* 19:33:59（heartbeat）与 19:49:29（cron 首次试跑）触发的自动化轮次**都**失败：
+  `unexpected status 422 Unprocessable Entity: Failed to deserialize the JSON body into the target type:
+  input: missing field \`call_id\` at line 1 column N, url: https://api.deepseek.com/responses`。
+* 更严重的是**连带污染**：heartbeat 那次之后，用户在**同一线程**里的普通提问（19:36:15 那条
+  "现在变体1是在运行训练吗…"）也一起 422，线程状态变成 `systemError` —— 该线程从此每一轮都发不出去。
+
+**2. 根因（实测定位，不是猜）**
+
+* 唤醒载荷是以 `functionCallOutput` 注入线程的，条目只有 `id` / `name` / `namespace` / `output`，
+  **没有 `call_id`**：
+
+  ```json
+  {"type":"functionCallOutput","id":"fco_01a0be98-2e76-71b3-a29a-636c0929cb4f",
+   "name":"automation_update","namespace":"codex_app","output":"<heartbeat>…"}
+  ```
+
+  （在 `%CODEX_HOME%/thread_history_1.sqlite` → `thread_items.item_json` 里可直接看到。）
+* deepseek 的 `/responses` 严格要求 function-call-output 项带 `call_id` ⇒ **只要线程历史里存在这一条，
+  之后每一轮请求都 422**（用户消息也救不回来）。
+* **反证**（排除"用了 automation 工具就会坏"）：同一线程更早的 3 条 `mcpToolCall`
+  （ordinal 968 / 997，创建与查看 automation）之后线程仍然正常，19:12 那轮是**带着它们**成功的；
+  真正让线程报废的是 19:33 注入的那条 `functionCallOutput`（ordinal 1075）。
+* **heartbeat 与 cron 同病**：cron 换了全新线程（`01a0bea6`，历史里只有注入条目）照样第一次就 422
+  ⇒ 不是"某个线程被写坏"，而是**投递格式对这套 provider 必然失败**。
+
+**3. 处置（本次做了什么）**
+
+* 两条 automation 都置 `PAUSED`：`p1-1-entropy-coef-a-b`（heartbeat）、`p1-1-cron`（cron 试跑），
+  避免每 20 min / 5 min 继续刷失败任务、继续把线程写坏。
+* **训练本身不受影响**：变体 1（`2026-09-20_18-54-34_cap_noise_std`）照常在 GPU 上跑；
+  受影响的只是"跑完自动通知 + 自动回填"。
+* P1-1 收尾改**手动**（命令见 `TODO_zh.md` P1-1）；被污染的线程 `01a0be53` 弃用（内容仍可读），
+  后续在**新任务**里继续。
+
+**4. 复发条件 / 待办**
+
+* 换 Codex 桌面版新版本、或换 provider 后再试：先建一条 5 min 的 cron 试跑，**看首轮是否 200**
+  （成功标志：`%CODEX_HOME%/sqlite/codex-dev.db` 的 `automation_runs.status` 不再是失败、
+  且新线程能正常回话），确认后才把间隔改长。
+* 本环境若还想要"跑完提醒"，只能走**仓库外**手段（本地看门狗脚本 / Windows 计划任务），
+  不要再依赖 automation —— 建 automation 反而会把目标线程写死。
 
 ### DEF-024 `2026-09-20` 探索噪声上界可配置（`max_noise_std`）+ P1-1 的 A/B 设计
 
@@ -63,15 +117,16 @@
 
 run 目录：`logs/rsl_rl/history_adaptation/2026-09-20_18-52-54`（cap=0.05）、`2026-09-20_18-53-32`（cap=1.2）。
 
-**4. 结果（A/B 实测）——*进行中，跑完后补* **
+**4. 结果（A/B 实测）——2026-09-22 收尾**
 
 设计（同一 seed=42、4096 envs、同任务，只改一个变量，与现有基线逐迭代对比）：
 
 | 组 | run 目录 | 改了什么 | 迭代数 |
 |---|---|---|---|
-| 基线 | `2026-09-20_00-50-31` | — | 20000（已完成） |
-| 变体 1（cap） | `2026-09-20_18-54-34_cap_noise_std` | `agent.policy.max_noise_std=1.2` | 4000 |
-| 变体 2（ent） | 计划 `*_ent_coef_low` | `agent.algorithm.entropy_coef=0.002` | 4000 |
+| 基线 | `2026-09-20_00-50-31` | ——（`entropy_coef=0.01`，无上界） | 20000 |
+| **A（cap）** | `2026-09-20_18-54-34_cap_noise_std` | `agent.policy.max_noise_std=1.2` | 4000 |
+| **B（ent）** | `2026-09-20_22-13-37_ent_coef_low` | `agent.algorithm.entropy_coef=0.002` | 4000 |
+| **B′（ent=0，意外点）** | `2026-09-20_19-30-43_ent_coef_low` | `agent.algorithm.entropy_coef=0.0`（本意 0.002，命令行被设成了 0） | 4000 |
 
 判定口径（写死，避免事后挑指标）：`Policy/mean_noise_std` 平台 ≤1.2（cap）或显著低于基线（ent）
 **且**同迭代点的 `Train/mean_reward`、`Train/mean_episode_length` 不劣于基线 **且**
@@ -80,6 +135,87 @@ s3 段（iter ≥3125）的"合计摔倒"（`bad_orientation_2 + root_height_bel
 **运行经验（同一台 A4000，16 GB）**：两个 Isaac 训练**同时**跑会把每个的 collection time
 从 ~1.9 s 抬到 ~7.6 s/iter（互相拖累，总吞吐也不划算）⇒ **串行跑**；
 机器有其他负载时单跑也可能只有 ~5.5 s/iter（实测 19:00 前后）。
+
+**口径修正（重要，先说）**：基线是 **20000 iter** 的 run，它的"s3 阶段均值"覆盖
+iter 3125–19999，而三个 4000-iter 变体只覆盖 3125–3999 ⇒ **阶段均值不可比**
+（基线后期还在继续变好，用全长均值会**低估**基线在 s3 起点附近的摔倒率）。
+本节所有判定数字都改在**统一迭代窗口**上取：s3 = iter **3125–3999**、末段 = iter **3000–3999**，
+直接对 `.summary_cache.npz` 按窗口重算（命令见本节末尾）。
+
+**结果（统一窗口，s3 = iter 3125–3999 的阶段均值）**
+
+| 组 | `Policy/mean_noise_std` | `Train/mean_reward` | `Train/mean_episode_length` | `Loss/learning_rate` | 合计摔倒（s3） |
+|---|---|---|---|---|---|
+| 基线（ent 0.01，无上界） | 1.405 | 23.93 | 858.2 | 4.37e-04 | 0.1938 |
+| **A cap=1.2（ent 0.01）** | **1.052** | **38.52** | **905.2** | 3.00e-05 | **0.1315** |
+| B ent=0.002（无上界） | 0.4209 | 36.92 | 878.4 | 2.03e-04 | 0.1827 |
+| B′ ent=0.0（无上界，意外点） | 0.1256 | 34.36 | 856.8 | 1.02e-04 | 0.2223 |
+
+**末段复核（iter 3000–3999，结论一致）**
+
+| 组 | `mean_reward` | `mean_episode_length` | 合计摔倒 |
+|---|---|---|---|
+| 基线 | 27.19 | 872.0 | 0.1751 |
+| **A cap=1.2** | **40.58** | **914.7** | **0.1188** |
+| B ent=0.002 | 38.83 | 890.9 | 0.1635 |
+| B′ ent=0.0 | 36.68 | 870.2 | 0.2005 |
+
+**结论（按写死的口径逐条判）**
+
+1. **A（`max_noise_std=1.2`）通过，建议作为默认**：噪声被压在 **1.052** ≤1.2 ✓；
+   `mean_reward` **+61%**（38.5 vs 23.9）、`mean_episode_length` **+5.5%**（905 vs 858）都不劣 ✓；
+   s3 合计摔倒 **0.132 vs 0.194（−32%）** ✓ —— 三条全过，且在四组里 reward / ep_len / 摔倒
+   **同时最好**。机制：上界把 `log_std` 投影在 ~1.05，而基线同期一路爬到 **1.44**；
+   s3 的摔倒尖峰（0.045→0.19）正来自这一段噪声抬升（DEF-023 的归因被 A/B 证实）。
+2. **B（`entropy_coef=0.002`）也通过**：0.42 / +54% / +2.4% / 摔倒 −5.7%，
+   但三项都略逊于 A（摔倒 0.183 vs 0.132）⇒ 同为有效修法，优先级排在 A 之后。
+3. **B′（`entropy_coef=0`，意外点）只挂摔倒**：噪声 0.126、reward +44%、ep_len −0.2% 都满足，
+   但 s3 合计摔倒 **0.222 vs 0.194（+15%）** ⇒ **噪声压到 ~0.13 会反而更容易摔**。
+   这条是本次最有信息量的**负面**证据：**"奖励更高"≠"更稳"、"噪声越小越好"不成立**，
+   存在中间最优区（本组数据里 ~1.0 的 A 最好，0.42 的 B 次之，0.13 的 B′ 最差）。
+4. **遗留（未解）**：三组的 `Loss/learning_rate` 在 s3 仍然偏低，A 甚至低到 **3e-5**
+   （基线 4.4e-4）⇒ "adaptive 调度把 LR 压到地板"这条机制**没有被 cap 解决**；
+   A 的收益（reward / `error_vel_xy` 0.477 vs 0.891）并非来自 LR。LR 这条要单独立项
+   （候选：非 adaptive 调度、调 `desired_kl`）。
+5. **部署前建议**：A 只在 4000 iter 上验过，默认值落地前跑一次 **20k 全长**（同 seed=42 / 4096 envs /
+   `agent.policy.max_noise_std=1.2`）＋固定命令 eval，再改 cfg 默认。
+
+**复现命令**（三条 run 的对比表，缓存命中后 <1 s；把 `--run` 换成上表任一变体）：
+
+```
+python scripts/reinforcement_learning/rsl_rl/summarize_run.py \
+  --run logs/rsl_rl/history_adaptation/2026-09-20_18-54-34_cap_noise_std \
+  --baseline logs/rsl_rl/history_adaptation/2026-09-20_00-50-31 \
+  --derive "合计摔倒=Episode_Termination/bad_orientation_2+Episode_Termination/root_height_below_minimum" \
+  --tags mean_noise_std --tags error_vel_xy --tags 合计摔倒 \
+  --tags Train/mean_reward --tags Train/mean_episode_length --tags "Loss/learning_rate" \
+  --grid 1000,2000,2500,3000,3500,4000
+```
+
+统一窗口重算（本节 §4 两张表的数字就是它出的；`logs/...` 里换成四个 run 目录）：
+
+```python
+import numpy as np, os
+runs = ["2026-09-20_00-50-31", "2026-09-20_18-54-34_cap_noise_std",
+        "2026-09-20_22-13-37_ent_coef_low", "2026-09-20_19-30-43_ent_coef_low"]
+tags = ["Policy/mean_noise_std", "Train/mean_reward", "Train/mean_episode_length",
+        "Loss/learning_rate", "Episode_Termination/bad_orientation_2",
+        "Episode_Termination/root_height_below_minimum"]
+for lo, hi in [(3125, 3999), (3000, 3999)]:            # s3 窗口 / 末段窗口
+    print("window", lo, hi)
+    for r in runs:
+        d = dict(np.load(os.path.join("logs/rsl_rl/history_adaptation", r, ".summary_cache.npz"),
+                         allow_pickle=True))
+        vals = []
+        for t in tags[:4]:
+            x = d[t]; m = (x[:, 0] >= lo) & (x[:, 0] <= hi); vals.append(x[m, 1].mean())
+        a = d[tags[4]]; b = d[tags[5]]; m = (a[:, 0] >= lo) & (a[:, 0] <= hi)
+        vals.append((a[m, 1] + b[m, 1]).mean())
+        print(r, ["%.4g" % v for v in vals])
+```
+
+**成本**：A 本机 A4000 / 4096 envs / 4000 iter ≈ **6.0 h**（5.5 s/iter）；B、B′ 在另一台机器 ≈ **2.3 h**
+（2.06 s/iter）。除 cfg 覆盖外无其它改动，`--num_envs` / `--max_iterations` / `--seed` 全部一致。
 
 ### DEF-023 `2026-09-20` P1-1「训练退化」归因：`noise_std` 是**饱和平台**、`error_vel_xy` 是**命令课程漂移**
 

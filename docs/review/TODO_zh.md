@@ -50,13 +50,22 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
     ② `Metrics/base_velocity/error_vel_xy` 的上升**与命令课程同形**（旧 run 0.15→0.77 同样升）
     ⇒ 是"命令范围放宽到 vx ±5 m/s"后的**口径产物**，不是策略退化：新 run 末 1000 的
     reward **23.6 vs 17.8**、ep_len **917 vs 768**、合计摔倒 **0.122 vs 0.331** 全面更好。
-  - **A/B 进行中（2026-09-20 19:00 起）**：开关已实现（`max_noise_std`，默认 0 = 不限制，
-    见 DEF-024），正在跑两个 4000-iter 变体：变体 1 `2026-09-20_18-54-34_cap_noise_std`
-    （`agent.policy.max_noise_std=1.2`）、变体 2 计划 `ent_coef_low`（`agent.algorithm.entropy_coef=0.002`）。
-    有后台监控 automation（`p1-1-entropy-coef-a-b`，每 20 min 看一次）：跑完/崩了才会通知，
-    跑完会自动出对比表、回填 DEF-024 并提交。
-  - 要做什么（**改配置**，要 A/B）：① 给 `log_std` 加上界（`max_noise_std`/clamp，目标平台 ≤1.2）；
-    ② `entropy_coef` 0.01 → 0.005/0.002。落点：
+  - **A/B 已收尾（2026-09-22，数字与判定见 DEF-024 §4）**：开关 `max_noise_std` 已实现
+    （默认 0 = 不限制）。**统一窗口**（iter 3125–3999，因为基线是 20k iter、阶段均值不可比）实测：
+    - `max_noise_std=1.2`（run `2026-09-20_18-54-34_cap_noise_std`）**通过全部口径、建议作为默认**：
+      噪声 1.405→**1.052**、reward 23.93→**38.52**、ep_len 858→**905**、s3 合计摔倒 0.194→**0.132**。
+    - `entropy_coef=0.002`（run `2026-09-20_22-13-37_ent_coef_low`）也通过、但三项都略逊
+      （reward 36.9、ep_len 878、摔倒 0.183）。
+    - 意外点 `entropy_coef=0`（run `2026-09-20_19-30-43_ent_coef_low`）**只挂摔倒**（0.222 > 0.194）
+      ⇒ **噪声不是越小越好**，存在中间最优区。
+  - **剩余（本项未完全关闭）**：① `Loss/learning_rate` 在 s3 仍被 adaptive 调度压到 3e-5~2e-4
+    （cap 甚至低于基线）⇒ "LR 地板"机制**未解**，候选：非 adaptive 调度 / 调 `desired_kl`；
+    ② cap 的收益只在 4000 iter 上验过 ⇒ **部署前跑一次 20k 全长**（同 seed=42 / 4096 envs /
+    `agent.policy.max_noise_std=1.2`）＋固定命令 eval，再改 cfg 默认值。
+  - **自动化提醒（DEF-025）**：本环境桌面版 automation **不可用**（唤醒投递缺 `call_id` ⇒ 422
+    且把线程写死），两条 automation 已 `PAUSED` ⇒ 巡检/收尾一律手动，命令见 DEF-024 §4 末尾。
+  - 当时的修法（**已实现并实测，结论见上**）：① 给 `log_std` 加上界（`max_noise_std`/clamp，
+    目标平台 ≤1.2）—— **采用**；② `entropy_coef` 0.01 → 0.005/0.002 —— **通过但未采用**（不如 ①）。落点：
     `source/rl_training/rl_training/tasks/manager_based/locomotion/velocity/config/wheeled/deeprobotics_m20/agents/rsl_rl_ppo_cfg.py:HistoryAdaptationPPORunnerCfg`
     （`policy.init_noise_std` / `noise_std_type="log"` / `algorithm.entropy_coef`）
     + `rsl_rl/rsl_rl/modules/actor_critic_history.py`（`log_std` 的取用处）。

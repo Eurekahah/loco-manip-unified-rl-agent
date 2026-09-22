@@ -13,6 +13,7 @@
 | 2026-09-20 | 初版：合并 6 份旧文档里的"已修"条目；记录低层内容并入 main | `main @ 7ff5b86` |
 | 2026-09-20 | 新增第五节：高层链并入 `main`（4 个高层任务 2 iter 全 EXIT=0）+ 导出部署态策略固化成流程；第二节标题去掉"未合并 main" | `codex/hl-merge-p0`（`129848e`/`af4602d`/`07601e9`/`0772757`） |
 | 2026-09-20 | 新增第六节 **部署基线**：`main @ 2d49f47`（tag `deploy-baseline-2026-09-20`）= 部署口径代码，对应 run `2026-09-20_00-50-31` 的 `exported_deploy/*`（含 sha256 与"训练代码 vs main"的差异核对）+ **基线可运行性验收**（8 任务冒烟回归 8/8 EXIT=0） | 基线 `2d49f47`；记录 `eb22401` |
+| 2026-09-22 | 新增第一节 **P1-1 修复**：探索噪声上界 `max_noise_std=1.2` 的 A/B 实测通过（**建议作为默认**）；同批对照点 `entropy_coef=0.002`（通过但略逊）与 `entropy_coef=0.0`（意外点，s3 摔倒反而 +15%） | 开关代码 `b75c596`；实测回填见 DEF-024 §4（2026-09-22） |
 
 ---
 
@@ -20,6 +21,7 @@
 
 | 日期 | 内容 | 关键实测 | commit |
 |---|---|---|---|
+| 2026-09-22 | **P1-1 修复：探索噪声上界 `max_noise_std=1.2`**（A/B 实测通过 ⇒ 建议作为低层训练默认；同时证明"噪声压太狠反而更不稳"） | 4000 iter / seed 42 / 4096 envs，**统一窗口 iter 3125–3999**：`mean_noise_std` 1.405→**1.052**、`mean_reward` 23.93→**38.52**、`mean_episode_length` 858→**905**、s3 合计摔倒 0.194→**0.132**；对照 `entropy_coef=0.002`：36.92 / 878 / 0.183，`entropy_coef=0`：34.36 / 857 / 0.222 | 开关 + 冒烟 `b75c596`；回填见 `DEFECT_LOG_zh.md` DEF-024 §4 |
 | 2026-09-20 | 低层内容并入 `main`（训练配置 + EE 课程 + slerp + root_height 专项 + known_issues ⑤⑥⑦⑯ + 导出脚本 + 训练说明） | 4 个低层任务 `--num_envs 64 --max_iterations 2` 全 EXIT=0；`env.yaml` 里 `ee_goal_stages`/`disturbance_ramp`/`steady_error_clip=0.15`/`limit_angle=0.8` 均生效 | `26584e9`(merge) `469fbd4` `fef34a7` `7ff5b86` |
 | 2026-09-20 | `bad_orientation_2` 改成旋转不变量 + 阈值 0.8 rad；**保留** `ee_goal`（policy 76→83） | History-Adaptation 2 iter exit 0；`policy 83 / history 700 / privileged 89` | `45f9e74` / `26584e9` |
 | 2026-09-19 | **EE 目标课程**：s0 锚点 + s1/s2/s3 区间阶梯（`mdp.apply_range_stages`）；EE 姿态命令改 slerp | 课程 4 阶段自检全过；slerp 与官方单样本最大分量偏差 1.19e-07；姿态单步跳变 155.7°→3.12° | `469fbd4`（原 `9ccb8ec`/`96e1b66`） |
