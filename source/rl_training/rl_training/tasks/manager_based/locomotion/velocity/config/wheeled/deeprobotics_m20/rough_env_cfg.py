@@ -440,10 +440,35 @@ class DeeproboticsM20RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.rewards.wheel_vel_penalty.weight = 0
         self.rewards.wheel_vel_penalty.params["sensor_cfg"].body_names = self.foot_link_name
         self.rewards.wheel_vel_penalty.params["asset_cfg"].joint_names = self.wheel_joint_names
-        self.rewards.joint_mirror.weight = -0.03
+
+        # 静止伫立专项（DEF-026）里"轮子空转"那一项需要轮关节名单
+        self.rewards.stand_still_wheel_vel.params["asset_cfg"].joint_names = self.wheel_joint_names
+
+        # ── 镜像惩罚：**必须带关节符号约定**（DEF-027）────────────────────────────
+        # 原实现直接算 (θ_a − θ_b)²，隐含假设"镜像姿态里两侧关节角相等"。对本机型不成立：
+        #   * MJCF 关节轴（四腿的 hipx = (-1,0,0)、hipy/knee = (0,-1,0)）说明左右腿是
+        #     **镜像副本**而不是旋转副本；
+        #   * 关节限位（fl_hipx ∈ (-0.436,0.611) vs hr_hipx ∈ (-0.611,0.436)）恰好取负；
+        #   * 默认姿态（fl_hipy=-0.6 / hl_hipy=+0.6、fl_knee=+1.0 / hl_knee=-1.0）
+        #     本身就是"对角取负"的对称姿态。
+        # 而 cfg 原来用的正是**对角对**：要求 θ_fl = θ_hr，与真实镜像关系 θ_fl = −θ_hr
+        # 正好相反 —— 等于在奖励里奖励"两条腿往同侧撇"，就是"右后腿往右前方撇"的来源。
+        # 现在四对全给（对角 2 对 + 左右 2 对）：左右对才能压住"单侧后腿外撇"。
+        self.rewards.joint_mirror.func = mdp.joint_mirror_signed
+        self.rewards.joint_mirror.weight = -0.06  # 4 对 ⇒ 每对等效 -0.015，与原 2 对 ×-0.03 同量级
         self.rewards.joint_mirror.params["mirror_joints"] = [
+            # 对角对（fl↔hr、fr↔hl，= 绕 z 轴 180°）：hipx/hipy/knee 全部取负
             ["fl_(hipx|hipy|knee).*", "hr_(hipx|hipy|knee).*"],
             ["fr_(hipx|hipy|knee).*", "hl_(hipx|hipy|knee).*"],
+            # 左右对（fl↔fr、hl↔hr）：hipx 取负，hipy/knee 不变
+            ["fl_(hipx|hipy|knee).*", "fr_(hipx|hipy|knee).*"],
+            ["hl_(hipx|hipy|knee).*", "hr_(hipx|hipy|knee).*"],
+        ]
+        self.rewards.joint_mirror.params["mirror_signs"] = [
+            {"hipx": -1.0, "hipy": -1.0, "knee": -1.0},
+            {"hipx": -1.0, "hipy": -1.0, "knee": -1.0},
+            {"hipx": -1.0, "hipy": 1.0, "knee": 1.0},
+            {"hipx": -1.0, "hipy": 1.0, "knee": 1.0},
         ]
 
         # Action penalties

@@ -19,10 +19,267 @@
 | 2026-09-20 | 新增 DEF-024：探索噪声上界 `max_noise_std`（默认 0 = 不限制）+ 投影梯度实现 + hydra 覆盖踩坑；P1-1 的 A/B（cap 1.2 / entropy_coef 0.002）已启动，结果待回填 | 代码 + `docs: P1-1 A/B` 提交 |
 | 2026-09-20 | 新增 DEF-025：桌面版自动化（heartbeat / cron）的唤醒投递条目缺 `call_id`，被 deepseek `/responses` 一律 422 拒绝、并**永久污染所在线程**；两条 automation 已 `PAUSED`，P1-1 收尾改回手动 | 本次（docs-only） |
 | 2026-09-22 | 回填 **DEF-024 §4**：P1-1 A/B 实测收尾（cap=1.2 通过、**建议作为默认**；`entropy_coef=0.002` 通过但略逊；意外点 `entropy_coef=0` 反而 +15% s3 摔倒）+ **统一窗口口径修正** | 本次（docs-only） |
+| 2026-09-29 | 新增 DEF-026~DEF-031：静止伫立专项（零速漂移 + 站姿占比课程）、`joint_mirror` 镜像符号 bug（"右后腿往右前方撇"的根因）、扰动加强 + 课程拉长、多地形任务（粗糙 0.01~0.05 + 正反斜坡 + 平地）、遥操 history 任务、以及**本机跑不了生成地形任务**的平台问题 | 分支 `codex/ll-train-detail-fix` |
 
 ---
 
 # 记录（新→旧）
+
+### DEF-031 `2026-09-29` 本机（A4000 / Windows）跑不了 `terrain_type="generator"` 的任务：env 创建期死锁
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 环境/平台问题（**不是本次改动引入**） |
+| 状态 | 未修（外部环境问题）；本机所有多地形任务的验收改为"cfg 构造 + 逻辑静态核对"，训练/回归留到能跑生成地形的机器上 |
+| 关联 | 复现：`Rough-WO-Stairs-History-Adaptation-Deeprobotics-M20-v0`、`Rough-Slopes-...`、甚至**未改动的原始代码**（`git stash` 后同一条命令）；`TODO_zh.md` P1-4 |
+
+**1. 现象**
+
+* 任何用 `terrain_type="generator"` 的任务（`Rough-*` 系列、新加的 `Rough-Slopes-*`），
+  `train.py --headless --num_envs 64 --max_iterations 2` 在 env 创建期**卡死**：
+  日志停在 `[simulation_context.py] WARNING: The 'enable_external_forces_every_iteration' ...`
+  之后再无输出，20 分钟不动。
+* 同一条日志里必带一条 Isaac 断言：
+  `ASSERTION FAILED (continuing execution but crash may occur): carb.tasking/SharedMutex.cpp(128) SharedMutex::lockExclusive ...`。
+* 此时 `nvidia-smi` 利用率 4%、进程 CPU 时间 30 s / 20 min ⇒ **是死锁，不是"生成太慢"**。
+
+**2. 排除实验（证明与本次改动无关）**
+
+* 把本次全部改动 `git stash` 掉，用**原始代码**跑 `Rough-WO-Stairs-History-...`：
+  在同一个位置以同样方式卡死（日志长度 6599 B，最后一行同样是那条 physics warning + 断言）。
+* 用 `eval_fixed_command.py`（它把地形缩到 `num_rows=num_cols=5`、关地形课程）跑
+  `Rough-Slopes-...`：依旧卡死 ⇒ 与网格规模、与地形课程开关无关。
+* 对照组：**所有平地任务**（`History-Adaptation-*`、`Flat-*-WBC-v0`、`Isaac-M20-Piper-Teleop*`）
+  `--num_envs 64 --max_iterations 2` 全部 **EXIT=0** ⇒ Isaac Sim 本身、本仓库的 MDP 组装都正常，
+  只有"要生成地形网格"这条路挂住。
+
+**3. 影响 / 处理**
+
+* 本机**无法**对多地形任务做端到端冒烟或训练；历史 run 目录里也没有任何 `Rough-*` 的 smoke 日志
+  （2026-09-20 那轮"8 任务回归"全是平地 + 高层）。
+* 本次对多地形任务只做到：① `__post_init__` 成功执行（`train.py` 打印
+  `Parsing configuration from: ...RoughSlopesEnvWBCConfig` 之后才卡，说明 cfg 组装 OK）；
+  ② 地形组成 / 噪声区间 / 课程项与 `RoughWOStairsEnvWBCConfig` 逐项对照；
+  ③ 共享的奖励/课程类由平地任务（同一批 `WBCRewardsCfg`/`WBCCurriculumCfg`）实测覆盖。
+* **待办**：换到能跑生成地形的机器（autodl 容器）后，先补 `Rough-Slopes-*` 的 2-iter 冒烟，
+  再跑一次短训练，最后把数字回填到本节。
+
+### DEF-030 `2026-09-29` 高层缺"带 history 低层的遥操"任务：补 `Isaac-M20-Piper-Teleop-History-v0`
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 特性（需求 5） |
+| 状态 | 已实现并实测（2 iter EXIT=0，replay 打印 `history 窗口: 10 × 70 = 700`） |
+| 关联 | `codex/ll-train-detail-fix`；`highlevel/config/high_level/hl_flat_pick_env_cfg.py:TeleopHistoryActionsCfg/TeleopHistoryEnvCfg`、`.../high_level/__init__.py` |
+
+**1. 现象 / 需求**：高层已有 `Isaac-M20-Piper-Teleop-v0`，但它的低层 checkpoint 默认指向
+**不带 history encoder** 的旧 WBC 策略（`deeprobotics_m20_wbc_flat/2026-09-18_01-31-58`），
+没有一个"默认就走历史自适应低层"的遥操任务。
+
+**2. 根因 / 现状核对**：`TeleopLLAction` **本体早就支持** history 回放
+（`build_history_window` 读 `policy_layout.json`，`kind=="history"` 时建 10×70 环形窗口、
+`run_low_level_policy` 走双输入 `forward(policy_obs, history_flat)`）。
+缺的只是**注册一个默认指向 history checkpoint 的任务**，避免每次都要靠环境变量手动指。
+
+**3. 修正**：新增 `TeleopHistoryActionsCfg`（`policy_path` 默认
+`logs/rsl_rl/history_adaptation/2026-09-20_00-50-31/exported_deploy/policy.pt`，
+可用 `RL_TRAINING_LOW_LEVEL_POLICY_TELEOP_HISTORY` 覆盖；观测模板沿用
+`WBCObservationsCfg().policy` = 83 维含 `ee_goal`）+ `TeleopHistoryEnvCfg`（仅 actions 不同，
+`decimation=4` 等全部继承），并注册 `Isaac-M20-Piper-Teleop-History-v0`。
+
+**4. 结果**：2 iter 冒烟 EXIT=0，日志三行关键自检：
+`低层 policy action_dim=16, 低层 obs 维度=83 (checkpoint 期望 83)`、
+`该 checkpoint 是 history(ROA) 策略：actor 输入宽度 115 = policy_obs 83 + latent 32`、
+`history 窗口: 10 × 70 = 700`。原有 `Isaac-M20-Piper-Teleop-v0` 同时回归 EXIT=0（不受影响）。
+
+### DEF-029 `2026-09-29` 多地形任务：随机粗糙（噪声 0.01~0.05）+ 正/反斜坡 + 平地
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 特性（需求 3） |
+| 状态 | 已实现（cfg 级验证通过）；**端到端冒烟/训练待换机器**（见 DEF-031） |
+| 关联 | `codex/ll-train-detail-fix`；`velocity/mdp/terrains.py:ROUGH_SLOPES_FLAT_TERRAINS_CFG`、`.../flat_env_wbc_cfg.py:RoughSlopesEnvWBCConfig(_PLAY)`、`.../deeprobotics_m20/__init__.py` |
+
+**1. 需求**：只要随机粗糙 + 正反斜坡 + 平地三种地形，且随机粗糙噪声从 0.02~0.10 降到 0.01~0.05；
+直接对标 `Rough-History-Adaptation-Deeprobotics-M20-v0`（官方 `ROUGH_TERRAINS_CFG`，含楼梯/boxes/rails/pit）
+与 `Rough-WO-Stairs-History-Adaptation-Deeprobotics-M20-v0`（`NONE_STAIRS_TERRAINS_CFG`）。
+
+**2. 修正**：
+
+* `mdp/terrains.py::ROUGH_SLOPES_FLAT_TERRAINS_CFG`：`random_rough` 比例 0.40、
+  `noise_range=(0.01, 0.05)`、`noise_step=0.01`；`hf_pyramid_slope` 0.25、`hf_pyramid_slope_inv` 0.25、
+  `flat` 0.10。其余公共参数（`size/border_width/num_rows/num_cols/vertical_scale/slope_threshold`）
+  与 `_COMMON_KW` 一致，便于横向对比。
+* `flat_env_wbc_cfg.py::RoughSlopesEnvWBCConfig`：继承 `RoughEnvWBCConfig`（因此自动带上
+  history 观测、WBC 命令、本轮的两处奖励修复），只换地形 + 显式打开地形课程
+  （`terrain_generator.curriculum=True`、`max_init_terrain_level=5`）+ 按 `RoughWOStairs` 的
+  步骤重开 v_x 课程（75k/100k/125k/150k 步 → ±2/±3/±4/±5）。
+* 注册 `Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0` 与 `-play-v0`；
+  `TERRAIN_CFGS["rough_slopes_flat"]` 便于测试脚本按名索引。
+
+**3. 结果**：`train.py` 能解析到 `RoughSlopesEnvWBCConfig` 并完成 `__post_init__`
+（之后卡在平台问题 DEF-031）；平地任务（共享同一批奖励/课程类）2 iter EXIT=0。
+**未覆盖**：地形本身的可视化与训练效果。
+
+### DEF-028 `2026-09-29` 扰动加强（push 间隔 5~10 s、x±2 / y±1、yaw±0.52）+ 课程拉长
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 特性（需求 4） |
+| 状态 | 已实现（平地 history 任务 2 iter EXIT=0；训练结果见 §4） |
+| 关联 | `codex/ll-train-detail-fix`；`velocity_env_cfg.py:EventCfg.randomize_push_robot`、`flat_env_wbc_cfg.py:WBCCurriculumCfg.disturbance_ramp` |
+
+**1. 需求**：`randomize_push_robot` 间隔缩到 (5,10) s，速度扰动改成 vx(-2,2)、vy(-1,1)、yaw(-0.52,0.52)；
+并"加一定的课程"（加强扰动必然更难训）。
+
+**2. 修正**：
+
+* `EventCfg.randomize_push_robot`：`interval_range_s=(5.0, 10.0)`（原 10~15），
+  `velocity_range={"x": (-2.0, 2.0), "y": (-1.0, 1.0), "yaw": (-0.52, 0.52)}`（原 ±0.5/±0.5，无 yaw）。
+  已核对 IsaacLab `push_by_setting_velocity` 的 key 集是 `x/y/z/roll/pitch/yaw` ⇒ `yaw` 是支持的
+  （它是**叠加**到当前 root 速度上的角速度冲击）。
+* `WBCCurriculumCfg.disturbance_ramp`：`base` 改成新终态幅度（课程按绝对值缩放，必须逐位一致），
+  `start_scale` 0.3 → **0.2**、`num_steps` 25k → **50k**（≈2083 iter 才到全量）。
+  理由：扰动幅度变大后早期更容易"一推就趴窝"，而趴窝会被 `root_height_below_minimum` 记账。
+
+**3. 兼容性**：`EventCfg` 是所有 M20 任务共享的 ⇒ 这条改动对 flat/rough/WBC/Arm 全体生效；
+`disturbance_ramp` 只挂在 WBC/History 类任务上（`_PLAY` 里被置 None，eval/play 直接用全量扰动）。
+
+**4. 结果**：待回填（见 DONE_zh.md / TODO_zh.md P1-3）。
+
+### DEF-027 `2026-09-29` `joint_mirror` 镜像符号错误：对角对要求 θ_fl = θ_hr，与真实镜像关系（−θ）相反 ⇒ "右后腿往右前方撇"
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 缺陷（奖励项符号约定） |
+| 状态 | 已修（平地 history 任务 2 iter EXIT=0；训练结果见 §4） |
+| 关联 | `codex/ll-train-detail-fix`；`velocity/mdp/rewards.py:joint_mirror_signed`、`.../deeprobotics_m20/rough_env_cfg.py`；原条目 `TODO_zh.md` P1-3 的 known_issues ① |
+
+**1. 现象**：训出的模型步态不对称 —— 用户描述"**右后腿往右前方撇**"。
+
+**2. 根因（三重独立证据，不是猜）**
+
+原 `joint_mirror` 算 `(θ_a − θ_b)²`，隐含假设"镜像姿态里两侧关节角**相等**"。本机型不成立：
+
+* **MJCF 关节轴**（`deep_robotics_model/M20_Piper_own/mjcf/M20_Piper_own.xml`）：
+  四条腿的 hipx 轴都是 `(-1,0,0)`、hipy/knee 轴都是 `(0,-1,0)` —— 左右腿是**镜像副本**，
+  不是"旋转副本"（若是旋转副本，hind 的轴应为 `Rz(π)·a = (1,0,0)`）。
+* **关节限位**：`fl_hipx ∈ (-0.436, 0.611)` vs `hr_hipx ∈ (-0.611, 0.436)`（恰好取负）；
+  `fl_hipy ∈ (-2.583, 2.286)` vs `hl_hipy ∈ (-2.286, 2.583)`（取负）；
+  只有"绕 z 轴 180° 对称"能同时解释这两条。
+* **默认姿态**（`assets/deeprobotics.py::DEEPROBOTICS_M20_PIPER_CFG.init_state.joint_pos`）：
+  `f[l,r]_hipy = -0.6` vs `h[l,r]_hipy = +0.6`、`f[l,r]_knee = +1.0` vs `h[l,r]_knee = -1.0`
+  —— 默认站姿本身就是"对角取负"的对称姿态。
+
+由此得到本机型的三条镜像关系（数值可由"绕 z 转 180° 的共轭变换"直接推出）：
+
+| 镜像对 | hipx | hipy | knee |
+|---|---|---|---|
+| 左/右（fl↔fr、hl↔hr） | −1 | +1 | +1 |
+| 前/后（fl↔hl、fr↔hr） | +1 | −1 | −1 |
+| 对角（fl↔hr、fr↔hl） | −1 | −1 | −1 |
+
+而 cfg 里 `mirror_joints` 用的**正是对角对** ⇒ 原实现在奖励里要求 `θ_fl = θ_hr`，
+把正确的镜像姿态当误差、把"两条腿往同侧掰"当最优：左前腿外展多少，右后腿就被推着往**同一侧**
+（即外侧）撇多少，hipy 同理往前 → 与用户描述的"右后腿往右前方撇"完全吻合。
+反查基线日志也一致：`Episode_Reward/joint_mirror` 在 s3 是 **−0.164/s**（权重只有 −0.03），
+说明"镜像误差"均值确实很大（≈ 对角对的默认姿态就被判成误差）。
+
+**3. 修正**：新增 `rewards.py::joint_mirror_signed`（`(θ_a − s·θ_b)²`，
+`mirror_signs` 按**关节名后缀**逐个给符号，不依赖 `find_joints` 的返回顺序），
+并把 `deeprobotics_m20` 的 `joint_mirror` 换成它：mirror_joints 扩到 **4 对**
+（对角 2 对 + **左右 2 对**，后者才是压住"单侧后腿外撇"的那一对），
+`mirror_signs = [{-1,-1,-1}, {-1,-1,-1}, {-1,+1,+1}, {-1,+1,+1}]`，
+权重 −0.03 → **−0.06**（4 对 ⇒ 每对等效 −0.015，与原来 2 对 × −0.03 同量级）。
+保留原 `joint_mirror`（未删）以免影响仓库外引用。
+
+**4. 结果（"符号反了"的定量对账）**
+
+把默认姿态（= 天然的对称站姿）代进两条公式，**不用跑仿真**就能对账：
+
+| 关节（fl 对 hr） | fl | hr | 旧公式 (θ_fl−θ_hr)² | 新公式 (θ_fl−(−1)·θ_hr)² |
+|---|---|---|---|---|
+| hipx | 0.0 | 0.0 | 0 | 0 |
+| hipy | −0.6 | +0.6 | **1.44** | 0 |
+| knee | +1.0 | −1.0 | **4.00** | 0 |
+| 每对合计 | | | **5.44** | **0** |
+
+旧公式 × 权重 0.03 ⇒ **每条 env 每步恒定 −0.1632**（还有重力门控 ≈ ×1）。
+实测基线 run 的 `Episode_Reward/joint_mirror`（= 每秒速率）在 s3 是 **−0.1639**、
+末 1000 是 **−0.1605** —— 与"整项都在惩罚默认站姿"的预测**吻合到 0.4%**。
+也就是说策略只能靠**把腿掰成反对称**（一侧外撇）来减掉这笔税，这正是用户看到的撇腿。
+
+新公式在默认姿态上恒等于 0；实测新 run 的 `Episode_Reward/joint_mirror` 前 15 iter 是
+−0.0017 ~ −0.0020（旧实现同迭代在 −0.03 量级），量级降了一个多数量级。
+
+余下的训练侧验收（步态是否真的对称）与 P1-1' 同一批 2000-iter 的产物：
+要看 `Episode_Reward/joint_mirror` 的稳态值与固定命令 eval（见 DONE_zh.md 第一节）。
+
+### DEF-026 `2026-09-29` 静止伫立时底盘仍以 ~0.15 m/s 前向漂移：零速命令下**没有任何**速度惩罚 + 站姿占比只有 2%
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 缺陷（奖励/课程缺项，需求 1） |
+| 状态 | 已修 + 已实测（训练结果见 §4） |
+| 关联 | `codex/ll-train-detail-fix`；`velocity/mdp/rewards.py:stand_still_vel_l2`/`stand_still_wheel_vel_l2`、`velocity/mdp/curriculums.py:ramp_command_param`、`velocity_env_cfg.py:RewardsCfg`、`flat_env_wbc_cfg.py:WBCRewardsCfg/WBCCurriculumCfg`；工具 `scripts/reinforcement_learning/rsl_rl/eval_fixed_command.py` |
+
+**1. 现象（先量化，再改）**
+
+用现成的固定命令探针（`eval_fixed_command.py`，命令钉死在 (0,0,0)、(0.5,0,0)、(1.0,0,0)，
+每个 checkpoint 一个进程）跑部署基线 `history_adaptation/2026-09-20_00-50-31/model_19999.pt`：
+
+| 命令 (vx,vy,wz) | ep_len | `err_vel_xy` | 摔倒率 |
+|---|---|---|---|
+| **(0,0,0)** | 894.5 | **0.1478 m/s** | 0.1332 |
+| (0.5,0,0) | 929.0 | 0.1583 | 0.0901 |
+| (1.0,0,0) | 912.5 | 0.1920 | 0.1055 |
+
+即：**命令为零时底盘仍以 ~0.148 m/s 前向漂移**，而且"站着"的摔倒率比"跑着"还高（13.3%）。
+复现：`python scripts/reinforcement_learning/rsl_rl/eval_fixed_command.py --headless --num_envs 512
+--steps 1100 --commands "0,0,0;0.5,0,0;1.0,0,0" --checkpoint <run>/model_19999.pt`
+
+**2. 现状盘点（"站立"相关的奖励项与课程项）**
+
+| 项 | 位置 | 基线里的值 | 作用 |
+|---|---|---|---|
+| `stand_still`（`stand_still_joint_deviation_l1`） | `rough_env_cfg.py` | 被 `FlatEnvWBCConfig`/`RoughEnvWBCConfig` 置 **0** ⇒ 关 | 零命令时惩罚关节偏离默认姿态 |
+| `stand_still_without_cmd` | `velocity_env_cfg.py` | **0**（从未启用） | 同上（另一实现） |
+| `wheel_vel_penalty` | `rough_env_cfg.py` | **0** ⇒ 关 | 零命令时惩罚轮速（唯一能直接压"轮子空转"的项） |
+| `joint_pos_penalty`（`stand_still_scale=5`） | `velocity_env_cfg.py` | **0** ⇒ 关 | 零命令时 5× 关节偏离 |
+| `hipx/hipy/knee_joint_pos_penalty` | `flat_env_wbc_cfg.py` | −0.4 / −0.1 / −0.1 | 用 `joint_pos_penalty_wbc`，但 `is_truly_still` 要求 `body_vel < 0.5` ⇒ **一漂起来这项自己就关了**（鸡生蛋） |
+| `lin_vel_xy_l2_with_ang_z_command` | `velocity_env_cfg.py` | 未启用 | 只在"纯 yaw 命令"时惩罚线速度（语义不对，也不覆盖零命令） |
+| `feet_contact_without_cmd` | `rough_env_cfg.py` | **+0.1** | 零命令时奖励四足触地（只奖励接触，不惩罚速度） |
+| `track_lin_vel_xy_exp` / `track_ang_vel_z_exp` | `rough_env_cfg.py` | 2.0 / 1.0 | 唯一的间接约束；但双高斯核在 \|v\|≈0.15 处已饱和，把 0.15 压到 0 只多 ~0.01/s |
+| `commands.base_velocity.rel_standing_envs` | `rough_env_cfg.py` | **0.02** | 只有 **2%** 的 env 会拿到零命令 ⇒ 策略几乎没见过"站着不动" |
+| 课程 | `WBCCurriculumCfg` | 无 | **没有任何课程**碰站姿占比或站立惩罚 |
+
+**3. 修正**（两项奖励 + 两条课程，全部只按**命令**门控，不看实测速度）
+
+* `rewards.py::stand_still_vel_l2`：`|v_xy|²·1[‖cmd_xy‖<0.1] + ω_z²·1[|cmd_z|<0.1]`；
+* `rewards.py::stand_still_wheel_vel_l2`：`Σ_j ω_wheel,j²·1[‖cmd_xy‖<0.1]`（"轮子空转"那一半）；
+* `curriculums.py::ramp_command_param`：新增通用"把某个 **command term** 的标量参数线性爬升"课程
+  （直接改 `term.cfg.<param>`，与 `apply_range_stages` 改 `ranges` 同理、幂等）；
+* `WBCCurriculumCfg` 三条课程：`rel_standing_envs` 0.02 → **0.15**（25k 步）、
+  `stand_still_vel` 权重 −0.8 → **−8.0**、`stand_still_wheel_vel` −0.001 → **−0.01**（各 25k 步）。
+
+**权重怎么定（按回报口径标定，不是拍脑袋）**：`RewardManager` 返回 `Σ term·weight·dt`，
+`Episode_Reward/*` 记的是**每秒速率**；基线在命令 (0,0,0) 时"回报/秒 = 1.75"。
+按漂移 \|v\|≈0.15 算 \|v\|²≈0.0225：`weight=-2.0` 只有 −0.045/s（2.5%，**推不动**，
+第一版就是 -2.0，所以定格前先算了一遍）；`weight=-8.0` 约 −0.18/s（~10%，有梯度但不喧宾夺主），
+而且二次型在 \|v\|=0.5 时给 −2.0/s（会主动刹车）、\|v\|=0.05 时只 −0.02/s（不干扰微调）。
+轮速项按 ω≈2.5 rad/s/轮算 Σω²≈25，−0.01 ⇒ 约 −0.25/s（~14%）；不敢给更大：
+轮式倒立摆要靠轮子微动平衡，压太狠会摔（"噪声不是越小越好"的同源教训）。
+
+**4. 结果**
+
+* 改动后 `History-Adaptation-Deeprobotics-M20-v0` 2 iter 冒烟 EXIT=0，启动打印
+  `RewardManager contains 23 active terms`（原 21），新增
+  `stand_still_vel −0.8`、`stand_still_wheel_vel −0.001`；`CurriculumManager contains 15 terms`（原 12），
+  新增 `standing_env_ratio_ramp` / `stand_still_vel_ramp` / `stand_still_wheel_vel_ramp`，
+  且日志里能看到爬升确实在走（`rel_standing_envs → 0.0200 → …`、`stand_still_vel_ramp −0.80 → −0.81`）。
+* 2000-iter 训练 + 固定命令 eval 的对比数字：**见 DONE_zh.md 第一节（P1-1'）**。
+
+### DEF-025 `2026-09-20` 桌面版自动化唤醒必然 422：投递条目缺 `call_id`（线程被永久污染）
 
 ### DEF-025 `2026-09-20` 桌面版自动化唤醒必然 422：投递条目缺 `call_id`（线程被永久污染）
 

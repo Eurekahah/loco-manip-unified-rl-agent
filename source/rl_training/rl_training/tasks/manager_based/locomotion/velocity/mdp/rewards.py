@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import re
+
 import torch
 from typing import TYPE_CHECKING
 
@@ -874,4 +876,169 @@ def lin_vel_xy_l2_with_ang_z_command(
             (torch.sum(torch.square(command[:, :2]), dim=1) < command_threshold)
     # reward *= torch.sum(torch.square(env.command_manager.get_command(command_name)[:, 2:]), dim=1) > command_threshold
     # reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
+    return reward
+
+
+# ============================================================================
+# 静止伫立（零速命令）专项
+# ----------------------------------------------------------------------------
+# 背景：用 scripts/reinforcement_learning/rsl_rl/eval_fixed_command.py 把命令钉在
+# (0,0,0) 上滚动某 checkpoint，实测 `err_vel_xy = 0.148 m/s`
+# （历史基线 run `history_adaptation/2026-09-20_00-50-31` 的 model_19999.pt）——
+# 命令为零时底盘仍以约 0.15 m/s 前向漂移。原因不是标定问题，而是**没有任何一项
+# 奖励在"命令≈0"时惩罚底盘残余速度**（详见 docs/review/DEFECT_LOG_zh.md DEF-026）。
+# ============================================================================
+
+
+def stand_still_vel_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    command_threshold: float = 0.1,
+    yaw_weight: float = 1.0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """零速命令下惩罚底盘残余线速度（xy 平面）与残余 yaw 角速度。
+
+    与 ``track_lin_vel_xy_exp`` 的关系
+    ---------------------------------
+    那个项在命令为 0 时当然也有梯度，但它是双高斯核，在 ``|v| ≈ 0.15`` 处已经饱和：
+    ``exp(-0.0225/2)/2 + exp(-0.0225/0.1)/2 ≈ 0.49``，把 0.15 压到 0 只多拿 ~0.01 奖励，
+    信噪比太低；这里直接用二次型，梯度在 0 附近也是最大的。
+
+    为什么门控只看**命令**、不看实测速度
+    -----------------------------------
+    ``joint_pos_penalty_wbc`` 里的 ``is_truly_still`` 要求 ``body_vel < 0.5``，
+    也就是说"正在漂移"这个事实恰好会把"站立姿态"惩罚关掉 —— 鸡生蛋：
+    越漂越没有惩罚，越没惩罚越漂。所以本项只按命令门控。
+
+    Args:
+        command_name: 速度命令项名（通常是 ``base_velocity``）。
+        command_threshold: 命令分量（线速度范数 / yaw 绝对值）低于该值视为"要求静止"。
+        yaw_weight: yaw 角速度项的权重（1.0 = 与线速度同权）。
+        asset_cfg: 资产（取 root 的 body 系速度，与 joint 选择无关）。
+
+    Returns:
+        ``|v_xy|² · 1[|cmd_xy| < threshold] + yaw_weight · ω_z² · 1[|cmd_z| < threshold]``
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)
+    stand_lin = (torch.linalg.norm(cmd[:, :2], dim=1) < command_threshold).float()
+    stand_yaw = (torch.abs(cmd[:, 2]) < command_threshold).float()
+    lin_vel_sq = torch.sum(torch.square(asset.data.root_lin_vel_b[:, :2]), dim=1)
+    yaw_rate_sq = torch.square(asset.data.root_ang_vel_b[:, 2])
+    return lin_vel_sq * stand_lin + yaw_weight * yaw_rate_sq * stand_yaw
+
+
+def stand_still_wheel_vel_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    command_threshold: float = 0.1,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=".*_wheel_joint"),
+) -> torch.Tensor:
+    """零速命令下惩罚轮关节转速（"轮足原地站着不该一直转"）。
+
+    与 ``stand_still_vel_l2`` 的分工：那个管**底盘真的走了**（净位移），
+    这个管**轮子空转**（打滑 / 靠轮子抖动维持平衡）。两者都要，因为
+    "命令为 0 但轮子匀速转、机体被摩擦力顶住"这种情况前者测不到。
+
+    注意：轮式倒立摆靠轮子微动平衡，"压太狠会摔"。所以本项权重应该比
+    ``stand_still_vel_l2`` 小一到两个数量级（cfg 里默认 -0.02 对 -2.0）。
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)
+    is_standing = (torch.linalg.norm(cmd[:, :2], dim=1) < command_threshold).float()
+    wheel_vel_sq = torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1)
+    return wheel_vel_sq * is_standing
+
+
+# ============================================================================
+# 关节镜像惩罚（带符号约定）
+# ============================================================================
+
+_MIRROR_JOINT_TYPE_RE = re.compile(r"_(hipx|hipy|knee)_joint$")
+
+
+def joint_mirror_signed(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    mirror_joints: list[list[str]],
+    mirror_signs: list[dict[str, float]],
+    gate_by_gravity: bool = True,
+) -> torch.Tensor:
+    """带**关节符号约定**的镜像惩罚：``Σ_pairs Σ_j (θ_a,j − s_j · θ_b,j)² / n_pairs``
+
+    为什么必须带符号（原 ``joint_mirror`` 的 bug）
+    -------------------------------------------
+    原 ``joint_mirror`` 直接算 ``(θ_a − θ_b)²``，隐含假设"镜像姿态里两侧关节角**相等**"。
+    对本机型的腿关节这个假设**不成立**。三份独立证据：
+
+    1. **MJCF 关节轴**（``deep_robotics_model/M20_Piper_own/mjcf/M20_Piper_own.xml``）：
+       四条腿的 hipx 轴都是 ``(-1,0,0)``、hipy/knee 轴都是 ``(0,-1,0)`` ——
+       左右腿不是"旋转副本"而是"镜像副本"，所以同一个正角度在左右腿上是**反向**的。
+    2. **关节限位**：``fl_hipx ∈ (-0.436, 0.611)`` 而 ``hr_hipx ∈ (-0.611, 0.436)``
+       （恰好取负）；``fl_hipy ∈ (-2.583, 2.286)`` 而 ``hl_hipy ∈ (-2.286, 2.583)``。
+       只有"绕 z 轴 180° 对称"能同时解释这两条。
+    3. **默认姿态**（``deeprobotics.py`` 的 ``init_state.joint_pos``）：
+       ``fl_hipy = -0.6`` vs ``hl_hipy = +0.6``、``fl_knee = +1.0`` vs ``hl_knee = -1.0`` ——
+       默认站姿本身就是"对角取负"的对称姿态。
+
+    结论（本机型的三条镜像关系）：
+
+    ==================  ========  ========  =======
+    镜像对               hipx      hipy      knee
+    ==================  ========  ========  =======
+    左/右 (fl↔fr, hl↔hr)  −1        +1        +1
+    前/后 (fl↔hl, fr↔hr)  +1        −1        −1
+    对角 (fl↔hr, fr↔hl)   −1        −1        −1
+    ==================  ========  ========  =======
+
+    而 cfg 里 ``mirror_joints`` 用的正是**对角对** —— 原实现在对角对上要求
+    ``θ_fl = θ_hr``，即把"正确的镜像姿态"当误差、把"两条腿往同侧掰"当最优，
+    直接产生"右后腿往右前方撇"这种反向撇腿（见 DEFECT_LOG_zh.md DEF-027）。
+
+    Args:
+        mirror_joints: ``[[regex_a, regex_b], ...]``，与 ``joint_mirror`` 同格式。
+        mirror_signs: 与 ``mirror_joints`` **一一对应**的符号字典，键是关节类型
+            （``hipx`` / ``hipy`` / ``knee``），值是 ``+1.0`` / ``-1.0``。
+            用关节名后缀判定，**不依赖** ``find_joints`` 的返回顺序。
+        gate_by_gravity: 与原 ``joint_mirror`` 一致，用 ``-g_z`` 做"直立才计分"的门控。
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    if len(mirror_joints) != len(mirror_signs):
+        raise RuntimeError(
+            f"joint_mirror_signed: mirror_joints({len(mirror_joints)}) 与 "
+            f"mirror_signs({len(mirror_signs)}) 数量不一致"
+        )
+    cache = getattr(env, "joint_mirror_signed_cache", None)
+    if cache is None or env.joint_mirror_signed_cache_key != tuple(map(tuple, mirror_joints)):
+        cache = []
+        for (pat_a, pat_b), sign_map in zip(mirror_joints, mirror_signs):
+            ids_a, names_a = asset.find_joints(pat_a)
+            ids_b, names_b = asset.find_joints(pat_b)
+            if len(ids_a) != len(ids_b) or len(ids_a) == 0:
+                raise RuntimeError(
+                    f"joint_mirror_signed: 镜像对 {pat_a!r} / {pat_b!r} 匹配到的关节数不同"
+                    f"（{len(ids_a)} vs {len(ids_b)}）—— 检查正则与关节命名。"
+                )
+            signs = []
+            for name in names_a:
+                m = _MIRROR_JOINT_TYPE_RE.search(name)
+                if m is None or m.group(1) not in sign_map:
+                    raise RuntimeError(
+                        f"joint_mirror_signed: 无法从关节名 {name!r} 推出镜像符号；"
+                        f"mirror_signs 必须给 {{hipx, hipy, knee}}（收到 {sign_map}）。"
+                    )
+                signs.append(float(sign_map[m.group(1)]))
+            cache.append((ids_a, ids_b, signs))
+        env.joint_mirror_signed_cache = cache
+        env.joint_mirror_signed_cache_key = tuple(map(tuple, mirror_joints))
+
+    reward = torch.zeros(env.num_envs, device=env.device)
+    for ids_a, ids_b, signs in cache:
+        sign_t = torch.tensor(signs, device=env.device, dtype=asset.data.joint_pos.dtype)
+        diff = asset.data.joint_pos[:, ids_a] - sign_t.unsqueeze(0) * asset.data.joint_pos[:, ids_b]
+        reward += torch.sum(torch.square(diff), dim=-1)
+    reward = reward / len(cache)
+    if gate_by_gravity:
+        reward = reward * torch.clamp(-asset.data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
     return reward

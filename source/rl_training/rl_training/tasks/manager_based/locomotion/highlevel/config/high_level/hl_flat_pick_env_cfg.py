@@ -605,6 +605,47 @@ class TeleopEnvCfg(HLFlatPickTeacherEnvCfg):
         if self.__class__.__name__ == "TeleopEnvCfg":
             self.disable_zero_weight_rewards()
 
+# ==========================================
+# 遥操 + **带 history encoder** 的低层策略（需求 5，2026-09-29 新增）
+# --------------------------------------------------------------------------
+# `TeleopLLAction` 本体早就支持 history 回放（`build_history_window` 会读
+# `policy_layout.json`，`kind=="history"` 时自动开 10×70 的环形窗口并走
+# `forward(policy_obs, history_flat)` 双输入）—— 缺的只是一个**默认就指向
+# history 版低层 checkpoint** 的任务注册。这里补上：
+#   * 环境：`TeleopHistoryEnvCfg`（继承 `TeleopEnvCfg`，只有 actions 不同）；
+#   * 任务名：`Isaac-M20-Piper-Teleop-History-v0`；
+#   * 低层策略：默认指向已导出的 History-Adaptation 部署态策略（policy_obs 83 +
+#     history 10×70 → action 16），可用环境变量
+#     `RL_TRAINING_LOW_LEVEL_POLICY_TELEOP_HISTORY` 覆盖成本轮新训的 run。
+# 观测模板沿用 `WBCObservationsCfg().policy`（83 维，含 ee_goal），与 history 版
+# 低层的 policy 观测逐项一致；replay 侧还会用 `policy_layout.json` 再校验一次。
+# ==========================================
+_LOW_LEVEL_HISTORY_POLICY = resolve_policy_path(
+    "logs/rsl_rl/history_adaptation/2026-09-20_00-50-31/exported_deploy/policy.pt",
+    key="teleop_history",
+)
+
+@configclass
+class TeleopHistoryActionsCfg(TeleopActionsCfg):
+    pre_trained_pick_action = mdp.TeleopLLActionCfg(
+        asset_name="robot",
+        policy_path=_LOW_LEVEL_HISTORY_POLICY,
+        low_level_decimation=4,
+        low_level_leg_actions=_low_level_env_cfg.actions.joint_pos,
+        low_level_wheel_actions=_low_level_env_cfg.actions.joint_vel,
+        low_level_ee_actions=_low_level_env_cfg.actions.ee_ik,
+        low_level_observations=_low_level_wbc_obs_cfg.policy,
+        debug_vis=False,
+    )
+
+@configclass
+class TeleopHistoryEnvCfg(TeleopEnvCfg):
+    actions: TeleopHistoryActionsCfg = TeleopHistoryActionsCfg()
+    def __post_init__(self):
+        super().__post_init__()
+        if self.__class__.__name__ == "TeleopHistoryEnvCfg":
+            self.disable_zero_weight_rewards()
+
 @configclass
 class HLFlatPickTeacherEnvCfg_PLAY(HLFlatPickTeacherEnvCfg):
     terminations: HLFlatPickTerminationsCfg_PLAY = HLFlatPickTerminationsCfg_PLAY()

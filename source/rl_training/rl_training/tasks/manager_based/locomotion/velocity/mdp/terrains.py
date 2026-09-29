@@ -337,6 +337,37 @@ NONE_STAIRS_TERRAINS_CFG = TerrainGeneratorCfg(
         ),
     },
 )
+
+# --------------------------------------------------------------------------- #
+# 10. 多地形（随机粗糙 + 正/反斜坡 + 平地）—— 2026-09-29 新增
+#
+# 需求：只要**随机粗糙、正反斜坡、平地**三种，并且随机粗糙的噪声要"温和"
+# （noise_range 0.01 ~ 0.05，而不是 ROUGH_TERRAINS_CFG / NONE_STAIRS 的 0.02 ~ 0.10）。
+# 与 Rough-WO-Stairs（`NONE_STAIRS_TERRAINS_CFG`）的区别有两点：
+#   1. 粗噪幅度 0.02~0.10 → **0.01~0.05**（噪声步长 0.02 → 0.01），
+#      让轮足先在"轻微不平"上学稳，而不是一上来就啃大颗粒；
+#   2. 比例重排：粗糙 0.35→0.40、上下坡各 0.25、平地 0.15→0.10。
+# 不含楼梯（`pyramid_stairs*`）、不含 boxes/rails/pit 等离散障碍。
+# --------------------------------------------------------------------------- #
+ROUGH_SLOPES_FLAT_TERRAINS_CFG = TerrainGeneratorCfg(
+    **_COMMON_KW,
+    sub_terrains={
+        "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
+            proportion=0.40, noise_range=(0.01, 0.05), noise_step=0.01, border_width=0.25
+        ),
+        "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
+            proportion=0.25, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
+        ),
+        "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
+            proportion=0.25, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
+        ),
+        "flat": terrain_gen.MeshPlaneTerrainCfg(
+            proportion=0.10,
+        ),
+    },
+)
+"""多地形：随机粗糙（噪声 0.01~0.05）+ 上坡 + 下坡 + 平地。"""
+
 # --------------------------------------------------------------------------- #
 #  方便测试脚本按名字索引
 # --------------------------------------------------------------------------- #
@@ -349,5 +380,6 @@ TERRAIN_CFGS = {
     "slope": SLOPE_TERRAIN_CFG,
     "slope_inv": SLOPE_INV_TERRAIN_CFG,
     "mixed": ROUGH_TERRAINS_CFG,
+    "rough_slopes_flat": ROUGH_SLOPES_FLAT_TERRAINS_CFG,
 }
 """名称 -> TerrainGeneratorCfg 的映射，供测试脚本 --terrain 参数使用。"""

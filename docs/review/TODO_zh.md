@@ -19,6 +19,7 @@
 | 2026-09-20 | 新增**部署交接**：`docs/deploy_sim2sim_sim2real_zh.md` + `probe_deploy_layout.py`（DEF-021）；P1/P2/P3 待办不变 | `7458672` |
 | 2026-09-20 | **部署基线固化**（`main @ 2d49f47` ↔ run `2026-09-20_00-50-31`，含产物 sha256 + tag `deploy-baseline-2026-09-20`，DONE 第六节 / DEF-022）；新增 `summarize_run.py`（P3 提前做，DEF-023）；**P1-1 改为"口径 + 配置"两条修法**、P1-2 补臂相关证据 | 基线 `2d49f47`；工具 `dc3a5b9`；文档 `eb22401` |
 | 2026-09-20 | P1-1 进入实测：新增**探索噪声上界** `max_noise_std`（默认 0 = 不限制，投影梯度实现，DEF-024），并启动 4000-iter 的 cap=1.2 / entropy_coef=0.002 A/B（结果待回填） | `docs: P1-1 A/B` 提交 |
+| 2026-09-29 | 新分支 `codex/ll-train-detail-fix`：**静止伫立专项**（DEF-026，两项惩罚 + 三条课程）、**镜像符号修复**（DEF-027，"右后腿往右前方撇"）、**扰动加强**（DEF-028）、**多地形任务**（DEF-029）、**遥操 history 任务**（DEF-030）；新增 P1-1'~P1-4 四条待办 | `codex/ll-train-detail-fix` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -39,6 +40,39 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
 ---
 
 ## P1 —— 训练质量（决定上限）
+
+- [ ] **P1-1' 静止伫立专项的 2000-iter 验收（代码已改，训练进行中）**
+  - 依据：DEF-026（基线命令 (0,0,0) 时 `err_vel_xy = 0.148 m/s`、摔倒 13.3%）。
+  - 已做：`stand_still_vel_l2` / `stand_still_wheel_vel_l2` 两项惩罚（权重 −8.0 / −0.01，
+    各带 25k 步爬升课程）+ `rel_standing_envs` 0.02→0.15 课程（DEF-026 §3）。
+  - 验收：`eval_fixed_command.py --commands "0,0,0;0.5,0,0;1.0,0,0"`（512 envs / seed 42 / steps 1100）
+    下，**命令 (0,0,0) 的 `err_vel_xy` 明显低于 0.148**，且 0.5 / 1.0 两档不劣化；
+    训练侧 `Train/mean_reward`、`Episode_Termination/root_height_below_minimum` 不劣化。
+  - 剩余：① 结果回填；② 若 `stand_still_wheel_vel` 让"站着更爱摔"，把 −0.01 降到 −0.005 再跑一遍；
+    ③ 确认站姿占比 0.15 不会牺牲跟踪精度（对比 `Metrics/base_velocity/error_vel_xy`）。
+
+- [ ] **P1-1'' 把 P1-1 的 `max_noise_std=1.2` 落成 cfg 默认值**
+  - 现状：DEF-024 §4 已证明 cap=1.2 在 4000 iter 上全面更好，但 `rsl_rl_ppo_cfg.py` 的
+    `RslRlPpoActorCriticHistoryCfg.max_noise_std` 仍是 0（不限制），只能命令行覆盖。
+  - 依据（DEF-024 的遗留条件）：先在**全长 20k / 同 seed / 4096 envs** 上再验一次，
+    通过后把默认值改成 1.2。
+  - 验收：全长 run 的 `Policy/mean_noise_std` 平台 ≤1.2，`Train/mean_reward` 不劣于基线。
+  - 注：本次 2000-iter 的静止专项 run 仍是 `max_noise_std=0`，与基线口径一致，便于对比。
+
+- [ ] **P1-3 多地形任务的端到端验收（被 DEF-031 挡住）**
+  - 现状：`Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0` 只做到 cfg 级验证；
+    本机（Windows + A4000）跑 `terrain_type="generator"` 的任务会在 env 创建期死锁
+    （DEF-031，原始代码同样复现）。
+  - 要做什么：换到能跑生成地形的机器后 ① `--num_envs 64 --max_iterations 2` 冒烟；
+    ② 短训（≥2000 iter）看地形通过率与 `root_height`/`bad_orientation_2` 合计摔倒；
+    ③ 把数字回填 DEF-029。
+  - 同批要补的还有 `Rough-*` / `Rough-WO-Stairs-*` 三个老任务 —— 它们在本机也从未跑过。
+
+- [ ] **P1-4 把"本机跑不了生成地形任务"钉进回归脚本**
+  - 现状：DEF-031。回归矩阵（P3）若不加区分，会在本机对 `Rough-*` 任务无限等待。
+  - 做法：给冒烟脚本加"地形类任务跳过 / 超时（如 5 min 无输出即判 SKIP）"的分支，
+    并在日志里打印原因；换机器后自动恢复执行。
+
 
 - [ ] **探明"探索噪声平台 ~1.5"（原"`noise_std`/`error_vel_xy` 长期退化"已归因，见 DEF-023）**
   - **已归因（2026-09-20，用 `summarize_run.py` 做阶段聚合）**：
@@ -88,7 +122,9 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
     且 `bad_orientation_2` 在 s3 是**下降**的（0.0756→0.0144）⇒ 两个终止项必须看合计（s3 = 0.1325）。
 
 - [ ] **低层 `known_issues` 剩余条目**（原编号）
-  - ① `joint_mirror` 用平方差做镜像惩罚（左右关节符号约定可能相反）；
+  - [x] ① `joint_mirror` 用平方差做镜像惩罚（左右关节符号约定可能相反）
+    → **2026-09-29 已修**：确认符号确实相反（对角对要求 θ_fl=θ_hr，真实关系是 −θ），
+    新增 `joint_mirror_signed` 并扩到 4 对（含左右对），见 `DEFECT_LOG_zh.md` DEF-027；
   - ⑧ `action_mirror`/`action_sync` 用 articulation 关节 id 索引动作向量 + 关节名不存在
     （当前 weight=0，属埋雷）；
   - ⑩ `arm_rewards.py` 的 `grasp_success`/`ee_approach_object` 依赖不存在的 `object`（dead code）；

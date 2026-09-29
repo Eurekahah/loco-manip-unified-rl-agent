@@ -157,6 +157,54 @@ def ramp_reward_weight(
     return weight
 
 
+def ramp_command_param(
+    env: ManagerBasedRLEnv,
+    env_ids: Sequence[int],
+    term_name: str,
+    param: str,
+    start: float,
+    end: float,
+    num_steps: int,
+) -> float:
+    """把某个 **command term** 的标量参数从 ``start`` 线性升到 ``end``。
+
+    典型用途：``base_velocity.rel_standing_envs`` —— "有多少比例的 env 会被分配
+    **零速命令**"。History/WBC 原来固定 0.02（只有 2%），策略几乎没见过"站着不动"，
+    实测命令 (0,0,0) 时底盘仍有 0.148 m/s 的残余速度（DEF-026）。这条课程把它
+    在前 ``num_steps`` 步里线性抬到 0.15。
+
+    **为什么直接写 ``.cfg``**：IsaacLab 的命令项在 ``_resample_command`` 里读
+    ``self.cfg.rel_standing_envs``，改 cfg 对象即可生效（与 ``apply_range_stages``
+    改 ``.cfg.ranges`` 同理），不需要重建命令项。
+
+    与 ``ramp_reward_weight`` 一样，本函数在 episode reset 时被调用，
+    写法是**绝对赋值**（幂等），所以 ``start`` 应当与 cfg 里的初值一致。
+
+    打印被**节流**：课程在每次 episode reset 都会被调用（4096 envs / 20 s 回合时
+    约 4~8 次/env step），如果每次变化都打印，25k 步的爬升会刷出几万行日志
+    （实测 18 iter 就 455 行）。这里只在变化 ≥ ``print_delta`` 时打一条。
+    """
+    term_cfg = env.command_manager.get_term(term_name).cfg
+    p = min(max(env.common_step_counter / max(int(num_steps), 1), 0.0), 1.0)
+    value = start + (end - start) * p
+    if abs(float(getattr(term_cfg, param)) - value) > 1e-9:
+        setattr(term_cfg, param, value)
+        cache = getattr(env, "_curriculum_ramp_print_cache", None)
+        if cache is None:
+            cache = {}
+            env._curriculum_ramp_print_cache = cache
+        key = (term_name, param)
+        last = cache.get(key)
+        print_delta = 0.01 * max(abs(end - start), 1e-6)
+        if last is None or abs(value - last) >= print_delta:
+            cache[key] = value
+            print(
+                f"[curriculum] {term_name}.{param} → {value:.4f} "
+                f"(start={start}, end={end}, step={env.common_step_counter})"
+            )
+    return value
+
+
 # ---------------------------------------------------------------------------
 # 课程：区间阶梯 / 扰动缩放（幂等，可每步调用）
 # ---------------------------------------------------------------------------

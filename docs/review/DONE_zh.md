@@ -14,8 +14,44 @@
 | 2026-09-20 | 新增第五节：高层链并入 `main`（4 个高层任务 2 iter 全 EXIT=0）+ 导出部署态策略固化成流程；第二节标题去掉"未合并 main" | `codex/hl-merge-p0`（`129848e`/`af4602d`/`07601e9`/`0772757`） |
 | 2026-09-20 | 新增第六节 **部署基线**：`main @ 2d49f47`（tag `deploy-baseline-2026-09-20`）= 部署口径代码，对应 run `2026-09-20_00-50-31` 的 `exported_deploy/*`（含 sha256 与"训练代码 vs main"的差异核对）+ **基线可运行性验收**（8 任务冒烟回归 8/8 EXIT=0） | 基线 `2d49f47`；记录 `eb22401` |
 | 2026-09-22 | 新增第一节 **P1-1 修复**：探索噪声上界 `max_noise_std=1.2` 的 A/B 实测通过（**建议作为默认**）；同批对照点 `entropy_coef=0.002`（通过但略逊）与 `entropy_coef=0.0`（意外点，s3 摔倒反而 +15%） | 开关代码 `b75c596`；实测回填见 DEF-024 §4（2026-09-22） |
+| 2026-09-29 | 新增第七节 **训练细节专项**（分支 `codex/ll-train-detail-fix`）：静止伫立（DEF-026）、镜像符号（DEF-027）、扰动加强（DEF-028）、多地形任务（DEF-029）、遥操 history 任务（DEF-030）；另记录本机跑不了生成地形任务的平台问题（DEF-031） | `codex/ll-train-detail-fix` |
 
 ---
+
+## 七、训练细节专项（2026-09-29，分支 `codex/ll-train-detail-fix`）
+
+一次性处理"训出来的模型细节不对"的 5 件事。代码全部落地，冒烟全部 EXIT=0；
+训练类结论见下面每条的"验收"。
+
+| 需求 | 内容 | 关键改动 | 验收 |
+|---|---|---|---|
+| ① 静止时轮足仍有前向速度 | 基线实测命令 (0,0,0) 时 `err_vel_xy = **0.148 m/s**`（`eval_fixed_command.py`，512 envs / seed 42 / 1100 steps） | 新增 `stand_still_vel_l2`（−8.0）+ `stand_still_wheel_vel_l2`（−0.01）两项**只按命令门控**的惩罚；`rel_standing_envs` 0.02→**0.15**；三条 25k 步爬升课程（`DEFECT_LOG_zh.md` DEF-026） | 2 iter EXIT=0（奖励 23 项 / 课程 15 项）；2000-iter 训练的固定命令 eval 见下 |
+| ② 右后腿往右前方撇 | 判定为**奖励项符号 bug**，不是策略调不出来 | `joint_mirror` 的对角对要求 `θ_fl=θ_hr`，而本机型真实镜像关系是 `θ_fl=−θ_hr`（MJCF 轴 / 关节限位 / 默认姿态三重证据）；新增 `joint_mirror_signed`（按关节名后缀给符号）+ 扩到 4 对（含左右对），权重 −0.03→−0.06（DEF-027） | 2 iter EXIT=0；`joint_mirror −0.06` 在奖励表里 |
+| ③ 多地形（只随机粗糙+正反斜坡+平地） | 新增 `ROUGH_SLOPES_FLAT_TERRAINS_CFG`（粗糙 0.40 噪声 **0.01~0.05**、上坡 0.25、下坡 0.25、平地 0.10） | 新任务 `Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0`（+`-play-v0`），继承 `RoughEnvWBCConfig`，显式开地形课程并按 `RoughWOStairs` 的步骤重开 v_x 课程（DEF-029） | cfg 级验证通过；**端到端冒烟被平台问题挡住**（DEF-031：本机跑任何生成地形任务都会在 env 创建期死锁，原始代码同样复现） |
+| ④ 加强扰动 | push 间隔 5~10 s、vx±2 / vy±1 / **yaw±0.52** | `EventCfg.randomize_push_robot` 改幅度与间隔；`disturbance_ramp` 的 base 同步改、`start_scale` 0.3→0.2、`num_steps` 25k→**50k**（DEF-028） | 2 iter EXIT=0（平地 history） |
+| ⑤ 遥操缺 history 版 | `TeleopLLAction` 本体早已支持 history 回放，缺的只是注册 | 新增 `Isaac-M20-Piper-Teleop-History-v0`（`TeleopHistoryActionsCfg`/`TeleopHistoryEnvCfg`，低层默认指向 history 部署态策略，可用 `RL_TRAINING_LOW_LEVEL_POLICY_TELEOP_HISTORY` 覆盖）（DEF-030） | 2 iter EXIT=0，日志 `低层 obs 维度=83 (checkpoint 期望 83)` + `history 窗口: 10 × 70 = 700` |
+
+### 冒烟回归（2026-09-29，`--headless --num_envs 64 --max_iterations 2`）
+
+| 任务 | EXIT | 备注 |
+|---|---|---|
+| `History-Adaptation-Deeprobotics-M20-v0` | 0 | 奖励 21→**23** 项、课程 12→**15** 项；两条新惩罚与三条课程都在爬升 |
+| `Flat-Deeprobotics-M20-Piper-WBC-v0` | 0 | 共享同一批奖励/课程类 ⇒ 回归通过 |
+| `Isaac-M20-Piper-Teleop-v0` | 0 | 未受影响 |
+| `Isaac-M20-Piper-Teleop-History-v0` | 0 | **新增**；replay 打印 `history 窗口: 10 × 70 = 700` |
+| `Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0` | **SKIP** | 卡在平台问题 DEF-031（原始代码 + `Rough-WO-Stairs` 同样复现） |
+| `Rough-WO-Stairs-History-Adaptation-Deeprobotics-M20-v0` | **SKIP** | 同上 |
+
+> 复现：`logs/smoke/2026-09-29_<task>.log`；平台问题的对照实验见 DEF-031 §2。
+
+### 静止伫立 2000-iter 训练验收（需求 ①）
+
+* 训练：`python scripts/reinforcement_learning/rsl_rl/train.py --task History-Adaptation-Deeprobotics-M20-v0
+  --headless --num_envs 4096 --max_iterations 2000 --seed 42 --run_name stand_still_fix`
+* 基线对照：`logs/rsl_rl/history_adaptation/2026-09-20_00-50-31/model_19999.pt`（20k iter，旧代码）
+* eval：`eval_fixed_command.py --headless --num_envs 512 --steps 1100 --seed 42 --commands "0,0,0;0.5,0,0;1.0,0,0"`
+
+⟦待回填：训练 run 目录、2000-iter 的训练侧指标、以及三档命令下的 err_vel_xy / 摔倒率对比表⟧
 
 ## 一、低层训练（本轮主线）
 

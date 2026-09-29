@@ -189,6 +189,52 @@ class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
         },
     )
 
+    # ---- 静止伫立（零速命令）专项（DEF-026）--------------------------------
+    # 旧配置里所有"站立"相关的项都是关闭状态：
+    #   * `stand_still`（关节偏离默认姿态）/ `stand_still_without_cmd` → weight 0；
+    #   * `wheel_vel_penalty`（零速时的轮速惩罚）→ weight 0；
+    #   * `lin_vel_xy_l2_with_ang_z_command` → 未启用；
+    #   * `joint_pos_penalty_wbc`（hipx/hipy/knee）虽有 -0.4/-0.1/-0.1，但它的
+    #     `is_truly_still` 要求 `body_vel < 0.5` —— 一旦真的漂起来，这条惩罚自己就关了
+    #     （鸡生蛋：越漂越没惩罚）。
+    # 结果：命令 (0,0,0) 时底盘以 ~0.148 m/s 前向漂移（eval_fixed_command.py 实测）。
+    # 这里补两项**只按命令门控**的惩罚；权重由课程从下面的初值爬到终值：
+    #   stand_still_vel        -0.8  → -8.0
+    #   stand_still_wheel_vel  -0.001 → -0.01
+    # 权重量级怎么定的（按 IsaacLab 的回报口径标定，别凭感觉改）：
+    #   RewardManager 返回的是 `Σ term_value·weight·dt`，而 `Episode_Reward/*` 记的是
+    #   **每秒速率**（episode 积分 / max_episode_length_s）。实测基线 run
+    #   `2026-09-20_00-50-31`：命令 (0,0,0) 时"回报/秒 = 1.75"，且
+    #   `Episode_Reward/stand_still_vel` ≈ weight × E[|v|²]（只对有零速命令的 env 计分）。
+    #   按漂移 |v| ≈ 0.15 m/s 算 |v|² ≈ 0.0225：
+    #     weight=-8.0  ⇒ 静止 env 上约 -0.18/s，占 1.75 的 ~10% —— 有梯度但不喧宾夺主；
+    #     weight=-2.0  ⇒ 只有 -0.045/s（2.5%），实测基本推不动，所以不用那个量级。
+    #   二次型的好处：|v|=0.5 时 -2.0/s（会主动刹车），|v|=0.05 时只 -0.02/s（不干扰微调）。
+    #   轮速项按 ω≈2.5 rad/s/轮（0.15 m/s ÷ 轮半径）算 Σω² ≈ 25：
+    #     weight=-0.01 ⇒ 约 -0.25/s（~14%）—— 比底盘项更强，因为它是"因"，但压太狠会
+    #     让轮式倒立摆没法用轮子微动平衡，所以只给到 -0.01（不够再单独调）。
+    # 初值必须**非零**：`disable_zero_weight_rewards()` 会把 weight==0 的项置 None，
+    # 之后课程再去 `get_term_cfg` 就会抛 ValueError。
+    stand_still_vel = RewTerm(
+        func=mdp.stand_still_vel_l2,
+        weight=-0.8,
+        params={
+            "command_name": "base_velocity",
+            "command_threshold": 0.1,
+            "yaw_weight": 1.0,
+            "asset_cfg": SceneEntityCfg("robot"),
+        },
+    )
+    stand_still_wheel_vel = RewTerm(
+        func=mdp.stand_still_wheel_vel_l2,
+        weight=-0.001,
+        params={
+            "command_name": "base_velocity",
+            "command_threshold": 0.1,
+            "asset_cfg": SceneEntityCfg("robot", joint_names=None),  # 具体名单在 deeprobotics_m20 的 rough cfg 里填
+        },
+    )
+
 @configclass
 class WBCCurriculumCfg(DeeproboticsM20CurriculumsCfg):
     """WBC 课程配置。
@@ -376,22 +422,59 @@ class WBCCurriculumCfg(DeeproboticsM20CurriculumsCfg):
     )
 
     # ── 扰动课程：push / 外力从 30% 线性放大到 100%（25k 步内）────────────────
-    # 实测：第 0 步就全量开启 push（每 10~15 s、±0.5 m/s）与 reset 外力（±10 N / ±10 N·m）时，
-    # `root_z<0.30` 的 20s 触发率 22.9% → 25.8%（多 3 个百分点），而且早期"一被推就趴窝"
-    # 会被记成高度终止。早段压低扰动，让底盘先把平衡学会。
+    # 实测（旧幅度）：第 0 步就全量开启 push（每 10~15 s、±0.5 m/s）与 reset 外力
+    # （±10 N / ±10 N·m）时，`root_z<0.30` 的 20s 触发率 22.9% → 25.8%（多 3 个百分点），
+    # 而且早期"一被推就趴窝"会被记成高度终止。早段压低扰动，让底盘先把平衡学会。
+    #
+    # 2026-09-29 按需求 4 **加强扰动**（EventCfg.randomize_push_robot：间隔 5~10 s、
+    # x ±2.0 / y ±1.0 m/s、yaw ±0.52 rad/s），同时把这条课程拉长到 50k 步
+    # （≈2083 iter）、起点压到 0.2×：全量扰动本身已经难了，再不给缓冲会前段就学不动。
+    # `base` 必须与 EventCfg 里的**终态幅度**逐位一致（课程按它算绝对值，幂等）。
     disturbance_ramp: CurrTerm = CurrTerm(
         func=mdp.apply_event_scale,
         params={
-            "num_steps": 25_000,
-            "start_scale": 0.3,
+            "num_steps": 50_000,
+            "start_scale": 0.2,
             "spec": [
                 {"term": "randomize_push_robot", "param": "velocity_range",
-                 "base": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
+                 "base": {"x": (-2.0, 2.0), "y": (-1.0, 1.0), "yaw": (-0.52, 0.52)}},
                 {"term": "randomize_apply_external_force_torque", "param": "force_range",
                  "base": (-10.0, 10.0)},
                 {"term": "randomize_apply_external_force_torque", "param": "torque_range",
                  "base": (-10.0, 10.0)},
             ],
+        },
+    )
+
+    # ── 静止伫立课程（DEF-026）─────────────────────────────────────────────
+    # 1) 站姿占比：2% → 15%（25k 步 ≈ 1042 iter）。策略见不到零命令就学不会站住。
+    # 2) 两项静止惩罚的权重爬升；`start_*` 与 WBCRewardsCfg 里的初值一致。
+    standing_env_ratio_ramp: CurrTerm = CurrTerm(
+        func=mdp.ramp_command_param,
+        params={
+            "term_name": "base_velocity",
+            "param": "rel_standing_envs",
+            "start": 0.02,
+            "end": 0.15,
+            "num_steps": 25_000,
+        },
+    )
+    stand_still_vel_ramp: CurrTerm = CurrTerm(
+        func=mdp.ramp_reward_weight,
+        params={
+            "term_name": "stand_still_vel",
+            "start_weight": -0.8,
+            "end_weight": -8.0,
+            "num_steps": 25_000,
+        },
+    )
+    stand_still_wheel_vel_ramp: CurrTerm = CurrTerm(
+        func=mdp.ramp_reward_weight,
+        params={
+            "term_name": "stand_still_wheel_vel",
+            "start_weight": -0.001,
+            "end_weight": -0.01,
+            "num_steps": 25_000,
         },
     )
 
@@ -528,6 +611,13 @@ class FlatEnvWBCConfig_PLAY(FlatEnvWBCConfig):
         self.curriculum.base_velocity_lin_vel_x_s5 = None
         self.curriculum.base_velocity_lin_vel_x_s6 = None
         self.curriculum.base_velocity_lin_vel_x_s7 = None
+        # 静止伫立：PLAY 直接用终态（占比 0.15 + 满权重），不做爬升
+        self.curriculum.standing_env_ratio_ramp = None
+        self.curriculum.stand_still_vel_ramp = None
+        self.curriculum.stand_still_wheel_vel_ramp = None
+        self.commands.base_velocity.rel_standing_envs = 0.15
+        self.rewards.stand_still_vel.weight = -8.0
+        self.rewards.stand_still_wheel_vel.weight = -0.01
         
         if self.__class__.__name__ == "FlatEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()
@@ -558,6 +648,13 @@ class RoughEnvWBCConfig_PLAY(RoughEnvWBCConfig):
         self.commands.body_pose.height_range = (0.33, 0.55)
         self.commands.body_pose.pitch_range = (-0.35, 0.35)
         self.commands.body_pose.roll_range = (-0.25, 0.25)
+        # 静止伫立：PLAY 直接用终态（占比 0.15 + 满权重），不做爬升
+        self.curriculum.standing_env_ratio_ramp = None
+        self.curriculum.stand_still_vel_ramp = None
+        self.curriculum.stand_still_wheel_vel_ramp = None
+        self.commands.base_velocity.rel_standing_envs = 0.15
+        self.rewards.stand_still_vel.weight = -8.0
+        self.rewards.stand_still_wheel_vel.weight = -0.01
         if self.__class__.__name__ == "RoughEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()
 @configclass
@@ -712,5 +809,116 @@ class RoughWOStairsEnvWBCConfig_PLAY(RoughWOStairsEnvWBCConfig):
         self.commands.body_pose.height_range = (0.33, 0.55)
         self.commands.body_pose.pitch_range = (-0.35, 0.35)
         self.commands.body_pose.roll_range = (-0.25, 0.25)
+        # 静止伫立：PLAY 直接用终态（占比 0.15 + 满权重），不做爬升
+        self.curriculum.standing_env_ratio_ramp = None
+        self.curriculum.stand_still_vel_ramp = None
+        self.curriculum.stand_still_wheel_vel_ramp = None
+        self.commands.base_velocity.rel_standing_envs = 0.15
+        self.rewards.stand_still_vel.weight = -8.0
+        self.rewards.stand_still_wheel_vel.weight = -0.01
         if self.__class__.__name__ == "RoughWOStairsEnvWBCConfig_PLAY":
+            self.disable_zero_weight_rewards()
+
+
+# ============================================================================
+# 多地形（随机粗糙 + 正/反斜坡 + 平地）—— 需求 3，2026-09-29 新增
+# ----------------------------------------------------------------------------
+# 直接对标已有的两个多地形任务：
+#   * `Rough-History-Adaptation-Deeprobotics-M20-v0`          → RoughEnvWBCConfig
+#     （用 IsaacLab 官方 `ROUGH_TERRAINS_CFG`：含楼梯 / boxes / rails / pit 等，噪声 0.02~0.10）
+#   * `Rough-WO-Stairs-History-Adaptation-Deeprobotics-M20-v0` → RoughWOStairsEnvWBCConfig
+#     （`NONE_STAIRS_TERRAINS_CFG`：粗糙 0.35 + 上下坡 0.25/0.25 + 平地 0.15，噪声 0.02~0.10）
+# 本类 = RoughWOStairs 的"温和噪声"版：地形组成只要 **随机粗糙 / 上坡 / 下坡 / 平地**，
+# 且随机粗糙的噪声降到 **0.01~0.05**（见 `mdp.ROUGH_SLOPES_FLAT_TERRAINS_CFG`）。
+# 其余（命令、奖励、课程、观测、history 窗口）全部沿用 RoughEnvWBCConfig，
+# 因此也自动继承本轮的两处修复：静止伫立专项（DEF-026）与镜像符号修正（DEF-027）。
+# ============================================================================
+@configclass
+class RoughSlopesEnvWBCConfig(RoughEnvWBCConfig):
+    """多地形（随机粗糙 + 正反斜坡 + 平地，噪声 0.01~0.05）的 history-adaptation 版本。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        # 地形：粗糙 0.40（噪声 0.01~0.05）+ 上坡 0.25 + 下坡 0.25 + 平地 0.10
+        self.scene.terrain.terrain_generator = mdp.ROUGH_SLOPES_FLAT_TERRAINS_CFG
+        # 地形课程：与 `LocomotionVelocityRoughEnvCfg.__post_init__` 里"按 curriculum 开关
+        # 决定 terrain_generator.curriculum"的写法对齐 —— 本配置保留 `terrain_levels`
+        # （RoughEnvWBCConfig 没关它），所以这里显式打开，让难度随成绩爬升。
+        self.scene.terrain.terrain_generator.curriculum = True
+        self.scene.terrain.max_init_terrain_level = 5
+
+        # 多地形上把 v_x 课程重新打开（RoughEnvWBCConfig 里被置 None 了；
+        # 步骤与 `RoughWOStairsEnvWBCConfig` 完全一致，便于横向对比）。
+        self.curriculum.base_velocity_lin_vel_x_s4 = CurrTerm(
+            func=mdp.modify_term_cfg,
+            params={
+                "address": "commands.base_velocity.ranges.lin_vel_x",
+                "modify_fn": mdp.override_value,
+                "modify_params": {"value": (-2.0, 2.0), "num_steps": 75_000},
+            },
+        )
+        self.curriculum.base_velocity_lin_vel_x_s5 = CurrTerm(
+            func=mdp.modify_term_cfg,
+            params={
+                "address": "commands.base_velocity.ranges.lin_vel_x",
+                "modify_fn": mdp.override_value,
+                "modify_params": {"value": (-3.0, 3.0), "num_steps": 100_000},
+            },
+        )
+        self.curriculum.base_velocity_lin_vel_x_s6 = CurrTerm(
+            func=mdp.modify_term_cfg,
+            params={
+                "address": "commands.base_velocity.ranges.lin_vel_x",
+                "modify_fn": mdp.override_value,
+                "modify_params": {"value": (-4.0, 4.0), "num_steps": 125_000},
+            },
+        )
+        self.curriculum.base_velocity_lin_vel_x_s7 = CurrTerm(
+            func=mdp.modify_term_cfg,
+            params={
+                "address": "commands.base_velocity.ranges.lin_vel_x",
+                "modify_fn": mdp.override_value,
+                "modify_params": {"value": (-5.0, 5.0), "num_steps": 150_000},
+            },
+        )
+        if self.__class__.__name__ == "RoughSlopesEnvWBCConfig":
+            self.disable_zero_weight_rewards()
+
+
+@configclass
+class RoughSlopesEnvWBCConfig_PLAY(RoughSlopesEnvWBCConfig):
+    """PLAY：直接给完整任务（关课程 + 放开 EE 区间 + 终态静止权重）。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.curriculum.body_pose_height_range_s2 = None
+        self.curriculum.body_pose_pitch_range_s3 = None
+        self.curriculum.body_pose_roll_range_s3 = None
+        self.curriculum.ee_goal_stages = None
+        self.curriculum.disturbance_ramp = None
+        self.curriculum.base_velocity_lin_vel_x_s4 = None
+        self.curriculum.base_velocity_lin_vel_x_s5 = None
+        self.curriculum.base_velocity_lin_vel_x_s6 = None
+        self.curriculum.base_velocity_lin_vel_x_s7 = None
+        self.curriculum.standing_env_ratio_ramp = None
+        self.curriculum.stand_still_vel_ramp = None
+        self.curriculum.stand_still_wheel_vel_ramp = None
+
+        self.commands.ee_pose.ranges.p_l = (0.30, 0.52)
+        self.commands.ee_pose.ranges.p_pitch = (-math.pi / 4, math.pi / 5)
+        self.commands.ee_pose.ranges.p_yaw = (-2 * math.pi / 5, 2 * math.pi / 5)
+        self.commands.ee_pose.ranges.o_roll = (-math.pi / 8, math.pi / 8)
+        self.commands.ee_pose.ranges.o_pitch = (-math.pi / 8, math.pi / 8)
+        self.commands.ee_pose.ranges.o_yaw = (-math.pi, math.pi)
+        self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        self.commands.body_pose.height_range = (0.33, 0.55)
+        self.commands.body_pose.pitch_range = (-0.35, 0.35)
+        self.commands.body_pose.roll_range = (-0.25, 0.25)
+
+        self.commands.base_velocity.rel_standing_envs = 0.15
+        self.rewards.stand_still_vel.weight = -8.0
+        self.rewards.stand_still_wheel_vel.weight = -0.01
+        if self.__class__.__name__ == "RoughSlopesEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()

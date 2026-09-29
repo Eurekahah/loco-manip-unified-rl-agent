@@ -460,8 +460,13 @@ class EventCfg:
     randomize_push_robot = EventTerm(
         func=mdp.push_by_setting_velocity,
         mode="interval",
-        interval_range_s=(10.0, 15.0),
-        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
+        # 扰动强度 / 间隔（2026-09-29 加强，需求 4）：
+        #   * 间隔 10~15 s → **5~10 s**（推得更频繁）；
+        #   * x ±0.5 → **±2.0 m/s**、y ±0.5 → **±1.0 m/s**；
+        #   * 新增 yaw ±0.52 rad/s（≈30°/s 的偏航角速度冲击）。
+        # 对应课程见 `WBCCurriculumCfg.disturbance_ramp`（前 50k 步按比例放大）。
+        interval_range_s=(5.0, 10.0),
+        params={"velocity_range": {"x": (-2.0, 2.0), "y": (-1.0, 1.0), "yaw": (-0.52, 0.52)}},
     )
 
 
@@ -808,6 +813,29 @@ class RewardsCfg:
     # )
 
     upward = RewTerm(func=mdp.upward, weight=0.0)
+
+    # ---- 静止伫立（零速命令）专项：见 mdp/rewards.py::stand_still_vel_l2 ----
+    # 默认 weight=0（对既有任务零影响）；M20 的 WBC/History 配置里打开，并配一条权重爬升课程。
+    stand_still_vel = RewTerm(
+        func=mdp.stand_still_vel_l2,
+        weight=0.0,
+        params={
+            "command_name": "base_velocity",
+            "command_threshold": 0.1,
+            "asset_cfg": SceneEntityCfg("robot"),
+        },
+    )
+    stand_still_wheel_vel = RewTerm(
+        func=mdp.stand_still_wheel_vel_l2,
+        weight=0.0,
+        params={
+            "command_name": "base_velocity",
+            "command_threshold": 0.1,
+            # 具体关节名由各机型 cfg 填（M20 是 `*_wheel_joint`）；默认 None = 全部关节，
+            # 只在 weight 被打开时才会真正参与计算。
+            "asset_cfg": SceneEntityCfg("robot", joint_names=None),
+        },
+    )
 
     # lin_vel_xy_l2_with_ang_z_command = RewTerm(
     #     func=mdp.lin_vel_xy_l2_with_ang_z_command,

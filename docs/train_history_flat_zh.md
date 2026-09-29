@@ -2,6 +2,74 @@
 
 分支：`codex/ll-history-flat-eegoal`（基于 `main`，只改 3 个文件 + 1 个工具脚本）
 
+> **2026-09-29 更新**：本文件现在也覆盖分支 `codex/ll-train-detail-fix` 带来的
+> 「静止伫立 / 镜像符号 / 扰动加强 / 多地形 / 遥操 history」五项改动，
+> 见下面新增的 **「2026-09-29 训练细节专项」** 一节；每条的来龙去脉在
+> `docs/review/DEFECT_LOG_zh.md` DEF-026 ~ DEF-031。
+
+---
+
+## 2026-09-29 训练细节专项（分支 `codex/ll-train-detail-fix`）
+
+### 1) 奖励项与课程项的变化（对比部署基线）
+
+| 项 | 基线（`2026-09-20_00-50-31`） | 现在 | 作用 |
+|---|---|---|---|
+| `stand_still_vel` | 无 | **−0.8 → −8.0**（25k 步爬升） | 零线速命令时惩罚底盘残余 xy 线速度 + yaw 角速度 |
+| `stand_still_wheel_vel` | 无 | **−0.001 → −0.01**（25k 步爬升） | 零线速命令时惩罚轮关节转速（"轮子空转"） |
+| `joint_mirror` | −0.03，2 对（对角，**符号错误**） | **−0.06，4 对**（对角 + 左右，带符号约定） | 镜像对称惩罚，压"右后腿往右前方撇" |
+| `commands.base_velocity.rel_standing_envs` | 0.02 | **0.02 → 0.15**（25k 步爬升） | 有多少比例的 env 拿到"零速命令"（站着不动的训练信号占比） |
+| `events.randomize_push_robot` | 每 10~15 s，±0.5/±0.5 m/s | **每 5~10 s，x±2 / y±1 m/s / yaw±0.52 rad/s** | 扰动强度与频率 |
+| `disturbance_ramp` | 0.3× → 1.0×，25k 步 | **0.2× → 1.0×，50k 步** | 扰动课程（新幅度更大，所以起点更低、拉得更长） |
+
+两条新惩罚**只按命令门控**（不看实测速度）——旧配置里唯一沾边的
+`joint_pos_penalty_wbc` 要求 `body_vel < 0.5` 才生效，也就是说"一旦真的漂起来这项就自己关了"。
+权重按回报口径标定：IsaacLab 的 `Episode_Reward/*` 记的是**每秒速率**，基线在命令 (0,0,0) 时
+约 1.75/s；`−8.0 × |v|²` 在 |v|=0.15 时给出约 −0.18/s（≈10%），有梯度但不喧宾夺主（推导见 DEF-026 §3）。
+
+### 2) 任务清单（2026-09-29 新增两个）
+
+```bash
+# 平地 history（本轮主线，静止伫立/镜像/扰动的验收任务）
+python scripts/reinforcement_learning/rsl_rl/train.py \
+    --task History-Adaptation-Deeprobotics-M20-v0 --headless --num_envs 4096
+
+# 多地形：随机粗糙（噪声 0.01~0.05）+ 正/反斜坡 + 平地
+python scripts/reinforcement_learning/rsl_rl/train.py \
+    --task Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0 --headless --num_envs 4096
+
+# 高层：遥操 + 历史自适应低层（默认指向 history 部署态策略）
+RL_TRAINING_LOW_LEVEL_POLICY_TELEOP_HISTORY=<run>/exported_deploy/policy.pt \
+python scripts/reinforcement_learning/rsl_rl/train.py \
+    --task Isaac-M20-Piper-Teleop-History-v0 --headless --num_envs 64
+```
+
+地形组成（`mdp.terrains.ROUGH_SLOPES_FLAT_TERRAINS_CFG`）：
+`random_rough` 0.40（`noise_range=(0.01, 0.05)`、`noise_step=0.01`）、
+`hf_pyramid_slope` 0.25、`hf_pyramid_slope_inv` 0.25、`flat` 0.10；**不含楼梯/boxes/rails/pit**。
+与两个已有的多地形任务的关系：`Rough-History-*` 用官方 `ROUGH_TERRAINS_CFG`（含楼梯等，噪声 0.02~0.10）；
+`Rough-WO-Stairs-History-*` 用 `NONE_STAIRS_TERRAINS_CFG`（无楼梯，噪声仍是 0.02~0.10）。
+
+> ⚠️ **本机（Windows + RTX A4000）跑不了任何生成地形的任务** —— env 创建期死锁，
+> 原始代码同样复现，见 `docs/review/DEFECT_LOG_zh.md` DEF-031。
+> 上面第二条命令请到能跑生成地形的机器上执行。
+
+### 3) 结论怎么验（静止伫立）
+
+训练日志里的 `Train/mean_reward` 是**随机命令课程**上的均值，跨 run 不可比（命令范围随课程放宽）。
+要比较"站得住不住"必须用固定命令探针：
+
+```bash
+python scripts/reinforcement_learning/rsl_rl/eval_fixed_command.py \
+    --headless --num_envs 512 --steps 1100 --seed 42 \
+    --commands "0,0,0;0.5,0,0;1.0,0,0" \
+    --checkpoint <run>/model_2000.pt --out logs/smoke/eval_<run>.json
+```
+
+看 `(0,0,0)` 那一行的 `err_vel_xy`（= 命令为零时的实际速度，基线是 **0.148 m/s**）与摔倒率。
+
+---
+
 ## 这一版包含什么
 
 | 改动 | 文件 | 说明 |

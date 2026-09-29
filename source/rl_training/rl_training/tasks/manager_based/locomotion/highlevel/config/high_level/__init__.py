@@ -115,6 +115,22 @@ gym.register(
     },
 )
 
+# ==========================================
+# 遥操 + 带 history encoder 的低层策略（需求 5，2026-09-29）
+# 与 `Isaac-M20-Piper-Teleop-v0` 的唯一区别：低层 checkpoint 默认是**历史自适应**
+# 的部署态策略（policy_obs 83 + history 10x70 -> action 16），回放侧自动走双输入 forward。
+# 覆盖：RL_TRAINING_LOW_LEVEL_POLICY_TELEOP_HISTORY=<abs/path/policy.pt>
+# ==========================================
+gym.register(
+    id="Isaac-M20-Piper-Teleop-History-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.hl_flat_pick_env_cfg:TeleopHistoryEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{__name__}.agents.rsl_rl_ppo_cfg:HighLevelPickFlatTeacherPPORunnerCfg",
+    },
+)
+
 
 # ==========================================
 # 2. 抓取学生任务（蒸馏）：有相机，视觉抓取，无无目标位姿
