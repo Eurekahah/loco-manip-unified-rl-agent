@@ -63,11 +63,18 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
     （4 台 autodl 3090 并行：① 软化版 20k ② 第一版/重惩罚 20k 对照
     ③ `Rough-Slopes-*` 多地形多点 ④ 分量消融/基线复核）。判据沿用上面的三方口径。
 
-- [ ] **P1-1''' 全长 20k 定稿（需要 autodl 机器；本机 6 s/iter ⇒ 20k 要 33 h）**
-  - 要做什么：把 P1-1'（软化后的静止惩罚）+ P1-1''（`max_noise_std=1.2`）合到一起跑全长，
-    并按 DONE 第七节 §4 的 `probe_gait_symmetry.py` 复核步态对称性。
-  - 顺带要跑：`Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0` 的冒烟 + 短训
-    （本机跑不了生成地形，见 DEF-031）。
+- [ ] **P1-1''' 全长 20k 定稿（**已上云开跑**，见 DEFECT_LOG_zh.md DEF-032 §4）**
+  - 云端口径：4096 envs / seed 42 / 20k iter（与历史基线一致），阈值与判据沿用 DONE 第七节。
+  - **已启动 ①**：`bbc64d91a6-99f1820e`（4UGPU 3090，ssh 10.60.144.11:1237）跑
+    `History-Adaptation-Deeprobotics-M20-v0` + 软化版静止惩罚，3.2 s/iter ≈ 18 h，
+    `--run_name cloud_soft20k`，日志 `/root/run_soft20k.log`。
+  - **已启动 ②**：`686346b9c6-b16aa8d9`（planner 3090，ssh 10.60.144.11:291）跑
+    `Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0`（**多地形，本机跑不了**），
+    6.3 s/iter ≈ 35 h，`--run_name cloud_roughslopes20k`，日志 `/root/run_roughslopes.log`。
+  - 待做：① 跑完后 `scp` 回 run（或就地 `summarize_run.py` + `eval_fixed_command.py`）回填 DONE；
+    ② 用 `probe_gait_symmetry.py` 复核云端策略的步态对称性；
+    ③ 视情况用第三台（`c71a49a292`）跑 `max_noise_std=1.2` 的 20k 对照（P1-1''）；
+    ④ **用完记得关机**（DEF-032 §5）。
 
 - [ ] **P1-1'' 把 P1-1 的 `max_noise_std=1.2` 落成 cfg 默认值**
   - 现状：DEF-024 §4 已证明 cap=1.2 在 4000 iter 上全面更好，但 `rsl_rl_ppo_cfg.py` 的

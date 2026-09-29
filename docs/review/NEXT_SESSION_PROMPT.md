@@ -46,6 +46,22 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
 【本机性能】4096 envs ≈ 5.5~6.5 s/iter（1024 envs 也只快 15% ⇒ 绝大部分是固定开销，不是环境数）；
   所以 2000 iter ≈ 3 小时、1000 iter ≈ 1.6 小时。别轻易开长跑，先想清楚验收口径。
 
+【云端（autodl 私有云 TiEV）——本 session 已接手，见 DEF-032】
+  * 控制台 https://private.autodl.com/console/instance（租户 TiEV-Tj）；现有 6 个历史实例（各 1×3090），
+    **本项目那份环境在 `ffda41bd1f-38f1325f`**（`/root/autodl-tmp/{IsaacLab,loco-manip-unified-rl-agent}` +
+    conda env `/root/miniconda3/envs/env_isaaclab` = 20GB），但它所在主机空闲 GPU 是 0/2
+    ⇒ 目前用**无卡模式**开机当文件源。
+  * **免密/复制套路**（DEF-032 §3）：控制台复制图标拿 `ssh -p <port> root@10.60.144.11` + 密码；
+    实例之间 `rsync`（同一物理主机内几分钟传完 20GB 环境）；`git fetch` 在部分实例不通
+    ⇒ 用本机 `git bundle` + `scp` 再 `git fetch <bundle> 'branch:refs/heads/branch'`。
+  * **驱动 580.x 的主机才干净**（`ffda41bd1f` 580.173.02 / `bbc64d91a6` 580.178.04）；
+    570/535 的主机启动会打 Vulkan 报错，但 headless 仍能训（实测 GPU 利用率 80%）。
+  * 云端速度实测：History 平地 **3.2 s/iter**、多地形 6.3 s/iter（本机 5.5~6.5）⇒ 20k 约 18~35 h。
+  * 已开两条长跑（4096 envs / seed 42 / 20k iter，**结果待回填 DONE 第七节**）：
+    `bbc64d91a6-99f1820e`（ssh 端口 1237）跑 History 主线 `--run_name cloud_soft20k`；
+    `686346b9c6-b16aa8d9`（端口 291）跑 Rough-Slopes 多地形 `--run_name cloud_roughslopes20k`。
+  * 纪律：不超过 4 台；**用完关机**；跑完把 run 拿回来（`scp`）或就地分析。
+
 【文档约定】docs/review/ 只保留 TODO_zh.md / DONE_zh.md / DEFECT_LOG_zh.md / NEXT_SESSION_PROMPT.md
   + templates/。每次改动**必须**：更新 TODO/DONE 的"更新记录"（加日期）、给新缺陷/特性在
   DEFECT_LOG 里加一条（骨架见 templates/DEFECT_ENTRY_TEMPLATE_zh.md）。
@@ -85,7 +101,8 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
     所以 `Episode_Reward` 是"全 batch 均值"，要乘/除那个比例才是单 env 量级。
   * **同代对照是唯一能说明问题的对照**：本仓库的 run 都是每 500 iter 存盘，
     比"1500 iter 的新代码 vs 20000 iter 的旧代码"毫无意义。
-  * **本机跑不了生成地形**（DEF-031），别在上面浪费时间；`Rough-*` 全部未冒烟。
+  * **本机跑不了生成地形**（DEF-031）⇒ 多地形的一切都去云端做（DEF-032）；
+    云端 `Rough-Slopes-*` 已 2-iter 冒烟通过并开跑，本机的 `Rough-*` 仍未冒烟。
   * 课程的 print 要节流：curriculum 在每次 episode reset 都被调用（4096 envs 时 ~4~8 次/env step），
     逐次打印会在 25k 步里刷出几万行（`ramp_command_param` 已按"变化 ≥1% 才打印"节流）。
   * `episode_length_buf == 0` 在复位后的整步内都为真；判"刚复位"要用"相比上一次 tick 变小"。

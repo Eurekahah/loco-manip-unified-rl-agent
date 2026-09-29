@@ -25,12 +25,85 @@
 
 # 记录（新→旧）
 
+### DEF-032 `2026-09-30` 云端（autodl 私有云 TiEV）接力：环境复制方法 + 已启动的长跑
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 基础设施 / 交接 |
+| 状态 | 进行中（长跑未结束） |
+| 关联 | `codex/ll-train-detail-fix`；`TODO_zh.md` P1-1''' |
+
+**1. 为什么要上云**：本机（RTX A4000 + Ryzen 7 2700X，8 核）4096 envs ≈ **5.5~6.5 s/iter**
+⇒ 20k iter 要 **30+ 小时**，而且**跑不了生成地形的任务**（DEF-031）。云端（3090）实测
+**3.2 s/iter**（History 平地）/ 6.3 s/iter（多地形），快一倍以上。
+
+**2. 控制台事实（避免下次重新摸索）**
+
+* 登录：`https://private.autodl.com/console/instance`（租户 TiEV-Tj / 用户 韩敬霄）。
+* **现有 6 个历史实例**（每个 1×3090，均已关机）：其中
+  `ultra CPU-5950-pc5-2GPU ffda41bd1f-38f1325f`（2026-09-18）**就是本项目那份环境**：
+  `/root/autodl-tmp/IsaacLab`、`/root/autodl-tmp/loco-manip-unified-rl-agent`、
+  conda env `/root/miniconda3/envs/env_isaaclab`（20 GB，Isaac Sim 在里面）。
+  但它的主机 `ffda41bd1f` 的空闲 GPU 是 **0/2** ⇒ 只能 **无卡模式开机**（￥0.10/时）。
+* **显卡驱动很关键**：Isaac Sim 5.1 只在 **驱动 580.x** 的主机（`ffda41bd1f` 580.173.02、
+  `bbc64d91a6` 580.178.04）上干净启动；驱动 570.x / 535.x 的主机
+  （`686346b9c6`、`c71a49a292`、`d54d48b2fa`、`1df740a715`）启动时打
+  `vkCreateInstance failed. Vulkan 1.1 is not supported` + `Unable to get IGpuFoundation`，
+  **但 headless 训练仍能跑**（实测 GPU 利用率 80%，只是渲染栈没起来，无相机场景无影响）。
+* 磁盘：`bbc64d91a6` 最宽松（938G/59% 用）；`686346b9c6` 只有 ~18G 余量（放完 22G 环境后）；
+  `c71a49a292` 系统盘 95% 用。**注意**：`/root/autodl-tmp` 是**实例私有**的数据盘，
+  换实例/克隆实例都不会带过去 —— 这就是"换机器必须重新 clone 代码 + IsaacLab"的原因。
+  幸运的是 **NFS `10.60.144.11:/home/autolab/Data/pub_data` 是共享的且可写**（挂到 `/root/tievnas`），
+  需要跨实例传大文件时可以借它中转。
+
+**3. 环境复制方法（可复用，比重新装快得多）**
+
+* 控制台点"登录指令/密码"的**复制图标**即可拿到 `ssh -p <port> root@10.60.144.11` + 密码
+  （注意：本机 `~/.ssh` 之前是空的，没有免密配置；密码是每个实例各一份）。
+* 实例之间直接 `rsync`（20 GB env 在同一物理主机内几分钟就完了）：
+
+  ```bash
+  # 在目标实例上执行：把参考实例的 IsaacLab + 仓库 + conda env 拉过来
+  SRC=root@10.60.144.11 ; SSH="ssh -p 635 -o StrictHostKeyChecking=no"
+  rsync -a -e "$SSH" $SRC:/root/autodl-tmp/IsaacLab/                       /root/autodl-tmp/IsaacLab/
+  rsync -a -e "$SSH" $SRC:/root/autodl-tmp/loco-manip-unified-rl-agent/   /root/autodl-tmp/loco-manip-unified-rl-agent/
+  rsync -a -e "$SSH" $SRC:/root/miniconda3/envs/env_isaaclab/              /root/miniconda3/envs/env_isaaclab/
+  ```
+
+  前提：目标实例的 `~/.ssh/id_ed25519.pub` 已加到源实例的 `authorized_keys`（一次即可）。
+  conda env 里是**绝对路径的 editable 安装**，所以两条路径必须与原实例一致。
+* **`git fetch` 在实例上不一定通**（实测 `bbc64d91a6` 报 `GnuTLS recv error (-110)`），
+  可靠做法是在本机 `git bundle create x.bundle <branch> ^<base>`，再 `scp` 过去
+  `git fetch x.bundle 'branch:refs/heads/branch'`。（本次已把分支推到 GitHub
+  `origin/codex/ll-train-detail-fix`，能连 GitHub 的机器可直接 pull。）
+* 跑训练：`/root/miniconda3/envs/env_isaaclab/bin/python scripts/.../train.py --task ... --headless`
+  （env 在 `/root/miniconda3/envs/env_isaaclab`；`--num_envs 4096 --seed 42` 与本地口径一致）。
+
+**4. 已启动的长跑（本次）**
+
+| 实例 | 主机 | 任务 | 配置 | 起始 | 实测速度 |
+|---|---|---|---|---|---|
+| `bbc64d91a6-99f1820e`（4UGPU） | 10.60.144.11:1237 | `History-Adaptation-Deeprobotics-M20-v0` | 4096 envs / seed 42 / 20k iter / 软化版静止惩罚 | 2026-09-30 ~00:10 | 3.2 s/iter（≈18 h） |
+| `686346b9c6-b16aa8d9`（planner） | 10.60.144.11:291 | `Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0` | 4096 envs / seed 42 / 20k iter | 2026-09-30 ~00:20 | 6.3 s/iter（≈35 h） |
+| `ffda41bd1f-38f1325f`（参考实例） | 10.60.144.11:635 | —— | **无卡模式**常开，作为文件源 | 2026-09-30 ~00:00 | —— |
+
+> 还没做：`c71a49a292`（cvpr，1/3 空闲）本打算跑 `max_noise_std=1.2` 的 20k 对照（P1-1''），
+> 但它的系统盘已用 95%，且驱动是 570.x；等上面两条跑完/有富余再决定。
+
+**5. 运维提醒**
+
+* 实例是**按小时计费**（GPU ￥0.01/时、无卡 ￥0.10/时，都很便宜），但**不用了要关机**；
+  参考实例（无卡模式）如果不是为了当文件源，也可以关掉。
+* 云端 run 目录在实例的 `/root/autodl-tmp/loco-manip-unified-rl-agent/logs/rsl_rl/...`
+  （已 gitignore）；结果要拿回来就 `scp`（或先 `summarize_run.py` 出表）。
+* 每个实例只跑了 **1** 个训练（用户习惯），符合"尽量别超过 4 台"。
+
 ### DEF-031 `2026-09-29` 本机（A4000 / Windows）跑不了 `terrain_type="generator"` 的任务：env 创建期死锁
 
 | 项 | 内容 |
 |---|---|
 | 类型 | 环境/平台问题（**不是本次改动引入**） |
-| 状态 | 未修（外部环境问题）；本机所有多地形任务的验收改为"cfg 构造 + 逻辑静态核对"，训练/回归留到能跑生成地形的机器上 |
+| 状态 | 已定性（本机环境问题，非代码问题）——**云端 3090 上同一条命令 2-iter 冒烟通过**（见 DEF-032 §4），本机多地形验收改到云端做 |
 | 关联 | 复现：`Rough-WO-Stairs-History-Adaptation-Deeprobotics-M20-v0`、`Rough-Slopes-...`、甚至**未改动的原始代码**（`git stash` 后同一条命令）；`TODO_zh.md` P1-4 |
 
 **1. 现象**
