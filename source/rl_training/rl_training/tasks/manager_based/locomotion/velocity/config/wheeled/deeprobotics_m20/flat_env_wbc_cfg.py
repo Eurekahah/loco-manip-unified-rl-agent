@@ -199,25 +199,35 @@ class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
     #     （鸡生蛋：越漂越没惩罚）。
     # 结果：命令 (0,0,0) 时底盘以 ~0.148 m/s 前向漂移（eval_fixed_command.py 实测）。
     # 这里补两项**只按命令门控**的惩罚；权重由课程从下面的初值爬到终值：
-    #   stand_still_vel        -0.8  → -8.0
-    #   stand_still_wheel_vel  -0.001 → -0.01
-    # 权重量级怎么定的（按 IsaacLab 的回报口径标定，别凭感觉改）：
-    #   RewardManager 返回的是 `Σ term_value·weight·dt`，而 `Episode_Reward/*` 记的是
-    #   **每秒速率**（episode 积分 / max_episode_length_s）。实测基线 run
-    #   `2026-09-20_00-50-31`：命令 (0,0,0) 时"回报/秒 = 1.75"，且
-    #   `Episode_Reward/stand_still_vel` ≈ weight × E[|v|²]（只对有零速命令的 env 计分）。
-    #   按漂移 |v| ≈ 0.15 m/s 算 |v|² ≈ 0.0225：
-    #     weight=-8.0  ⇒ 静止 env 上约 -0.18/s，占 1.75 的 ~10% —— 有梯度但不喧宾夺主；
-    #     weight=-2.0  ⇒ 只有 -0.045/s（2.5%），实测基本推不动，所以不用那个量级。
-    #   二次型的好处：|v|=0.5 时 -2.0/s（会主动刹车），|v|=0.05 时只 -0.02/s（不干扰微调）。
-    #   轮速项按 ω≈2.5 rad/s/轮（0.15 m/s ÷ 轮半径）算 Σω² ≈ 25：
-    #     weight=-0.01 ⇒ 约 -0.25/s（~14%）—— 比底盘项更强，因为它是"因"，但压太狠会
-    #     让轮式倒立摆没法用轮子微动平衡，所以只给到 -0.01（不够再单独调）。
+    #   stand_still_vel        -0.2  → -2.0
+    #   stand_still_wheel_vel  -0.00005 → -0.0005
+    # 权重量级怎么定的（**实测标定**，两步，别凭感觉改）：
+    #
+    # 【第一步：先估】RewardManager 返回 `Σ term_value·weight·dt`，而 `Episode_Reward/*`
+    # 记的是**每秒速率**（episode 积分 / max_episode_length_s）。按"命令 (0,0,0) 时
+    # 回报/秒 = 1.75、漂移 |v|≈0.15 m/s"估：weight=-8.0 ⇒ 静止 env 上约 -0.18/s（~10%）。
+    #
+    # 【第二步：用第一次 A/B 的实测把估值打脸】1500-iter run
+    # `2026-09-29_18-30-52_stand_still_fix`（权重 -8.0/-0.01）在 iter 1234 实测
+    # `Episode_Reward/stand_still_vel = -0.2603/s`、`stand_still_wheel_vel = -0.2230/s`
+    # ⇒ **两项合计 -0.483/s，而同一步全 batch 的 Σ Episode_Reward 只有 +0.396/s**，
+    # 也就是惩罚量级 = 总回报的 122%（折算到"静止 env"上 ≈ -3.2/s，是它们正回报的 2 倍）。
+    # 反解出真实量级：静止 env 的 E|v|² ≈ 0.217（|v|≈0.47 m/s）、E[Σω²] ≈ 149（ω≈6.1 rad/s）。
+    # 后果（同一次 A/B 的固定命令 eval，与**同代**基线 `2026-09-20_00-50-31/model_1500`
+    # 对比，见 DONE_zh.md 第七节）：命令 (0,0,0) 的漂移确实降了（0.1153→0.0886），
+    # 但摔倒率从 0.178 涨到 **0.708**，终止构成几乎全是 `bad_orientation_2`
+    # （473 次 vs 76 次）—— 策略学会"把轮子冻住"，而轮式倒立摆靠轮子微动平衡 ⇒ 翻倒。
+    #
+    # 【最终取值】按"两项合计 ≈ 总回报的 10~15%"重新定标：
+    #   stand_still_vel       -2.0    ⇒ 约 -0.065/s（~16%）
+    #   stand_still_wheel_vel -0.0005 ⇒ 约 -0.011/s（~3%）
+    # 分工：底盘速度项直接惩罚用户看到的"静止仍有前向速度"（且它是净速度，不干扰平衡用的
+    # 微小往复）；轮速项只留一个很小的"别空转"信号。**注意这两组权重的对照实测见 DONE 第七节。**
     # 初值必须**非零**：`disable_zero_weight_rewards()` 会把 weight==0 的项置 None，
     # 之后课程再去 `get_term_cfg` 就会抛 ValueError。
     stand_still_vel = RewTerm(
         func=mdp.stand_still_vel_l2,
-        weight=-0.8,
+        weight=-0.2,
         params={
             "command_name": "base_velocity",
             "command_threshold": 0.1,
@@ -227,7 +237,7 @@ class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
     )
     stand_still_wheel_vel = RewTerm(
         func=mdp.stand_still_wheel_vel_l2,
-        weight=-0.001,
+        weight=-0.00005,
         params={
             "command_name": "base_velocity",
             "command_threshold": 0.1,
@@ -463,8 +473,8 @@ class WBCCurriculumCfg(DeeproboticsM20CurriculumsCfg):
         func=mdp.ramp_reward_weight,
         params={
             "term_name": "stand_still_vel",
-            "start_weight": -0.8,
-            "end_weight": -8.0,
+            "start_weight": -0.2,
+            "end_weight": -2.0,
             "num_steps": 25_000,
         },
     )
@@ -472,8 +482,8 @@ class WBCCurriculumCfg(DeeproboticsM20CurriculumsCfg):
         func=mdp.ramp_reward_weight,
         params={
             "term_name": "stand_still_wheel_vel",
-            "start_weight": -0.001,
-            "end_weight": -0.01,
+            "start_weight": -0.00005,
+            "end_weight": -0.0005,
             "num_steps": 25_000,
         },
     )
@@ -616,8 +626,8 @@ class FlatEnvWBCConfig_PLAY(FlatEnvWBCConfig):
         self.curriculum.stand_still_vel_ramp = None
         self.curriculum.stand_still_wheel_vel_ramp = None
         self.commands.base_velocity.rel_standing_envs = 0.15
-        self.rewards.stand_still_vel.weight = -8.0
-        self.rewards.stand_still_wheel_vel.weight = -0.01
+        self.rewards.stand_still_vel.weight = -2.0
+        self.rewards.stand_still_wheel_vel.weight = -0.0005
         
         if self.__class__.__name__ == "FlatEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()
@@ -653,8 +663,8 @@ class RoughEnvWBCConfig_PLAY(RoughEnvWBCConfig):
         self.curriculum.stand_still_vel_ramp = None
         self.curriculum.stand_still_wheel_vel_ramp = None
         self.commands.base_velocity.rel_standing_envs = 0.15
-        self.rewards.stand_still_vel.weight = -8.0
-        self.rewards.stand_still_wheel_vel.weight = -0.01
+        self.rewards.stand_still_vel.weight = -2.0
+        self.rewards.stand_still_wheel_vel.weight = -0.0005
         if self.__class__.__name__ == "RoughEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()
 @configclass
@@ -814,8 +824,8 @@ class RoughWOStairsEnvWBCConfig_PLAY(RoughWOStairsEnvWBCConfig):
         self.curriculum.stand_still_vel_ramp = None
         self.curriculum.stand_still_wheel_vel_ramp = None
         self.commands.base_velocity.rel_standing_envs = 0.15
-        self.rewards.stand_still_vel.weight = -8.0
-        self.rewards.stand_still_wheel_vel.weight = -0.01
+        self.rewards.stand_still_vel.weight = -2.0
+        self.rewards.stand_still_wheel_vel.weight = -0.0005
         if self.__class__.__name__ == "RoughWOStairsEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()
 
@@ -918,7 +928,7 @@ class RoughSlopesEnvWBCConfig_PLAY(RoughSlopesEnvWBCConfig):
         self.commands.body_pose.roll_range = (-0.25, 0.25)
 
         self.commands.base_velocity.rel_standing_envs = 0.15
-        self.rewards.stand_still_vel.weight = -8.0
-        self.rewards.stand_still_wheel_vel.weight = -0.01
+        self.rewards.stand_still_vel.weight = -2.0
+        self.rewards.stand_still_wheel_vel.weight = -0.0005
         if self.__class__.__name__ == "RoughSlopesEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()

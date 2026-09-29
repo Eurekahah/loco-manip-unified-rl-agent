@@ -41,15 +41,23 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
 
 ## P1 —— 训练质量（决定上限）
 
-- [ ] **P1-1' 静止伫立专项的 2000-iter 验收（代码已改，训练进行中）**
-  - 依据：DEF-026（基线命令 (0,0,0) 时 `err_vel_xy = 0.148 m/s`、摔倒 13.3%）。
-  - 已做：`stand_still_vel_l2` / `stand_still_wheel_vel_l2` 两项惩罚（权重 −8.0 / −0.01，
-    各带 25k 步爬升课程）+ `rel_standing_envs` 0.02→0.15 课程（DEF-026 §3）。
-  - 验收：`eval_fixed_command.py --commands "0,0,0;0.5,0,0;1.0,0,0"`（512 envs / seed 42 / steps 1100）
-    下，**命令 (0,0,0) 的 `err_vel_xy` 明显低于 0.148**，且 0.5 / 1.0 两档不劣化；
-    训练侧 `Train/mean_reward`、`Episode_Termination/root_height_below_minimum` 不劣化。
-  - 剩余：① 结果回填；② 若 `stand_still_wheel_vel` 让"站着更爱摔"，把 −0.01 降到 −0.005 再跑一遍；
-    ③ 确认站姿占比 0.15 不会牺牲跟踪精度（对比 `Metrics/base_velocity/error_vel_xy`）。
+- [ ] **P1-1' 静止伫立专项：软化版权重的 A/B（第一轮已跑完）**
+  - 依据：DEFECT_LOG_zh.md DEF-026。基线（旧代码 20k）命令 (0,0,0) 时 `err_vel_xy = 0.148 m/s`、摔倒 0.133。
+  - 已做：`stand_still_vel_l2` / `stand_still_wheel_vel_l2` 两项惩罚 + `rel_standing_envs` 0.02→0.15，
+    三条 25k 步爬升课程（DEF-026 §3）。
+  - **第一轮 A/B（权重 −8.0 / −0.01，1500 iter，与同代旧代码 `model_1500` 对比）已完成**：
+    目标指标修好 —— 漂移**两档难度都降 22~23%**（s0 0.1153→0.0886；play 0.1475→0.1157）；
+    但同代摔倒率 s0 从 0.178 涨到 **0.708**（终止几乎全是翻倒）⇒ 惩罚量级 = 总回报的 122%，太重。
+    数字/复现命令见 `DONE_zh.md` 第七节，机理见 DEF-026 §4。
+  - **已改成软化版**（`stand_still_vel` −2.0、`stand_still_wheel_vel` −5e-04）并启动 1000-iter
+    对照 run（`--run_name stand_still_soft`，seed 42 / 4096 envs）。**该 run 的 eval 待回填。**
+  - 验收（软化版）：① 命令 (0,0,0) 的 `err_vel_xy` 仍显著优于同代旧代码（目标 ≤0.10）；
+    ② 同代摔倒率**不高于**旧代码（s0 ≤0.18、play ≤0.60）；
+    ③ 日志里两项惩罚的合计 ≤ 同一步 `Σ Episode_Reward` 的 25%。
+  - 若软化版**仍然**摔得多 ⇒ 做**分量消融**（各 1000 iter）：(a) 只留底盘速度项、
+    去掉轮速项；(b) 只留轮速项；(c) 只改 `rel_standing_envs` 不加惩罚。预期主因是轮速项
+    （它直接砍掉平衡用的轮子微动）。
+  - 之后要和 P1-1'' 的 `max_noise_std=1.2` 一起跑一次**全长 20k** 才算定稿。
 
 - [ ] **P1-1'' 把 P1-1 的 `max_noise_std=1.2` 落成 cfg 默认值**
   - 现状：DEF-024 §4 已证明 cap=1.2 在 4000 iter 上全面更好，但 `rsl_rl_ppo_cfg.py` 的
