@@ -98,6 +98,65 @@
   （已 gitignore）；结果要拿回来就 `scp`（或先 `summarize_run.py` 出表）。
 * 每个实例只跑了 **1** 个训练（用户习惯），符合"尽量别超过 4 台"。
 
+### DEF-033 `2026-09-30` 第三台实例（planner 主机）+ 把"2×2 消融 + cap12 对照"排进队列
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 基础设施 / 实验编排 |
+| 状态 | 进行中（四条 run 在跑/排队，结果待回填） |
+| 关联 | `codex/ll-train-detail-fix`（消融提交 `6297af4`）；`TODO_zh.md` P1-1'' / P1-1''' / P1-3 |
+
+**1. 为什么又建了一台**：用户指出 `0d5c409456`（good CPU-225-6000）上有一张空闲的
+**RTX 6000D (83GB)**（UUID `GPU-c0c614a0-91fa-029e-cc73-1deaf02310c5`），可以再加一条训练。
+
+**2. 踩到的坑（两次创建都失败，且卡被别人抢走）**
+
+* 先试**克隆实例**（从 `ffda41bd1f-38f1325f` 的系统盘）：`创建失败`。
+  原因基本可确定是**磁盘**：那道实例的系统盘已用 73.73%（≈675GB），而目标主机只剩 208GB
+  （克隆默认还会连**数据盘**一起克隆，第一次弹窗里 `克隆数据盘` 默认是勾上的）。
+* 再试**从系统镜像新建**（torch:cuda12.8-ubuntu22.04-py312）：同样 `创建失败`
+  （按用户提示换了数据盘 `/data`、又换 `/SSD1` 都没成功；那台主机的 8 张卡里只剩 1 张空闲，
+  很可能与主机磁盘池有关）。两次失败后我**释放了这两个失败实例**（它们从未启动、无数据）。
+* 就在这几分钟里，那张 6000D 被**别的用户占走**了（占用详情显示
+  `0d5c409456-9dc0d369 (炼丹师6927)`，开始时间 10:57:36），该主机变成 0/8。
+* ⇒ 结论：**建实例要"先占坑再折腾"**；`0d5c409456` 那台目前不可用。
+* 于是改在**有 2/8 空闲 GPU 的 planner 主机 `686346b9c6`** 上新建（￥0.01/时、驱动 570、
+  与我已在跑的实例同款）→ 成功，实例 `686346b9c6-1dcaf819`。
+
+**3. 新实例的布置（SSH 端口拿不到时的替代通道）**
+
+* 这台新实例的**控制台"登录指令"复制按钮失效**（密码能复制、SSH 命令复制不到），
+  端口扫描也没能确认 SSH 端口。于是改用 **JupyterLab 的 REST API**：
+  `http://10.60.144.11:1471/jupyter/`（token 从页面的 `#jupyter-config-data` 里读），
+  支持 `GET/PUT /api/contents/<path>`：**写脚本、读日志**都可以走 HTTP，
+  执行只在 JupyterLab 的终端里敲**一条**命令（脚本后台跑、输出重定向到文件）。
+* 环境复制沿用 DEF-032 §3 的 rsync：先把新实例的公钥加到源实例
+  （这次源用 `686346b9c6-b16aa8d9`，同主机、最快），再 rsync
+  `IsaacLab(199M) + 仓库(3.2G) + conda env(20G)`。
+* 代码更新：`git fetch /root/ll-ablation.bundle 'codex/ll-train-detail-fix:refs/remotes/bundle/ablation'`
+  + `git merge --ff-only`（**注意**：直接 `git fetch ... :refs/heads/<当前分支>` 会被 git 拒绝，
+  必须先 fetch 到 `refs/remotes/...` 再快进）。
+* 冒烟：`History-Ablation-PushOnly-...` 2-iter 在云端 **EXIT=0**、`Learning iteration` 计数 = 2；
+  训练速度 **2.65 s/iter**（4096 envs）。
+
+**4. 现在的四条 run（2026-09-30 11:20 状态）**
+
+| # | 实例 | 任务 / run_name | 关键配置 | 预计 |
+|---|---|---|---|---|
+| 1 | `bbc64d91a6-99f1820e` | `History-Adaptation-*` / `cloud_soft20k` | 4096 envs / seed 42 / 20k / 软化版静止惩罚 | 今天 ~19:30 |
+| 2 | `bbc64d91a6-99f1820e`（**排队**） | 同上 / `cloud_cap12_20k` | 再加 `agent.policy.max_noise_std=1.2` | 待 run 1 结束后自动开跑（~18 h） |
+| 3 | `686346b9c6-b16aa8d9` | `Rough-Slopes-History-Adaptation-*` / `cloud_roughslopes20k` | 多地形 / 20k | 明天 ~12:30 |
+| 4 | `686346b9c6-1dcaf819`（新） | `History-Ablation-PushOnly-*` / `abl_pushonly_10k` | 只加强 push / 10k | 今天 ~19:00 |
+| 5 | `686346b9c6-1dcaf819`（**链式排队**） | `History-Ablation-RewardOnly-*` / `abl_rewardonly_10k` | 只改奖励 / 10k | 明天 ~02:40 |
+
+> 排队方式：run 1 那台用 `while pgrep -f "run_name cloud_soft20k"; do sleep 60; done` 的守护脚本
+> 等旧跑完再 `setsid nohup` 起新 run；新实例那台用同一个 bash 脚本里 `run_one; run_one` 串起来。
+> 都是 `setsid nohup ... < /dev/null`，脱离 SSH/Jupyter 会话，并且**不要关机**（关机就全没了）。
+
+**5. 判据**：四条都是 10k/20k + 4096 envs + seed 42，和已有的"旧代码 10k/20k"、
+">完整包 10k" 同口径 ⇒ 固定命令 eval（`eval_fixed_command.py`）+ 步态探针
+（`probe_gait_symmetry.py`）直接可比。
+
 ### DEF-031 `2026-09-29` 本机（A4000 / Windows）跑不了 `terrain_type="generator"` 的任务：env 创建期死锁
 
 | 项 | 内容 |

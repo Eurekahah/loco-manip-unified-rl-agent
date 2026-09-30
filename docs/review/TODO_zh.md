@@ -76,7 +76,11 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
     固定命令 eval 三档的 err_vel_xy 比同代旧代码好 −4%~−15%、步态"右后腿撇"基本消失；
     训练期 `root_height_below_minimum` 偏高（加强 push + 15% 站姿样本所致），
     详见 `DONE_zh.md` 第七节 §5。
-  - 待做：① 20k 跑完后**再复核一次**并定稿（同样 `scp` 回来对比）；
+  - **四条 run 已排进云端队列（2026-09-30，DEF-033）**：
+    ① `cloud_soft20k`（跑着，今天 ~19:30 完）② `cloud_cap12_20k`（**排队**：等 ① 结束后自动开跑，
+    验证 P1-1''）③ `cloud_roughslopes20k`（多地形，明天 ~12:30）④ `abl_pushonly_10k` +
+    `abl_rewardonly_10k`（新实例，链式排队，分别 ~19:00 / 明天 ~02:40）。
+  - 待做：① 每条跑完后 `scp` 回来（或用 Jupyter API 读日志/取 run）对比并定稿；
     ② 用 `probe_gait_symmetry.py` 复核云端策略的步态对称性；
     ③ 视情况用第三台（`c71a49a292`）跑 `max_noise_std=1.2` 的 20k 对照（P1-1''）；
     ④ **用完记得关机**（DEF-032 §5）。
