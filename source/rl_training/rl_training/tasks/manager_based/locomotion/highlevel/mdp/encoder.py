@@ -13,6 +13,9 @@ class VisionEncoderRegistry:
     trainable 编码器：不缓存，由调用方持有并注册，梯度开启
     """
 
+    # key = (name, device)：以前只用 name 做 key，同一进程中先在某块卡上建过一次，
+    # 之后即使换 device 也会拿到**建在旧设备上的模型**（训练/评估跨设备时静默出错）。
+    # known_issues 工程债，2026-09-30 修（docs/review/DEFECT_LOG_zh.md DEF-034）。
     _frozen_encoders: dict = {}
     _trainable_encoders: dict = {}   # key → nn.Module，由外部注册
 
@@ -25,10 +28,16 @@ class VisionEncoderRegistry:
         """获取编码器（frozen 自动构建并缓存；trainable 必须先 register）"""
         if name in cls._trainable_encoders:
             return cls._trainable_encoders[name]
-        # frozen 路径
-        if name not in cls._frozen_encoders:
-            cls._frozen_encoders[name] = cls._build_frozen_encoder(name, device)
-        return cls._frozen_encoders[name]
+        # frozen 路径：按 (name, device) 缓存（见 _frozen_encoders 的注释）
+        key = (name, str(device))
+        if key not in cls._frozen_encoders:
+            cls._frozen_encoders[key] = cls._build_frozen_encoder(name, device)
+        return cls._frozen_encoders[key]
+
+    @classmethod
+    def _frozen_names(cls) -> set:
+        """已缓存的 frozen encoder 名字（忽略 device）。"""
+        return {k[0] if isinstance(k, tuple) else k for k in cls._frozen_encoders}
 
     @classmethod
     def register_trainable(cls, name: str, model: nn.Module):
@@ -40,7 +49,7 @@ class VisionEncoderRegistry:
             encoder = TrainableCNNEncoder(embed_dim=256).to(device)
             VisionEncoderRegistry.register_trainable("trainable_cnn", encoder)
         """
-        if name in cls._frozen_encoders:
+        if name in cls._frozen_names():
             raise ValueError(f"'{name}' 已作为 frozen encoder 存在，请换一个名字。")
         cls._trainable_encoders[name] = model
 

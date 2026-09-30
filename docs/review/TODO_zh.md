@@ -20,6 +20,7 @@
 | 2026-09-20 | **部署基线固化**（`main @ 2d49f47` ↔ run `2026-09-20_00-50-31`，含产物 sha256 + tag `deploy-baseline-2026-09-20`，DONE 第六节 / DEF-022）；新增 `summarize_run.py`（P3 提前做，DEF-023）；**P1-1 改为"口径 + 配置"两条修法**、P1-2 补臂相关证据 | 基线 `2d49f47`；工具 `dc3a5b9`；文档 `eb22401` |
 | 2026-09-20 | P1-1 进入实测：新增**探索噪声上界** `max_noise_std`（默认 0 = 不限制，投影梯度实现，DEF-024），并启动 4000-iter 的 cap=1.2 / entropy_coef=0.002 A/B（结果待回填） | `docs: P1-1 A/B` 提交 |
 | 2026-09-29 | 新分支 `codex/ll-train-detail-fix`：**静止伫立专项**（DEF-026，两项惩罚 + 三条课程）、**镜像符号修复**（DEF-027，"右后腿往右前方撇"）、**扰动加强**（DEF-028）、**多地形任务**（DEF-029）、**遥操 history 任务**（DEF-030）；新增 P1-1'~P1-4 四条待办 | `codex/ll-train-detail-fix` |
+| 2026-09-30 | **本机收尾批（DEF-034）**：回归矩阵脚本化（P1-4/P3 完成，11 OK / 1 SKIP / 0 FAIL）+ known_issues ⑧⑩⑪⑫⑱ + 三处工程债；11 条能跑的任务全部 EXIT=0 | `codex/ll-train-detail-fix` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -102,10 +103,10 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
     ③ 把数字回填 DEF-029。
   - 同批要补的还有 `Rough-*` / `Rough-WO-Stairs-*` 三个老任务 —— 它们在本机也从未跑过。
 
-- [ ] **P1-4 把"本机跑不了生成地形任务"钉进回归脚本**
-  - 现状：DEF-031。回归矩阵（P3）若不加区分，会在本机对 `Rough-*` 任务无限等待。
-  - 做法：给冒烟脚本加"地形类任务跳过 / 超时（如 5 min 无输出即判 SKIP）"的分支，
-    并在日志里打印原因；换机器后自动恢复执行。
+- [x] **P1-4 把"本机跑不了生成地形任务"钉进回归脚本** → **已完成（2026-09-30，DEF-034 §1）**
+  - `scripts/reinforcement_learning/rsl_rl/smoke_regression.py`：逐任务独立进程 + 日志落盘 +
+    **"日志 N 秒无增长 ⇒ 判 SKIP 并杀进程树"**（本机 `Rough-*` 稳定 SKIP，不再无限等待）
+    + Markdown 汇总表 + 有 FAIL 才非零退出。实测 11 OK / 1 SKIP / 0 FAIL。
 
 
 - [ ] **探明"探索噪声平台 ~1.5"（原"`noise_std`/`error_vel_xy` 长期退化"已归因，见 DEF-023）**
@@ -159,14 +160,21 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
   - [x] ① `joint_mirror` 用平方差做镜像惩罚（左右关节符号约定可能相反）
     → **2026-09-29 已修**：确认符号确实相反（对角对要求 θ_fl=θ_hr，真实关系是 −θ），
     新增 `joint_mirror_signed` 并扩到 4 对（含左右对），见 `DEFECT_LOG_zh.md` DEF-027；
-  - ⑧ `action_mirror`/`action_sync` 用 articulation 关节 id 索引动作向量 + 关节名不存在
-    （当前 weight=0，属埋雷）；
-  - ⑩ `arm_rewards.py` 的 `grasp_success`/`ee_approach_object` 依赖不存在的 `object`（dead code）；
-  - ⑪ `HeightInvariantEECommand._update_command` 覆盖父类没调 `super()`（`pose_command_w` 永不更新）；
-  - ⑫ reset 后第一帧 `pose_command_b` 全 0（观测/奖励看到零位姿目标）；
+  - [x] ⑧ `action_mirror`/`action_sync` 用 articulation 关节 id 索引动作向量 + 关节名不存在
+    → **2026-09-30 删除**（DEF-034 §3：打开就炸的埋雷，且状态层 `joint_mirror_signed` 已覆盖）
+  - [x] ⑩ `arm_rewards.py` 的 `grasp_success`/`ee_approach_object` 依赖不存在的 `object`
+    → **2026-09-30 加明确报错**（DEF-034 §4：保留函数，但接错场景会给出可读提示）
+  - [x] ⑪ `HeightInvariantEECommand._update_command` 覆盖父类没调 `super()`
+    → **2026-09-30 实测澄清**（DEF-034 §2）：父类该方法本来 `pass`，`pose_command_w` 由
+    `_update_metrics()` 每步更新（只比 `pose_command_b` 晚一拍），"永不更新"不成立
+  - [x] ⑫ reset 后第一帧 `pose_command_b` 全 0（观测/奖励看到零位姿目标）
+    → **2026-09-30 实测确认并修复**（DEF-034 §2）：加 `reset()` 覆写，修后与真实 EE 位姿差 0.000e+00
   - ⑬ `UniformThresholdVelocityCommand._resample_command` 的 `> 0.0` 是空操作；
   - ⑭ EE 目标碰撞检查静默降级 + 硬编码 AABB；⑮ 硬编码常数（0.513 / 0.09 / 0.135 / action scale）；
-  - ⑱ 接触传感器与 articulation body 顺序不同（归因陷阱，建议加断言）。
+  - [x] ⑱ 接触传感器与 articulation body 顺序不同（归因陷阱）
+    → **2026-09-30 加启动期打印 + 名字可归因检查**（DEF-034 §5）
+  - ⑬ 复核结论（2026-09-30）：当前 `UniformThresholdVelocityCommand._resample_command` 用的是
+    `> 0.1`（不是 `> 0.0`），语义正确 ⇒ **该条已过时**，下次清理时可直接删掉这一行。
 
 - [ ] `[可选]` **执行器刚度课程 / 刚度标定**
   - 依据：`piper_arm` 现在 `DelayedPD(300/20)`，注释里的目标区间是 60~100 / 0~20；
@@ -186,16 +194,25 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
 
 - [ ] **高层 `high_level_todo.md` 第 10 条的"待确认"**
   - `HLFlatPickTerminationsCfg_PLAY` 里 `lift_object` 与 `pick_success` 语义/命名重复；
-  - `highlevel/mdp/encoder.py`：`torch.hub.load` 需要联网；`_frozen_encoders` 以 name 为 key
-    全局缓存（换 device 会拿到旧设备上的模型）。
+  - [x] `highlevel/mdp/encoder.py` 的 `_frozen_encoders` 以 name 为 key 全局缓存（换 device
+    会拿到旧设备上的模型）→ **2026-09-30 已修**（key 改成 `(name, device)`，DEF-034 §5）；
+    仍待办：`torch.hub.load("facebookresearch/dinov2", ...)` 需要联网（离线机器上会失败），
+    建议改成"本地权重优先，缺失再联网"。
 
 - [ ] **工程性清理**（原 `known_issues.md` 二、1-8）
   - `mdp/__init__.py` 星号导入造成同名遮蔽（`ROUGH_TERRAINS_CFG` /
     `randomize_rigid_body_inertia` / `randomize_com_positions` 覆盖官方实现）；
-  - `setup.py` 的 `packages` 只列顶层包、`cusrl_cfg_entry_point` 指向不存在的模块；
+    **复核结论（2026-09-30）**：现在 `velocity_env_cfg.py` 显式
+    `from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG`，遮蔽只影响
+    `mdp.rough_terrains_cfg` 这类间接引用 ⇒ 影响面小，留待下次一起清；
+  - [x] `setup.py` 的 `packages` 只列顶层包 → **2026-09-30 改成 `find_packages`**（DEF-034 §5）；
+    **仍待办**：`cusrl_cfg_entry_point` 有 **9 处**指向不存在的 `agents/cusrl_ppo_cfg.py`
+    （要决定"删注册字段"还是"补模块"，前者更干净）；
   - 依赖被本地魔改：`IsaacLab-5.1.0/.../task_space_actions.py`（`[IK DEBUG]` 打印 + 私有成员）；
-  - `devices/vr_extented.py` 模块级 print + 无超时线程；`scripts/utils/mp4-png-composition.py`
-    4 处裸 `except:`；
+  - `devices/vr_extented.py` 模块级 print（第 59~63 行）+ 无超时线程（线程是 `daemon=True`，
+    但网络操作没有超时）；
+  - [x] `scripts/utils/mp4-png-composition.py` 4 处裸 `except:` → **2026-09-30 改成
+    `except Exception:`**（DEF-034 §5）；
   - `logs/` 每个 run 50 个 `model_*.pt`（~5 MB/个，注意磁盘）；
   - 中文/英文注释混排、大段注释掉的代码。
 
@@ -203,7 +220,12 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
 
 ## P3 —— 验证工具与文档
 
-- [ ] **回归矩阵脚本化**（矩阵本身 2026-09-20 已手工整跑一遍：8/8 EXIT=0，见 `DONE_zh.md` 第六节）
+- [x] **回归矩阵脚本化** → **2026-09-30 完成**（DEF-034 §1/§6）：
+  `scripts/reinforcement_learning/rsl_rl/smoke_regression.py`，13 任务实测
+  **11 OK / 1 SKIP（生成地形，本机，DEF-031）/ 0 FAIL**；带卡死检测、Markdown 汇总、
+  FAIL 才非零退出。**仍待办**：把高层四条的低层 checkpoint 路径
+  （`RL_TRAINING_LOW_LEVEL_POLICY_*`）做成脚本参数透传（现在走各自 cfg 默认值）。
+  （矩阵本身 2026-09-20 曾手工整跑一遍：8/8 EXIT=0，见 `DONE_zh.md` 第六节）
   - 低层（main 已有）：`History-Adaptation-Deeprobotics-M20-v0`、
     `Flat-Deeprobotics-M20-Piper-WBC-v0`、`Flat-Deeprobotics-M20-Piper-v0`、
     `Flat-Deeprobotics-M20-Piper-Arm-v0` —— 各 `--headless --num_envs 64 --max_iterations 2`。

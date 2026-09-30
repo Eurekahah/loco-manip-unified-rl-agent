@@ -372,63 +372,17 @@ def joint_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joint
     return reward
 
 
-def action_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joints: list[list[str]]) -> torch.Tensor:
-    # extract the used quantities (to enable type-hinting)
-    asset: Articulation = env.scene[asset_cfg.name]
-    if not hasattr(env, "action_mirror_joints_cache") or env.action_mirror_joints_cache is None:
-        # Cache joint positions for all pairs
-        env.action_mirror_joints_cache = [
-            [asset.find_joints(joint_name) for joint_name in joint_pair] for joint_pair in mirror_joints
-        ]
-    reward = torch.zeros(env.num_envs, device=env.device)
-    # Iterate over all joint pairs
-    for joint_pair in env.action_mirror_joints_cache:
-        # Calculate the difference for each pair and add to the total reward
-        diff = torch.sum(
-            torch.square(
-                torch.abs(env.action_manager.action[:, joint_pair[0][0]])
-                - torch.abs(env.action_manager.action[:, joint_pair[1][0]])
-            ),
-            dim=-1,
-        )
-        reward += diff
-    reward *= 1 / len(mirror_joints) if len(mirror_joints) > 0 else 0
-    # reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
-    return reward
-
-
-def action_sync(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, joint_groups: list[list[str]]) -> torch.Tensor:
-    # extract the used quantities (to enable type-hinting)
-    asset: Articulation = env.scene[asset_cfg.name]
-
-    # Cache joint indices if not already done
-    if not hasattr(env, "action_sync_joint_cache") or env.action_sync_joint_cache is None:
-        env.action_sync_joint_cache = [
-            [asset.find_joints(joint_name) for joint_name in joint_group] for joint_group in joint_groups
-        ]
-
-    reward = torch.zeros(env.num_envs, device=env.device)
-    # Iterate over each joint group
-    for joint_group in env.action_sync_joint_cache:
-        if len(joint_group) < 2:
-            continue  # need at least 2 joints to compare
-
-        # Get absolute actions for all joints in this group
-        actions = torch.stack(
-            [torch.abs(env.action_manager.action[:, joint[0]]) for joint in joint_group], dim=1
-        )  # shape: (num_envs, num_joints_in_group)
-
-        # Calculate mean action for each environment
-        mean_actions = torch.mean(actions, dim=1, keepdim=True)
-
-        # Calculate variance from mean for each joint
-        variance = torch.mean(torch.square(actions - mean_actions), dim=1)
-
-        # Add to reward (we want to minimize this variance)
-        reward += variance.squeeze()
-    reward *= 1 / len(joint_groups) if len(joint_groups) > 0 else 0
-    # reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
-    return reward
+# ---------------------------------------------------------------------------
+# `action_mirror` / `action_sync` **2026-09-30 删除**（known_issues ⑧，
+# docs/review/DEFECT_LOG_zh.md DEF-034）。原因：
+#   1. 两者拿 `asset.find_joints(...)`（**articulation 关节 id**）去索引
+#      `env.action_manager.action`，但动作向量是按**动作项自己的列序**排的
+#      （本机型 = 12 腿(fl,fr,hl,hr) + 4 轮），两套下标不一致 ⇒ 打开 weight 就会算错；
+#   2. 配置里的关节名（`FR_hip_joint` / `RL_thigh_joint` …）是 Go1 风格，本机型不存在
+#      （M20 用 `fl_hipx_joint` …）⇒ 一打开就抛"找不到关节"。
+#   3. 动作层的左右对称意义不大：同样的目的已由**状态层**的 `joint_mirror_signed`
+#      （带符号约定、4 对镜像，见 DEF-027）实现。
+# ---------------------------------------------------------------------------
 
 
 # def feet_air_time(

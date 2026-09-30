@@ -611,28 +611,15 @@ class RewardsCfg:
         },
     )
 
-    action_mirror = RewTerm(
-        func=mdp.action_mirror,
-        weight=0.0,
-        params={
-            "asset_cfg": SceneEntityCfg("robot"),
-            "mirror_joints": [["FR.*", "RL.*"], ["FL.*", "RR.*"]],
-        },
-    )
-
-    action_sync = RewTerm(
-        func=mdp.action_sync,
-        weight=0.0,
-        params={
-            "asset_cfg": SceneEntityCfg("robot"),
-            "joint_groups": [
-                ["FR_hip_joint", "FL_hip_joint", "RL_hip_joint", "RR_hip_joint"],
-                ["FR_thigh_joint", "FL_thigh_joint", "RL_thigh_joint", "RR_thigh_joint"],
-                ["FR_calf_joint", "FL_calf_joint", "RL_calf_joint", "RR_calf_joint"],
-            ],
-        },
-    )
-
+    # ⚠️ 原来这里还有 `action_mirror` / `action_sync` 两项（weight=0）。
+    #   **2026-09-30 删除**（known_issues ⑧，见 docs/review/DEFECT_LOG_zh.md DEF-034）：
+    #   * 它们用 `asset.find_joints(...)` 得到的**articulation 关节 id** 去索引
+    #     `env.action_manager.action` —— 而动作向量是**动作项自己的列序**（12 腿 + 4 轮），
+    #     两套下标不一致，一旦把 weight 打开就会静默算错（甚至越界报错）；
+    #   * 配置里的关节名（`FR_hip_joint` / `RL_thigh_joint` …）是 Go1 风格，
+    #     本机型根本不存在（M20 是 `fl_hipx_joint` …）⇒ `find_joints` 直接抛异常。
+    #   ⇒ 属于"打开就炸"的埋雷 + 死代码；动作空间的左右对称已经由
+    #     `joint_mirror_signed`（**状态**层面、带符号约定，见 DEF-027）覆盖。
     # Action penalties
     applied_torque_limits = RewTerm(
         func=mdp.applied_torque_limits,

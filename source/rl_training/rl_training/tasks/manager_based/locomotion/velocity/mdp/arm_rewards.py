@@ -166,6 +166,23 @@ def ee_goal_reached(
 # 4. 抓取成功奖励
 # =============================================================================
 
+def _require_scene_entity(env: ManagerBasedRLEnv, name: str, *, term: str) -> None:
+    """抓取类奖励要求场景里真的存在该实体（known_issues ⑩，DEFECT_LOG_zh.md DEF-034）。
+
+    ``grasp_success`` / ``ee_approach_object`` 默认 ``SceneEntityCfg("object")``，但**低层
+    velocity 系列场景里没有 object**（只有高层 pick / openvla / nav 场景才有，见
+    ``highlevel/config/high_level/*_env_cfg.py`` 的 ``SceneEntityCfg("object")``）。
+    以前把这两项误接到低层 reward 上会得到一个难懂的 ``KeyError``；这里提前给出
+    "本奖励需要 object / 当前场景有哪些实体"的明确报错。
+    """
+    if name not in env.scene.keys():
+        raise KeyError(
+            f"[{term}] 需要场景实体 '{name}'，但当前场景只有 {sorted(env.scene.keys())}。"
+            "本奖励是给**高层 pick / openvla / nav**（场景里有 object）用的；"
+            "低层 velocity 系列没有 object ⇒ 不要把它接到低层 reward 上。"
+        )
+
+
 def grasp_success(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
@@ -182,6 +199,7 @@ def grasp_success(
     
     如果没有物体检测，可只用条件1作为"接近物体"的密集奖励。
     """
+    _require_scene_entity(env, object_cfg.name, term="grasp_success")
     robot: Articulation = env.scene[asset_cfg.name]
     obj: RigidObject   = env.scene[object_cfg.name]
 
@@ -212,6 +230,7 @@ def ee_approach_object(
     密集的接近物体奖励（抓取前引导），用高斯核。
     可与 grasp_success 配合使用，在接近阶段提供稠密引导。
     """
+    _require_scene_entity(env, object_cfg.name, term="ee_approach_object")
     robot: Articulation = env.scene[asset_cfg.name]
     obj: RigidObject   = env.scene[object_cfg.name]
 

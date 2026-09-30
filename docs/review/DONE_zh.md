@@ -15,6 +15,7 @@
 | 2026-09-20 | 新增第六节 **部署基线**：`main @ 2d49f47`（tag `deploy-baseline-2026-09-20`）= 部署口径代码，对应 run `2026-09-20_00-50-31` 的 `exported_deploy/*`（含 sha256 与"训练代码 vs main"的差异核对）+ **基线可运行性验收**（8 任务冒烟回归 8/8 EXIT=0） | 基线 `2d49f47`；记录 `eb22401` |
 | 2026-09-22 | 新增第一节 **P1-1 修复**：探索噪声上界 `max_noise_std=1.2` 的 A/B 实测通过（**建议作为默认**）；同批对照点 `entropy_coef=0.002`（通过但略逊）与 `entropy_coef=0.0`（意外点，s3 摔倒反而 +15%） | 开关代码 `b75c596`；实测回填见 DEF-024 §4（2026-09-22） |
 | 2026-09-29 | 新增第七节 **训练细节专项**（分支 `codex/ll-train-detail-fix`）：静止伫立（DEF-026）、镜像符号（DEF-027）、扰动加强（DEF-028）、多地形任务（DEF-029）、遥操 history 任务（DEF-030）；另记录本机跑不了生成地形任务的平台问题（DEF-031） | `codex/ll-train-detail-fix` |
+| 2026-09-30 | 新增第八节 **本机收尾批**：回归矩阵脚本化（13 任务 11 OK / 1 SKIP / 0 FAIL）+ known_issues ⑧⑩⑪⑫⑱ + 三处工程债（DEF-034） | `codex/ll-train-detail-fix` |
 
 ---
 
@@ -211,6 +212,22 @@ run `logs/rsl_rl/history_adaptation/2026-09-30_00-09-25_cloud_soft20k`（就是 
 
 > 结论（中途）：**静止漂移与步态对称两条需求在 10k 上就已经达标**，稳定性是"各有胜负"；
 > 20k 跑完（约 2026-09-30 19:30）再复核一次并定稿。
+
+## 八、本机收尾批（2026-09-30，分支 `codex/ll-train-detail-fix`）
+
+这一批**不需要训练**、全部在本机验证；来龙去脉见 `DEFECT_LOG_zh.md` **DEF-034**。
+
+| 项 | 内容 | 验收 |
+|---|---|---|
+| **回归矩阵脚本化**（TODO P1-4 + P3） | 新增 `scripts/reinforcement_learning/rsl_rl/smoke_regression.py`：逐任务独立进程 + 日志落 `logs/smoke/<日期>_<task>.log` + **"日志 N 秒无增长 ⇒ SKIP 并杀进程树"** + Markdown 汇总 + FAIL 才非零退出 | **13 任务：11 OK / 1 SKIP / 0 FAIL**（SKIP = 生成地形在本机死锁，DEF-031，157s 被杀）；完整表 `logs/smoke/2026-09-30_regression.md` |
+| **known_issues ⑫ 修复**（EE 命令 reset 首帧） | `HeightInvariantEECommand.reset()` 覆写：`super().reset()` 后补"命令 ← 插值起点" | 新探针 `probe_ee_command_init.py`：修前 `env.reset()` 后命令 = 父类初值、与真实 EE 位姿差 **0.4327 m**；修后 `pose_command_b = (0.3492, 0, 0.4327, …)`、差 **0.000e+00** |
+| **known_issues ⑪ 澄清** | 父类 `_update_command()` 本来就是 `pass`；`pose_command_w` 在 `_update_metrics()` 里每步更新（只比 `pose_command_b` 晚一拍，实测 6e-3~1.7e-2） | 探针实测 ⇒ "漏调 super() 导致 `pose_command_w` 永不更新"**不成立** |
+| **known_issues ⑧ 删埋雷** | 删除 `action_mirror` / `action_sync`（两 term + 两函数）：用 articulation 关节 id 索引动作向量 + 关节名是 Go1 风格（本机型不存在）⇒ 打开就炸；状态层 `joint_mirror_signed` 已覆盖 | 回归 11 任务 EXIT=0 |
+| **known_issues ⑩** | `grasp_success` / `ee_approach_object` 加 `_require_scene_entity`：明确报"需要 object 实体 / 当前场景有哪些 / 本奖励是给高层用的" | 未被任何任务引用，回归不受影响 |
+| **known_issues ⑱** | 启动期布局自检增加接触传感器行序打印（body 数、是否与 articulation 同序、`名字#行号` 前 6 个）+ "传感器 body 名能否在 articulation 里找到"检查 | 回归日志里可见该打印 |
+| **工程债 ×3** | `setup.py` → `find_packages`；`encoder.py` 的 frozen 缓存 key → `(name, device)`；`mp4-png-composition.py` 4 处裸 `except:` → `except Exception:` | `py_compile` 通过；回归（前两项不涉及训练路径） |
+
+---
 
 ## 一、低层训练（本轮主线）
 

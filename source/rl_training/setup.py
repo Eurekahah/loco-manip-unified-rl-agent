@@ -9,7 +9,7 @@
 import os
 import toml
 
-from setuptools import setup
+from setuptools import find_packages, setup
 
 # Obtain the extension data from the extension.toml file
 EXTENSION_PATH = os.path.dirname(os.path.realpath(__file__))
@@ -33,7 +33,11 @@ INSTALL_REQUIRES = [
 # Installation operation
 setup(
     name="rl_training",
-    packages=["rl_training"],
+    # 原来只写 ["rl_training"]：子包（rl_training.tasks / .assets / ...）不会被当成包安装，
+    # 换机器 `pip install -e source/rl_training` 后只能靠源码目录兜底（editable 能用，
+    # 但 wheel/sdist 会缺文件）。这里改成显式发现所有 rl_training.* 子包。
+    # （known_issues 工程债，2026-09-30 修；见 docs/review/DEFECT_LOG_zh.md DEF-034）
+    packages=find_packages(include=["rl_training", "rl_training.*"]),
     author=EXTENSION_TOML_DATA["package"]["author"],
     maintainer=EXTENSION_TOML_DATA["package"]["maintainer"],
     url=EXTENSION_TOML_DATA["package"]["repository"],

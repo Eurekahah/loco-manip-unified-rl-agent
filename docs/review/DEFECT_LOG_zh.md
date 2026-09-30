@@ -25,6 +25,111 @@
 
 # 记录（新→旧）
 
+### DEF-034 `2026-09-30` 本机可做的收尾批：回归矩阵脚本化 + known_issues ⑧⑩⑪⑫⑱ + 三处工程债
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 工具/缺陷/清理（**不需要训练**，本机可验证） |
+| 状态 | 已修并实测（回归矩阵 12 任务：见 §6） |
+| 关联 | `codex/ll-train-detail-fix`；`scripts/reinforcement_learning/rsl_rl/smoke_regression.py`、`.../probe_ee_command_init.py`、`velocity/mdp/{rewards,observations,arm_rewards}.py`、`velocity_env_cfg.py`、`highlevel/mdp/encoder.py`、`source/rl_training/setup.py`、`scripts/utils/mp4-png-composition.py`；`TODO_zh.md` P1-4 / P3 |
+
+**1. 回归矩阵脚本化（TODO P1-4 + P3）**
+
+* 新增 `scripts/reinforcement_learning/rsl_rl/smoke_regression.py`：逐任务独立进程跑
+  `train.py --headless --num_envs 64 --max_iterations 2`，日志落
+  `logs/smoke/<日期>_<task>.log`（沿用历史命名），结尾打 Markdown 表 + `--out` 落盘，
+  **有 FAIL 才非零退出**（可直接接脚本链/CI）。
+* **卡死检测**（P1-4）：日志文件连续 `--stall-timeout` 秒不增长 ⇒ 判 **SKIP** 并杀进程树
+  （Windows `taskkill /T /F`、POSIX `killpg`）。本机跑生成地形任务就是这个表现（DEF-031），
+  所以本机上 `Rough-*` 会稳定落进 SKIP、**不再无限等待**；换到能跑生成地形的机器上同一份
+  脚本会自动变成 OK。
+* 自测（3 任务）：`History-Adaptation` OK(47s)、`Flat-...-WBC` OK(78s)、
+  `Rough-Slopes` **SKIP(102s，70s 无输出被杀)** ⇒ OK 2 / SKIP 1 / FAIL 0，退出码 0。
+
+**2. known_issues ⑫ 修复 + ⑪ 实测澄清（EE 位姿命令的"reset 首帧"）**
+
+* 新增 `scripts/reinforcement_learning/rsl_rl/probe_ee_command_init.py`：建环境 → reset →
+  打印 `pose_command_b / pose_command_w / 与真实 EE 位姿(root 系)的偏差`。
+* 实测（修复前，`Flat-Deeprobotics-M20-Piper-WBC-v0`）：
+
+  | 时刻 | `pose_command_b[0]` | 与真实 EE 位姿差 | `pose_command_w[0]` |
+  |---|---|---|---|
+  | `gym.make` 之后（未 reset） | `(0,0,0, 1,0,0,0)` | **0.2997 m** | 全 0 |
+  | **`env.reset()` 之后**（= 训练循环第一步的观测） | 仍是 `(0,0,0, 1,0,0,0)` | **0.4327 m** | 全 0 |
+  | step≥1 | `(0.3523, 0.0001, 0.4301, …)` | 2~6 cm（正常插值追赶） | 正常 |
+
+  ⇒ **⑫ 成立**：复位之后那一步，观测（`ee_goal`）与奖励看到的仍是父类初值
+  "目标 = 底盘原点 + 单位姿态"。原因是 `CommandTerm.reset()` 只调 `_resample_command()`
+  （本命令项只写 `pose_start_b/pose_end_b`），而 `pose_command_b` 要等下一次 `compute()`
+  里的 `_update_command()` 才赋值。
+* **⑪ 澄清**：父类 `UniformPoseCommand._update_command()` 本来就是 `pass`，所以
+  "漏调 super() 丢逻辑"不成立；`pose_command_w` 也不是永不更新（它在父类
+  `_update_metrics()` 里算，每个 compute 都会更新，只是**比 `pose_command_b` 晚一拍**，
+  实测 step≥1 时两者差 6e-3~1.7e-2，属父类既定顺序、不是缺陷）。
+* 修法：给 `HeightInvariantEECommand` 加 `reset()` 覆写 —— `super().reset()` 之后再补一次
+  "命令 ← 插值起点（= 复位那一刻真实 EE 位姿）"。修复后同一探针实测
+  `after_reset`：`pose_command_b[0] = (0.3492, 0.0000, 0.4327, -0.7373, …)`（正是
+  `gripper_base` 相对 base 的几何位置，与 DEF-021 的 `(0.3492, 0, 0.4326)` 一致）、
+  **与真实 EE 位姿差 = 0.000e+00** ⇒ 复位首帧机械臂不需要动、也不会把底盘拽一下。
+
+**3. known_issues ⑧：删掉 `action_mirror` / `action_sync`（"打开就炸"的埋雷）**
+
+* 两者用 `asset.find_joints(...)`（**articulation 关节 id**）去索引
+  `env.action_manager.action`，而动作向量是按**动作项自己的列序**（12 腿 fl,fr,hl,hr + 4 轮）排的
+  ⇒ 下标不一致，weight 一开就算错；
+* 配置里的关节名是 Go1 风格（`FR_hip_joint` / `RL_thigh_joint` …），本机型不存在
+  （M20 用 `fl_hipx_joint` …）⇒ 一打开就抛"找不到关节"；
+* 同样的目的已由**状态层**的 `joint_mirror_signed`（带符号约定、4 对镜像，DEF-027）覆盖。
+  ⇒ 删除 `RewardsCfg.action_mirror` / `.action_sync` 两个 term 与 `rewards.py` 里对应两个函数，
+  原地留注释说明。
+
+**4. known_issues ⑩：给 `grasp_success` / `ee_approach_object` 加明确报错**
+
+* 这两项默认 `SceneEntityCfg("object")`，而**低层 velocity 场景没有 object**
+  （只有高层 pick / openvla / nav 场景有）⇒ 以前误接上会得到一个难懂的 `KeyError`。
+  现在先 `_require_scene_entity(...)`：报错里写明"本奖励需要 object / 当前场景只有哪些实体 /
+  它是给高层用的"。（保留函数本身：它们对高层场景是有效工具，只是当前无人引用。）
+
+**5. known_issues ⑱ + 三处工程债**
+
+* ⑱ 接触传感器行序 ≠ articulation 行序（历史"臂/夹爪 90 N"误判的根源）：在启动期布局自检
+  `mdp.check_policy_layout` 里增加打印 —— 传感器 body 数、是否与 articulation 顺序一致、
+  前 6 个 `名字#行号`，并检查"传感器里的 body 名都能在 articulation 里找到"（找不到就警告，
+  因为那就无法按名字归因了）。
+* `source/rl_training/setup.py`：`packages=["rl_training"]` → `find_packages(include=["rl_training","rl_training.*"])`
+  （原来子包不会被打进 wheel/sdist）。
+* `highlevel/mdp/encoder.py`：`_frozen_encoders` 的 key 从 `name` 改成 `(name, device)`
+  （原来同一进程里换 device 会拿到建在旧设备上的模型）；`register_trainable` 的冲突检查
+  随之用 `_frozen_names()`。
+* `scripts/utils/mp4-png-composition.py`：4 处裸 `except:` → `except Exception:`
+  （不再吞 `KeyboardInterrupt` / `SystemExit`）。
+
+**6. 回归验收（2026-09-30，`--num_envs 64 --max_iterations 2`，13 任务）**
+
+| 任务 | 结果 | 耗时(s) |
+|---|---|---|
+| `History-Adaptation-Deeprobotics-M20-v0` | OK | 38 |
+| `Flat-Deeprobotics-M20-Piper-WBC-v0` | OK | 38 |
+| `Flat-Deeprobotics-M20-Piper-v0` | OK | 37 |
+| `Flat-Deeprobotics-M20-Piper-Arm-v0` | OK | 36 |
+| `Isaac-Deeprobotics-High-Level-Pick-Flat-Teacher-v0` | OK | 108 |
+| `Isaac-Deeprobotics-High-Level-Pick-WBC-Flat-Teacher-v0` | OK | 106 |
+| `Isaac-M20-Piper-Teleop-v0` | OK | 42 |
+| `Isaac-M20-Piper-Teleop-History-v0` | OK | 42 |
+| `Isaac-Deeprobotics-High-Level-Nav-Flat-Teacher-v0` | OK | 91 |
+| `History-Ablation-PushOnly-Deeprobotics-M20-v0` | OK | 37 |
+| `History-Ablation-RewardOnly-Deeprobotics-M20-v0` | OK | 49 |
+| `Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0` | **SKIP** | 157（120s 无输出被杀，DEF-031） |
+
+**OK 11 / SKIP 1 / FAIL 0**（退出码 0），完整表在 `logs/smoke/2026-09-30_regression.md`。
+⇒ 本批改动（删两个 reward term、EE 命令 reset 覆写、启动期多打印、setup/encoder/mp4 清理）
+**没有引入回归**：11 个能跑的任务全部 EXIT=0 且 `Learning iteration` 计数 = 2。
+
+**7. 本批**没做**的（仍在 TODO）**：`cusrl_cfg_entry_point` 有 9 处指向不存在的
+`agents/cusrl_ppo_cfg.py`（要决定"删注册字段"还是"补模块"）；`devices/vr_extented.py`
+模块级 print 与无超时线程；`pre_trained_policy_action` / `openvla_pick_action` 迁移到
+`LowLevelPolicyActionBase`；sim2sim(MuJoCo) 落地；EE 锚点 4 组一键脚本。
+
 ### DEF-032 `2026-09-30` 云端（autodl 私有云 TiEV）接力：环境复制方法 + 已启动的长跑
 
 | 项 | 内容 |

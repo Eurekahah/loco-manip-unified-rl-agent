@@ -105,6 +105,31 @@ def check_policy_layout(
         print(f"  - 动作项 '{tname}'：{term.action_dim} 维")
     print(f"  - 动作总维度 = {total_action_dim}")
 
+    # ── known_issues ⑱：接触传感器的 body 顺序 ≠ articulation body 顺序 ─────────────
+    # `ContactSensor.data.net_forces_w[:, i]` 的 i 是**传感器自己的行序**，而
+    # `Articulation.data.body_*` 用 articulation 行序 —— 两套不一样。历史上"臂/夹爪
+    # 持续 90 N"的误判就是这么来的（见 DEFECT_LOG_zh.md 第三节）。这里启动期把两个顺序
+    # 都打出来，并检查"传感器里的 body 都能在 articulation 里找到名字"（否则没法按名字归因）。
+    sensors = getattr(env.scene, "sensors", None)
+    contact = sensors.get("contact_forces") if isinstance(sensors, dict) else None
+    if contact is not None and hasattr(contact, "body_names"):
+        sensor_bodies = list(contact.body_names)
+        artic_bodies = list(env.scene["robot"].body_names)
+        same_order = sensor_bodies == artic_bodies
+        print(
+            f"[layout-check] 接触传感器 body 数 {len(sensor_bodies)}；与 articulation "
+            f"（{len(artic_bodies)} 个 body）{'顺序一致' if same_order else '**顺序不同**'}"
+            f"（known_issues ⑱：归因一律按名字，别按下标）"
+        )
+        missing = [b for b in sensor_bodies if b not in artic_bodies]
+        if missing:
+            print(f"[layout-check] ⚠️ 传感器里有 articulation 不存在的 body 名：{missing[:5]}"
+                  "（按名字归因会失败，请核对 contact_forces.prim_path）")
+        else:
+            idx = {b: i for i, b in enumerate(sensor_bodies)}
+            head = ", ".join(f"{b}#{idx[b]}" for b in sensor_bodies[:6])
+            print(f"[layout-check] 传感器行序（前 6）：{head} …")
+
     problems = []
     if group_name in obs_mgr.active_terms:
         names = list(obs_mgr.active_terms[group_name])

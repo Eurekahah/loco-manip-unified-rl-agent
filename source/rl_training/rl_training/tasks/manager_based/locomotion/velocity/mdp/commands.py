@@ -253,6 +253,34 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         self.elapsed_time[env_ids] = 0.0
         # self.pose_command_b[env_ids]= torch.cat([torch.tensor([[0.8, 0.0, 0.3]], device=self.device), torch.tensor([[0.5, 0.5, 0.5, 0.5]], device=self.device)], dim=-1)
         # print(f"HeightInvariantEECommand: env_ids={env_ids}, target_pos_b={target_pos_b}, target_quat_b={target_quat_b}")
+
+    def reset(self, env_ids: Sequence[int] | None = None):
+        """复位时**立刻**把命令锚到"复位那一刻的真实 EE 位姿"（known_issues ⑫，2026-09-30）。
+
+        为什么需要重写
+        --------------
+        IsaacLab 的 ``CommandTerm.reset()`` 只做 ``_resample_command(env_ids)``；而本命令项
+        的 ``_resample_command`` 只写 ``pose_start_b / pose_end_b``，``pose_command_b`` 要到
+        ``compute()`` 里的 ``_update_command()`` 才被赋值。于是**复位之后的那一步**，
+        观测（``ee_goal``）与奖励看到的仍是父类初值 ``(0, 0, 0, 1, 0, 0, 0)``
+        —— 也就是"目标 = 底盘原点 + 单位姿态"。
+
+        实测（``scripts/reinforcement_learning/rsl_rl/probe_ee_command_init.py``，
+        ``Flat-Deeprobotics-M20-Piper-WBC-v0``）：
+
+        * ``gym.make`` 之后（第一次 reset 之前）命令 = 初值，与真实 EE 位姿差 **0.30 m**；
+        * ``env.reset()`` 之后命令**仍是初值**，差 **0.43 m**（训练循环正是拿这一刻的观测
+          作为 episode 的第一步）；
+        * 跑起来之后（step≥1）命令与真实 EE 位姿只差 2~6 cm（正常的插值追赶）。
+
+        修法：``super().reset()`` 之后再补一次"命令 ← 插值起点"。``pose_start_b`` 就是
+        ``_resample_command`` 刚记录下的**真实 EE 位姿（root 系）**，所以复位首帧的目标等于
+        当前位姿 ⇒ 机械臂不必动，也不会把底盘拽一下。
+        """
+        extras = super().reset(env_ids)
+        ids = slice(None) if env_ids is None else env_ids
+        self.pose_command_b[ids] = self.pose_start_b[ids]
+        return extras
         
     
     def _update_command(self):
