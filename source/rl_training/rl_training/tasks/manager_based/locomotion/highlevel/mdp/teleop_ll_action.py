@@ -14,17 +14,11 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import check_file_path, read_file
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
 from isaaclab.managers import SceneEntityCfg
+from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_policy_action import (
+    LowLevelPolicyActionBase,
+)
 from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import (
-    build_low_level_obs_manager,
-    build_low_level_observation_group,
-    build_history_window,
-    check_low_level_action_cfgs,
-    expected_policy_obs_dim,
-    load_low_level_policy,
     push_ee_target_to_ik,
-    resolve_layout,
-    run_low_level_policy,
-    verify_low_level_layout,
 )
 from rl_training.tasks.manager_based.locomotion.velocity.mdp.utils import compute_base_height_rel_to_feet
 
@@ -32,7 +26,7 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-class TeleopLLAction(ActionTerm):
+class TeleopLLAction(LowLevelPolicyActionBase):
     r"""Pre-trained policy action term.
 
     raw_actions 直接对应 ll_command，每维都是绝对目标值（无增量累积）：
@@ -75,115 +69,15 @@ class TeleopLLAction(ActionTerm):
     joint_names = leg_joint_names + wheel_joint_names + arm_joint_names
 
     def __init__(self, cfg: TeleopLLActionCfg, env: ManagerBasedRLEnv) -> None:
+        # `_raw_actions` 必须在 super().__init__ 之前分配：基类构造低层观测时会用到它
+        # raw_actions: 12 维绝对目标值
+        self._raw_actions = torch.zeros(env.num_envs, self.action_dim, device=env.device)
         super().__init__(cfg, env)
 
-        self.robot: Articulation = env.scene[cfg.asset_name]
-
-        # load policy
-        # 统一的加载 + 明确的报错（清单 ⑦）：见 low_level_replay.load_low_level_policy
-        self.policy = load_low_level_policy(cfg.policy_path, env, tag=type(self).__name__)
-
-        # raw_actions: 12维绝对目标值
-        self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
-        # ll_command: [vx, vy, wz, x_w, y_w, z_w, qw, qx, qy, qz, height, pitch, roll]
-        self._ll_command = torch.zeros(self.num_envs, 13, device=self.device)
-        # 同一命令的世界系副本（EE 目标的世界坐标/四元数），供需要世界系的奖励项使用；
-        # _ll_command 本身是 root 系（低层 obs 的 ee_goal 与 IK 都用它）
-        self._ll_command_w = torch.zeros_like(self._ll_command)
-
-        # 初始化三个 low-level action term
-        self._joint_pos_action_term: ActionTerm = cfg.low_level_leg_actions.class_type(
-            cfg.low_level_leg_actions, env
-        )
-        self._wheel_vel_action_term: ActionTerm = cfg.low_level_wheel_actions.class_type(
-            cfg.low_level_wheel_actions, env
-        )
-        self._ee_ik_action_term: ActionTerm = cfg.low_level_ee_actions.class_type(
-            cfg.low_level_ee_actions, env
-        )
-
-        # ── 低层 replay 布局（清单 ④⑤⑥⑯）──────────────────────────────
-        self._layout = resolve_layout(
-            robot=self.robot,
-            low_level_obs_cfg=cfg.low_level_observations,
-            low_level_leg_cfg=cfg.low_level_leg_actions,
-            low_level_wheel_cfg=cfg.low_level_wheel_actions,
-            declared_ee_action_dim=cfg.ee_action_dim,
-            actual_ee_ik_action_dim=self._ee_ik_action_term.action_dim,
-            tag=type(self).__name__,
-        )
-        check_low_level_action_cfgs(
-            tag=type(self).__name__,
-            layout=self._layout,
-            leg_cfg=cfg.low_level_leg_actions,
-            wheel_cfg=cfg.low_level_wheel_actions,
-        )
-
-        self._joint_pos_dim = self._layout.leg_dim
-        self._wheel_vel_dim = self._layout.wheel_dim
-        self._ee_ik_dim     = self._layout.ee_action_dim
-
-        self.low_level_leg_actions   = torch.zeros(self.num_envs, self._joint_pos_dim, device=self.device)
-        self.low_level_wheel_actions = torch.zeros(self.num_envs, self._wheel_vel_dim,  device=self.device)
-        self.low_level_ee_actions    = torch.zeros(self.num_envs, self._ee_ik_dim,      device=self.device)
-
-        def last_action():
-            # 低层 policy 训练时的 actions 观测 = 完整动作向量 [leg | wheel | ee_ik]。
-            # """复位清空""" 不在这里做了：用 `episode_length_buf == 0` 会在复位后的**整个
-            # env step** 内每 tick 都清一次（与 history 帧里的 last_action 自相矛盾），
-            # 现在统一由 LowLevelReplayState.on_tick() 按"跳变"检测清一次。
-            return torch.cat(
-                [self.low_level_leg_actions,
-                 self.low_level_wheel_actions,
-                 self.low_level_ee_actions], dim=-1
-            )
-
-        self._low_level_obs_cfg = build_low_level_observation_group(
-            cfg.low_level_observations,
-            layout=self._layout,
-            actions_fn=lambda dummy_env: last_action(),
-            velocity_commands_fn=lambda dummy_env: self._ll_command[:, :3],
-            ee_goal_fn=lambda dummy_env: self._ll_command[:, 3:10],
-            body_pose_cmd_fn=lambda dummy_env: self._ll_command[:, 10:13],
-        )
-        self._ee_command_term = env.command_manager.get_term(cfg.ee_command_name)
-        self._expected_ll_obs_dim, self._policy_layout_json = expected_policy_obs_dim(
-            self.policy, cfg.policy_path, tag=type(self).__name__
-        )
-        self._low_level_obs_manager, self._low_level_obs_cfg, self._ll_used_ee_goal = (
-            build_low_level_obs_manager(
-                env=env,
-                obs_cfg=self._low_level_obs_cfg,
-                group_name="ll_policy",
-                expected_obs_dim=self._expected_ll_obs_dim,
-                tag=type(self).__name__,
-            )
-        )
-        verify_low_level_layout(
-            tag=type(self).__name__,
-            robot=self.robot,
-            layout=self._layout,
-            obs_manager=self._low_level_obs_manager,
-            group_name="ll_policy",
-            policy=self.policy,
-            expected_obs_dim=self._expected_ll_obs_dim,
-            policy_layout_json=self._policy_layout_json,
-        )
-        # 回放侧的低层 tick 状态：复位检测 + 低层动作缓存清零 + （history 策略时的）10 步窗口
-        self._ll_replay_state = build_history_window(
-            env=env,
-            layout=self._layout,
-            policy_layout_json=self._policy_layout_json,
-            last_action_fn=last_action,
-            cache_tensors=[
-                self.low_level_leg_actions,
-                self.low_level_wheel_actions,
-                self.low_level_ee_actions,
-            ],
-            asset_name=cfg.asset_name,
-            tag=type(self).__name__,
-        )
-        self._counter = 0
+        # 低层 replay 布局（清单 ④⑤⑥⑯）、三个低层 action term、低层观测组、维度校验、
+        # history 窗口、低层 tick 循环，全部由 LowLevelPolicyActionBase 统一提供。
+        # ll_command（基类默认 13 宽）：[vx, vy, wz, ee_pos_b(3), ee_quat_b(4), height, pitch, roll]
+        # 另有世界系副本 _ll_command_w（EE 目标的世界坐标/四元数），供奖励项使用。
 
         # default EE 位姿缓存（body系），首次使用时 / reset 时填充
         self._default_ee_pos_b: torch.Tensor = torch.zeros(self.num_envs, 3, device=self.device)
@@ -399,48 +293,41 @@ class TeleopLLAction(ActionTerm):
             self._default_body_pose = body_pose
         
     # ------------------------------------------------------------------
-    # apply_actions
+    # 基类钩子（低层 tick 循环 / 复位处理由 LowLevelPolicyActionBase 提供）
     # ------------------------------------------------------------------
 
-    def apply_actions(self):
-        # episode reset 时的其它处理（低层动作缓存的清空已交给 _ll_replay_state.on_tick()）
-        if hasattr(self._env, "episode_length_buf"):
-            reset_ids = (self._env.episode_length_buf == 0).nonzero(as_tuple=False).squeeze(-1)
-            if reset_ids.numel() > 0:
-                if self.cfg.absolute_commands:
-                    # VR 绝对目标语义：reset 后把标定基准重锚到初始位姿
-                    self.recalibrate(reset_ids)
-                else:
-                    # 键盘增量语义：保持原有重置行为
-                    self._capture_default_ee_pose(reset_ids)
-                    self._reset_default_body_pose(reset_ids)
+    def _on_low_level_tick(self) -> None:
+        """低层 tick（跑策略之前）把高层 EE 目标写给 IK。
 
-        if self._counter % self.cfg.low_level_decimation == 0:
-            # 低层 tick：先处理复位 + 推入 history 帧（last_action 用上一 tick 的低层动作），
-            # 再算观测/跑策略 —— 顺序不能反，否则 history 帧里的 last_action 会是"未来"的动作。
-            history_flat = self._ll_replay_state.on_tick()
-            low_level_obs = self._low_level_obs_manager.compute_group("ll_policy")
+        目标写 ``pose_command_b``（root 系）：IK 读的就是这个字段（清单 ②）。
+        """
+        push_ee_target_to_ik(
+            self._ee_command_term, self._ll_command[:, 3:10], tag=type(self).__name__
+        )
 
-            policy_output = run_low_level_policy(self.policy, low_level_obs, history_flat)
-            leg, wheel, ee = self._layout.split(policy_output)
-            self.low_level_leg_actions[:]   = leg
-            self.low_level_wheel_actions[:] = wheel
-            self.low_level_ee_actions[:]    = ee
+    def _on_reset(self, env_ids) -> None:
+        """episode 复位时重锚工作空间基准（低层动作缓存的清空由 replay state 负责）。
 
-            # 目标写 pose_command_b（root 系）：IK 读的就是这个字段（清单 ②）
-            push_ee_target_to_ik(
-                self._ee_command_term, self._ll_command[:, 3:10], tag=type(self).__name__
-            )
+        * ``absolute_commands=True``（VR 遥操）：``recalibrate``，把标定基准重锚到初始位姿；
+        * ``absolute_commands=False``（键盘遥操）：保持原有"相对上一步"的重置行为。
+        """
+        ids = self._normalize_env_ids(env_ids)
+        if ids.numel() == 0:
+            return
+        if self.cfg.absolute_commands:
+            self.recalibrate(ids)
+        else:
+            self._capture_default_ee_pose(ids)
+            self._reset_default_body_pose(ids)
 
-            self._joint_pos_action_term.process_actions(self.low_level_leg_actions)
-            self._wheel_vel_action_term.process_actions(self.low_level_wheel_actions)
-            self._ee_ik_action_term.process_actions(self.low_level_ee_actions)
-            self._counter = 0
-
-        self._joint_pos_action_term.apply_actions()
-        self._wheel_vel_action_term.apply_actions()
-        self._ee_ik_action_term.apply_actions()
-        self._counter += 1
+    def _normalize_env_ids(self, env_ids) -> torch.Tensor:
+        """把 ``ActionManager.reset`` 传来的 ``None`` / ``slice`` / ``Tensor`` 统一成 id 张量。"""
+        if env_ids is None:
+            return torch.arange(self.num_envs, device=self.device)
+        if isinstance(env_ids, slice):
+            return torch.arange(self.num_envs, device=self.device)[env_ids]
+        ids = torch.as_tensor(env_ids, device=self.device)
+        return ids.flatten()
 
     # ------------------------------------------------------------------
     # Debug visualization（与原版相同，不赘述）

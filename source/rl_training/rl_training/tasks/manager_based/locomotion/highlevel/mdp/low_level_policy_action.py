@@ -5,9 +5,10 @@
 
 背景
 ----
-``pre_trained_pick_action`` / ``pre_trained_pick_wbc_action`` / ``teleop_ll_action`` /
-``pre_trained_nav_action`` / ``pre_trained_policy_action``
-这 6 个 action term 各自抄了一份：
+``pre_trained_nav_action`` / ``pre_trained_pick_action`` / ``pre_trained_pick_wbc_action`` /
+``teleop_ll_action``
+这 4 个 action term（外加已删除的 ``pre_trained_policy_action`` / ``openvla_pick_action``，
+见 DEF-034/DEF-035）原先各自抄了一份：
 
 * 载入低层 TorchScript 策略；
 * 腿/轮/臂关节名单、低层 action cfg 的 scale/clip 赋值；
@@ -161,6 +162,9 @@ class LowLevelPolicyActionBase(ActionTerm):
         caches = [self.low_level_leg_actions, self.low_level_wheel_actions]
         if self._layout.ee_action_dim > 0:
             caches.append(self.low_level_ee_actions)
+        # 子类可以追加"复位时要一起清 0"的缓存（例如 pick 系的 `_raw_actions`，
+        # 它的前 3 维直接充当低层观测里的 `velocity_commands`）。
+        caches.extend(self._extra_cache_tensors())
         self._ll_replay_state = build_history_window(
             env=env,
             layout=self._layout,
@@ -205,6 +209,10 @@ class LowLevelPolicyActionBase(ActionTerm):
         由 :meth:`reset` 调用；默认实现是空操作 ⇒ 现有子类行为不变。
         """
         return None
+
+    def _extra_cache_tensors(self) -> list:
+        """复位时需要和低层动作缓存一起清零的额外张量（默认没有）。"""
+        return []
 
     def reset(self, env_ids=None):
         """``ActionManager.reset`` 会在 episode 复位时调用：转发给子类的 ``_on_reset``。"""

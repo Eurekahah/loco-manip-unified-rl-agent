@@ -22,6 +22,7 @@
 | 2026-09-29 | 新分支 `codex/ll-train-detail-fix`：**静止伫立专项**（DEF-026，两项惩罚 + 三条课程）、**镜像符号修复**（DEF-027，"右后腿往右前方撇"）、**扰动加强**（DEF-028）、**多地形任务**（DEF-029）、**遥操 history 任务**（DEF-030）；新增 P1-1'~P1-4 四条待办 | `codex/ll-train-detail-fix` |
 | 2026-09-30 | **本机收尾批（DEF-034）**：回归矩阵脚本化（P1-4/P3 完成，11 OK / 1 SKIP / 0 FAIL）+ known_issues ⑧⑩⑪⑫⑱ + 三处工程债；11 条能跑的任务全部 EXIT=0 | `codex/ll-train-detail-fix` |
 | 2026-09-30 | 第二批（按用户答复）：**cusrl 全删**（9 处注册字段 + setup 依赖）、**视觉编码器本地权重优先/默认不联网**（新增 `RL_TRAINING_ENCODER_DIR` / `RL_TRAINING_ALLOW_ENCODER_DOWNLOAD`）、**openvla 分支删除**（含 cfg）、**vr_extented 模块级 print 改成调试图**；sim2sim 因"已在另一个仓库实现"**移出待办**；P2 action term 收敛成一条带做法的待办 | `codex/ll-train-detail-fix` |
+| 2026-09-30 | **P2 action term 收敛完成（DEF-035）**：`PreTrainedPickAction` / `PreTrainedPickWBCAction` / `TeleopLLAction` 全部继承 `LowLevelPolicyActionBase`（共减 ~600 行重复机械）+ 删除无人注册的 `PreTrainedPolicyAction` + 新增复位时机探针；回归 11 OK / 1 SKIP / 0 FAIL、低层布局打印逐字节一致 | `codex/ll-train-detail-fix` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -187,22 +188,14 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
 
 ## P2 —— 高层 replay 与工程债（"高层修改先暂放"期间不动）
 
-- [ ] **把剩下 3 个高层 action term 收进 `LowLevelPolicyActionBase`**（用户要求：尽量一个基类）
-  - 现状：`PreTrainedNavAction` 已迁移（清单 ⑤ 的 R1）；**`PreTrainedPickAction`（29.9 KB）、
-    `PreTrainedPickWBCAction`（28.7 KB）、`TeleopLLAction`（27 KB）仍各自抄了一份**
-    "载入策略 / 三个低层 action term / 布局解析 / 低层观测组 / history 窗口 / 低层 tick 循环"
-    （每个文件约 200 行重复代码；基类 `low_level_policy_action.py` 已经把这块抽好了）。
-  - **openvla 已删除**（2026-09-30，用户确认废弃；DEF-034 §7）——`PreTrainedPolicyAction`
-    没被任何 task 注册，可以顺手一起迁或删（**建议删**，与 openvla 同理）。
-  - 做法（已验证可行的路线）：① 基类补一个 `_on_reset(env_ids)` 钩子（pick 用来
-    `_reset_target_to_current_ee`、teleop 用来 `recalibrate`/`_reset_default_body_pose`）；
-    ② 三个类改成 `class X(LowLevelPolicyActionBase)`，`__init__` 只留"分配 `_raw_actions`
-    （必须在 `super().__init__` 之前）→ `super().__init__(cfg, env)` → 任务专属状态"；
-    ③ 删掉各自的 `apply_actions`（基类已实现 tick 循环），需要额外动作的写进
-    `_on_low_level_tick()`（teleop 的 `push_ee_target_to_ik`）；④ `process_actions` /
-    properties / 调试可视化保持原样。
-  - 验收：`smoke_regression.py` 覆盖到全部三个类（Pick-Flat / Pick-WBC-Flat / Teleop /
-    Teleop-History 各 2 iter）+ 对比改动前后启动打印的"低层 obs 维度 == checkpoint 期望"。
+- [x] **把剩下 3 个高层 action term 收进 `LowLevelPolicyActionBase`**（用户要求：尽量一个基类）
+      → **2026-09-30 完成（DEF-035）**：三个类都只留"`_raw_actions` 分配 → `super().__init__`
+      → 任务专属状态"，`apply_actions` 全部删掉、改用基类的 `_on_low_level_tick()` /
+      `_on_reset(env_ids)` / `_extra_cache_tensors()` 钩子；顺带删除无人注册的
+      `PreTrainedPolicyAction`（371 行）；验收 = 回归 11 OK / 1 SKIP / 0 FAIL +
+      五个高层任务的 `[ll-replay:*]` 启动打印与改动前**逐字节一致** + 新探针
+      `probe_reset_anchor_timing.py` 证明复位钩子读到的是复位后状态。
+      （细节见 `DONE_zh.md` 第九节 / `DEFECT_LOG_zh.md` DEF-035。）
 
 - [ ] **高层 `high_level_todo.md` 第 10 条的"待确认"**
   - `HLFlatPickTerminationsCfg_PLAY` 里 `lift_object` 与 `pick_success` 语义/命名重复；

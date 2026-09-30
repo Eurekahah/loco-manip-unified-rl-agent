@@ -16,6 +16,7 @@
 | 2026-09-22 | 新增第一节 **P1-1 修复**：探索噪声上界 `max_noise_std=1.2` 的 A/B 实测通过（**建议作为默认**）；同批对照点 `entropy_coef=0.002`（通过但略逊）与 `entropy_coef=0.0`（意外点，s3 摔倒反而 +15%） | 开关代码 `b75c596`；实测回填见 DEF-024 §4（2026-09-22） |
 | 2026-09-29 | 新增第七节 **训练细节专项**（分支 `codex/ll-train-detail-fix`）：静止伫立（DEF-026）、镜像符号（DEF-027）、扰动加强（DEF-028）、多地形任务（DEF-029）、遥操 history 任务（DEF-030）；另记录本机跑不了生成地形任务的平台问题（DEF-031） | `codex/ll-train-detail-fix` |
 | 2026-09-30 | 新增第八节 **本机收尾批**：回归矩阵脚本化（13 任务 11 OK / 1 SKIP / 0 FAIL）+ known_issues ⑧⑩⑪⑫⑱ + 三处工程债（DEF-034） | `codex/ll-train-detail-fix` |
+| 2026-09-30 | 新增第九节 **P2：高层 action term 收敛**：3 个 action term 继承 `LowLevelPolicyActionBase`（减 ~600 行重复机械）+ 删 `PreTrainedPolicyAction` + 复位时机探针（DEF-035） | `codex/ll-train-detail-fix` |
 
 ---
 
@@ -226,6 +227,24 @@ run `logs/rsl_rl/history_adaptation/2026-09-30_00-09-25_cloud_soft20k`（就是 
 | **known_issues ⑩** | `grasp_success` / `ee_approach_object` 加 `_require_scene_entity`：明确报"需要 object 实体 / 当前场景有哪些 / 本奖励是给高层用的" | 未被任何任务引用，回归不受影响 |
 | **known_issues ⑱** | 启动期布局自检增加接触传感器行序打印（body 数、是否与 articulation 同序、`名字#行号` 前 6 个）+ "传感器 body 名能否在 articulation 里找到"检查 | 回归日志里可见该打印 |
 | **工程债 ×3** | `setup.py` → `find_packages`；`encoder.py` 的 frozen 缓存 key → `(name, device)`；`mp4-png-composition.py` 4 处裸 `except:` → `except Exception:` | `py_compile` 通过；回归（前两项不涉及训练路径） |
+
+---
+
+## 九、P2：高层 action term 收进一个基类（2026-09-30，分支 `codex/ll-train-detail-fix`）
+
+用户要求"P2 里尽量不要那么多重复的 action term，能实现为一个基类最好"。来龙去脉见
+`DEFECT_LOG_zh.md` **DEF-035**。
+
+| 项 | 内容 | 验收 |
+|---|---|---|
+| **3 个 action term 收敛** | `PreTrainedPickAction` / `PreTrainedPickWBCAction` / `TeleopLLAction` 从 `ActionTerm` 改为继承 `LowLevelPolicyActionBase`：`__init__` 只留"`_raw_actions` 分配（`super()` 之前）→ `super().__init__` → 任务专属状态"，`apply_actions` 全部删除，改用基类的 `_on_low_level_tick()` / `_on_reset(env_ids)` / `_extra_cache_tensors()` | 回归矩阵 **11 OK / 1 SKIP / 0 FAIL**（`logs/smoke/2026-09-30_regression_p2.md`） |
+| **删除 openvla 时代遗留** | `mdp/pre_trained_policy_action.py`（371 行，无人注册，只在一段 `#` 注释里被提到）+ `mdp/__init__.py` 的 star-import + `high_level_env_cfg.py` 的两处注释残留 | 全局 `grep`：仓库内已无 `PreTrainedPolicyAction` 引用 |
+| **"低层布局打印逐字节一致"** | 用改动前后两批 `logs/smoke/*.log` 只比 `[ll-replay:*]` 行（**不改任何 cfg，只动代码结构**，所以这是最直接的行为中性证据） | Pick-Flat **83(83)**/action 23、Pick-WBC **76(76)**/16、Teleop **76(76)**/16、Teleop-History **83(83)** + history 10×70、Nav-Flat 76(76) —— **5/5 完全一致** |
+| **复位钩子时机验证** | 新增 `scripts/reinforcement_learning/rsl_rl/probe_reset_anchor_timing.py`，把 `_on_reset` / `_reset_target_to_current_ee` / `_capture_default_ee_pose` / `recalibrate` 包起来打印 `episode_length_buf / root_z / ee_z` | 复位前 `root_z=0.5371`、`_on_reset` 里已是 **0.5500**（复位位姿）⇒ 钩子读到的是复位后状态；两个 episode 重锚出的 `target_ee_pos_b` 一致到 **1e-7** |
+
+> 唯一的（有利的）行为差异：Pick/WBC 的"重锚 EE 目标"从复位后**第 2 个 env step**
+> 提前到**第 1 个**（旧实现在 `apply_actions` 用 `episode_length_buf == 0` 检测，晚一步），
+> 语义更贴合"把目标锚在 episode 起点的位姿"。
 
 ---
 

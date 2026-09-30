@@ -273,15 +273,6 @@ class EventCfg:
 class ActionsCfg:
     """Action terms for the MDP."""
     pass
-    # pre_trained_policy_action: mdp.PreTrainedPolicyActionCfg = mdp.PreTrainedPolicyActionCfg(
-    #     asset_name="robot",
-    #     policy_path=f"D:\\nvidia-isaac-sim\\loco-manip-unified-rl-agent\\logs\\rsl_rl\\deeprobotics_m20_flat\\2026-03-04_23-02-58\\exported\\policy.pt",
-    #     low_level_decimation=4,
-    #     low_level_leg_actions=LOW_LEVEL_ENV_CFG.actions.joint_pos,
-    #     low_level_wheel_actions=LOW_LEVEL_ENV_CFG.actions.joint_vel,
-    #     low_level_ee_actions=LOW_LEVEL_ENV_CFG.actions.ee_ik,
-    #     low_level_observations=LOW_LEVEL_ENV_CFG.observations.policy,
-    # )
 
 
 @configclass
@@ -476,10 +467,6 @@ class HighLevelEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = self.decimation
         self.episode_length_s = 8.0
 
-        # if self.scene.height_scanner is not None:
-        #     self.scene.height_scanner.update_period = (
-        #         self.actions.pre_trained_policy_action.low_level_decimation * self.sim.dt
-        #     )
         if self.scene.contact_forces is not None:
             self.scene.contact_forces.update_period = self.sim.dt
     

@@ -19,17 +19,11 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import check_file_path, read_file
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
 from isaaclab.managers import SceneEntityCfg
+from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_policy_action import (
+    LowLevelPolicyActionBase,
+)
 from rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_replay import (
-    build_low_level_obs_manager,
-    build_low_level_observation_group,
-    build_history_window,
-    check_low_level_action_cfgs,
-    expected_policy_obs_dim,
-    load_low_level_policy,
     push_ee_target_to_ik,
-    resolve_layout,
-    run_low_level_policy,
-    verify_low_level_layout,
 )
 
 
@@ -38,7 +32,7 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-class PreTrainedPickWBCAction(ActionTerm):
+class PreTrainedPickWBCAction(LowLevelPolicyActionBase):
     r"""Pre-trained policy action term.
 
     This action term infers a pre-trained policy and applies the corresponding low-level actions to the robot.
@@ -81,122 +75,17 @@ class PreTrainedPickWBCAction(ActionTerm):
     joint_names = leg_joint_names + wheel_joint_names + arm_joint_names
 
     def __init__(self, cfg: PreTrainedPickWBCActionCfg, env: ManagerBasedRLEnv) -> None:
+        # `_raw_actions` 必须在 super().__init__ 之前分配：基类构造低层观测时会用到它
+        #   [vx, vy, wz, Δx, Δy, Δz, Δr, Δp, Δy, Δbody_height, Δbody_pitch, Δbody_roll]
+        self._raw_actions = torch.zeros(env.num_envs, self.action_dim, device=env.device)
         super().__init__(cfg, env)
 
-        self.robot: Articulation = env.scene[cfg.asset_name]
+        # 低层 replay 布局（清单 ④⑤⑥⑯）、三个低层 action term、低层观测组、维度校验、
+        # history 窗口、低层 tick 循环，全部由 LowLevelPolicyActionBase 统一提供。
+        # ll_command 宽度与基类默认（3 + 7 + 3 = 13）一致，直接沿用基类分配的两个缓冲区：
+        #   [vx, vy, wz | ee_pos_b(3), ee_quat_b(4) | body_height, body_pitch, body_roll]
 
-        # load policy
-        # 统一的加载 + 明确的报错（清单 ⑦）：见 low_level_replay.load_low_level_policy
-        self.policy = load_low_level_policy(cfg.policy_path, env, tag=type(self).__name__)
-
-        self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)     # [vx, vy, wz,  Δx, Δy, Δz,  Δr, Δp, Δy,      Δbody_height, Δbody_pitch, Δbody_roll]
-        self._ll_command = torch.zeros(self.num_envs, self.action_dim + 1, device=self.device)  # [vx, vy, wz,  x, y, z,     qw, qx, qy, qz,  body_height, body_pitch, body_roll]
-        # 同一命令的世界系副本（EE 目标的世界坐标/四元数），供需要世界系的奖励项使用；
-        # _ll_command 本身统一为 root 系（见 ll_command_world() 的说明）
-        self._ll_command_w = torch.zeros_like(self._ll_command)
-
-        # 分别初始化三个 low level action term
-        self._joint_pos_action_term: ActionTerm = cfg.low_level_leg_actions.class_type(
-            cfg.low_level_leg_actions, env
-        )
-        self._wheel_vel_action_term: ActionTerm = cfg.low_level_wheel_actions.class_type(
-            cfg.low_level_wheel_actions, env
-        )
-        self._ee_ik_action_term: ActionTerm = cfg.low_level_ee_actions.class_type(
-            cfg.low_level_ee_actions, env
-        )
-
-        # ── 低层 replay 布局（清单 ④⑤⑥⑯）──────────────────────────────
-        # 同 PreTrainedPickAction：布局显式声明，scale/clip/关节名单以低层 action cfg
-        # 为唯一来源，观测组由模板 deepcopy 生成（不再就地改传入的 cfg，
-        # 也不再在运行时替换 cfg.low_level_observations）。
-        self._layout = resolve_layout(
-            robot=self.robot,
-            low_level_obs_cfg=cfg.low_level_observations,
-            low_level_leg_cfg=cfg.low_level_leg_actions,
-            low_level_wheel_cfg=cfg.low_level_wheel_actions,
-            declared_ee_action_dim=cfg.ee_action_dim,
-            actual_ee_ik_action_dim=self._ee_ik_action_term.action_dim,
-            tag=type(self).__name__,
-        )
-        check_low_level_action_cfgs(
-            tag=type(self).__name__,
-            layout=self._layout,
-            leg_cfg=cfg.low_level_leg_actions,
-            wheel_cfg=cfg.low_level_wheel_actions,
-        )
-
-        self._joint_pos_dim = self._layout.leg_dim
-        self._wheel_vel_dim = self._layout.wheel_dim
-        self._ee_ik_dim = self._layout.ee_action_dim
-
-        self.low_level_leg_actions = torch.zeros(
-            self.num_envs, self._joint_pos_dim, device=self.device
-        )
-        self.low_level_wheel_actions = torch.zeros(
-            self.num_envs, self._wheel_vel_dim, device=self.device
-        )
-        self.low_level_ee_actions = torch.zeros(
-            self.num_envs, self._ee_ik_dim, device=self.device
-        )
-
-        def last_action():
-            # 低层 policy 训练时的 actions 观测 = 完整动作向量 [leg | wheel | ee_ik]。
-            # 复位清空统一交给 LowLevelReplayState.on_tick()（原因见该类的文档字符串）。
-            return torch.cat(
-                [self.low_level_leg_actions, self.low_level_wheel_actions, self.low_level_ee_actions],
-                dim=-1,
-            )
-
-        self._low_level_obs_cfg = build_low_level_observation_group(
-            cfg.low_level_observations,
-            layout=self._layout,
-            actions_fn=lambda dummy_env: last_action(),
-            velocity_commands_fn=lambda dummy_env: self._ll_command[:, :3],
-            ee_goal_fn=lambda dummy_env: self._ll_command[:, 3:10],
-            body_pose_cmd_fn=lambda dummy_env: self._ll_command[:, 10:13],
-        )
-        # 在 __init__ 末尾添加，提前缓存引用避免每步查找
-        self._ee_command_term = env.command_manager.get_term(cfg.ee_command_name)
-        self._expected_ll_obs_dim, self._policy_layout_json = expected_policy_obs_dim(
-            self.policy, cfg.policy_path, tag=type(self).__name__
-        )
-        self._low_level_obs_manager, self._low_level_obs_cfg, self._ll_used_ee_goal = (
-            build_low_level_obs_manager(
-                env=env,
-                obs_cfg=self._low_level_obs_cfg,
-                group_name="ll_policy",
-                expected_obs_dim=self._expected_ll_obs_dim,
-                tag=type(self).__name__,
-            )
-        )
-        verify_low_level_layout(
-            tag=type(self).__name__,
-            robot=self.robot,
-            layout=self._layout,
-            obs_manager=self._low_level_obs_manager,
-            group_name="ll_policy",
-            policy=self.policy,
-            expected_obs_dim=self._expected_ll_obs_dim,
-            policy_layout_json=self._policy_layout_json,
-        )
-        # 回放侧的低层 tick 状态：复位检测 + 低层动作缓存清零 + （history 策略时的）10 步窗口
-        self._ll_replay_state = build_history_window(
-            env=env,
-            layout=self._layout,
-            policy_layout_json=self._policy_layout_json,
-            last_action_fn=last_action,
-            cache_tensors=[
-                self.low_level_leg_actions,
-                self.low_level_wheel_actions,
-                self.low_level_ee_actions,
-            ],
-            asset_name=cfg.asset_name,
-            tag=type(self).__name__,
-        )
-        self._counter = 0
-
-        # ── 增量模式：缓存上一时刻的目标位姿（world 系） ──────────────────────
+        # ── 增量模式：缓存上一时刻的目标位姿（body 系） ──────────────────────
         self._target_ee_pos_b = torch.zeros(self.num_envs, 3, device=self.device)
         self._target_ee_orn_rpy_b = torch.zeros(self.num_envs, 3, device=self.device)
 
@@ -374,43 +263,30 @@ class PreTrainedPickWBCAction(ActionTerm):
         # print(self.ll_command)
         
 
-    def apply_actions(self):
+    def _on_low_level_tick(self) -> None:
+        """低层 tick（跑策略之前）把高层 EE 目标写给 IK。
 
-        # ── episode reset 时重置增量目标位姿 ────────────────────────────
-        if hasattr(self._env, "episode_length_buf"):
-            reset_ids = (self._env.episode_length_buf == 0).nonzero(as_tuple=False).squeeze(-1)
-            if reset_ids.numel() > 0:
-                self._target_initialized[reset_ids] = False  # 标记为未初始化，下一步重置
+        IK（CommandDrivenIKAction）读的是 ``command_manager.get_command("ee_pose")``
+        == ``HeightInvariantEECommand.pose_command_b``，它是 **root 系**目标（与
+        ``DifferentialIKController`` 的误差计算同系）。以前写的是 ``pose_command_w`` ——
+        那个字段只被父类 ``_update_metrics`` / debug vis 使用，写进去等于没写（清单 ②）。
+        """
+        push_ee_target_to_ik(
+            self._ee_command_term, self._ll_command[:, 3:10], tag=type(self).__name__
+        )
 
-        
-        if self._counter % self.cfg.low_level_decimation == 0:
-            # 低层 tick：先复位处理 + 推 history 帧，再算观测/跑策略（顺序不能反）
-            history_flat = self._ll_replay_state.on_tick()
-            low_level_obs = self._low_level_obs_manager.compute_group("ll_policy")
+    def _on_reset(self, env_ids) -> None:
+        """episode 复位后把增量目标标记成"未初始化"。
 
-            # policy 输出切分给3个 action term
-            policy_output = run_low_level_policy(self.policy, low_level_obs, history_flat)
-            leg, wheel, ee = self._layout.split(policy_output)
-            self.low_level_leg_actions[:] = leg
-            self.low_level_wheel_actions[:] = wheel
-            self.low_level_ee_actions[:] = ee
-            # 把高层目标写给 IK：IK 读的是 command_manager.get_command("ee_pose")
-            # == HeightInvariantEECommand.pose_command_b（root 系目标）。
-            # 之前写的是 pose_command_w —— 那个字段只被父类 _update_metrics/debug vis
-            # 使用，写进去等于没写（清单 ②）。
-            push_ee_target_to_ik(
-                self._ee_command_term, self._ll_command[:, 3:10], tag=type(self).__name__
-            )
-
-            self._joint_pos_action_term.process_actions(self.low_level_leg_actions)
-            self._wheel_vel_action_term.process_actions(self.low_level_wheel_actions)
-            self._ee_ik_action_term.process_actions(self.low_level_ee_actions)
-            self._counter = 0
-
-        self._joint_pos_action_term.apply_actions()
-        self._wheel_vel_action_term.apply_actions()
-        self._ee_ik_action_term.apply_actions()
-        self._counter += 1
+        下一个 ``process_actions`` 会看到 ``~_target_initialized`` 并调用
+        :meth:`_reset_target_to_current_ee`，把 EE / body 目标重锚到机器人当前位姿。
+        （旧实现在 ``apply_actions`` 里用 ``episode_length_buf == 0`` 检测，会晚一步；
+        这里改用基类的 ``reset`` 钩子，时机与 ``ActionManager.reset`` 对齐。）
+        """
+        if env_ids is None:
+            self._target_initialized[:] = False
+        else:
+            self._target_initialized[env_ids] = False
 
     """
     Debug visualization.

@@ -67,6 +67,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config  # noqa: E402
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg  # noqa: E402
 
 import rl_training.tasks  # noqa: F401,E402
+import rl_training.tasks.manager_based.locomotion.highlevel.mdp.low_level_policy_action as _ll_base_module  # noqa: E402
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp.teleop_ll_action as teleop_module  # noqa: E402
 import rl_training.tasks.manager_based.locomotion.velocity.mdp as low_mdp  # noqa: E402
 from rl_training.tasks.manager_based.locomotion.highlevel.mdp import low_level_replay as llr  # noqa: E402
@@ -156,9 +157,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
         finally:
             env.action_manager._action = save
 
-    original = teleop_module.run_low_level_policy
+    # `run_low_level_policy` 的调用点在**基类**（`LowLevelPolicyActionBase.apply_actions`）里，
+    # 是模块级全局查找 ⇒ 必须改 `low_level_policy_action` 模块的同名全局。
+    # 历史版本里 action term 各自 `from ... import run_low_level_policy`，所以顺手把
+    # 那些模块（如果还有这个全局）也一起打上，避免以后再重构时又静默失效。
+    patched_modules = [_ll_base_module]
+    for mod in (teleop_module,):
+        if hasattr(mod, "run_low_level_policy"):
+            patched_modules.append(mod)
+    originals = {mod: mod.run_low_level_policy for mod in patched_modules}
+    _base_original = originals[_ll_base_module]
 
     def _wrapper(policy, policy_obs, history_flat=None):
+        # 注意：不能闭包引用单个 `original` —— 我们在多个模块的全局上装同一个函数，
+        # 每次调用都用事先保存好的原始实现，避免闭包变量/模块全局互相覆盖。
         records.append(
             {
                 "history": None if history_flat is None else history_flat.clone(),
@@ -172,15 +184,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
                 ).clone(),
             }
         )
-        return original(policy, policy_obs, history_flat)
+        return _base_original(policy, policy_obs, history_flat)
 
-    teleop_module.run_low_level_policy = _wrapper
+    for mod in patched_modules:
+        mod.run_low_level_policy = _wrapper
     try:
         for _ in range(args_cli.steps):
             actions = torch.zeros(env.num_envs, env.action_manager.total_action_dim, device=env.device)
             env.step(actions)
     finally:
-        teleop_module.run_low_level_policy = original
+        for mod, orig in originals.items():
+            mod.run_low_level_policy = orig
 
     n_records = len(records)
     print("\n" + "-" * 78)

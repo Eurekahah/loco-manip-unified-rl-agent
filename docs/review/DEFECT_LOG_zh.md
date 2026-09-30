@@ -20,10 +20,130 @@
 | 2026-09-20 | 新增 DEF-025：桌面版自动化（heartbeat / cron）的唤醒投递条目缺 `call_id`，被 deepseek `/responses` 一律 422 拒绝、并**永久污染所在线程**；两条 automation 已 `PAUSED`，P1-1 收尾改回手动 | 本次（docs-only） |
 | 2026-09-22 | 回填 **DEF-024 §4**：P1-1 A/B 实测收尾（cap=1.2 通过、**建议作为默认**；`entropy_coef=0.002` 通过但略逊；意外点 `entropy_coef=0` 反而 +15% s3 摔倒）+ **统一窗口口径修正** | 本次（docs-only） |
 | 2026-09-29 | 新增 DEF-026~DEF-031：静止伫立专项（零速漂移 + 站姿占比课程）、`joint_mirror` 镜像符号 bug（"右后腿往右前方撇"的根因）、扰动加强 + 课程拉长、多地形任务（粗糙 0.01~0.05 + 正反斜坡 + 平地）、遥操 history 任务、以及**本机跑不了生成地形任务**的平台问题 | 分支 `codex/ll-train-detail-fix` |
+| 2026-09-30 | 新增 **DEF-035**：剩下 3 个高层 action term（`PreTrainedPickAction` / `PreTrainedPickWBCAction` / `TeleopLLAction`）收进 `LowLevelPolicyActionBase`，删掉各自的 ~200 行重复机械；顺带删除无人注册的 `PreTrainedPolicyAction`（openvla 时代遗留）；新增 `probe_reset_anchor_timing.py` 证明复位钩子读到的是**复位后**状态 | 分支 `codex/ll-train-detail-fix` |
 
 ---
 
 # 记录（新→旧）
+
+### DEF-035 `2026-09-30` P2：3 个高层 action term 收进 `LowLevelPolicyActionBase`（用户要求"尽量一个基类"）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 重构 / 工程债（**不需要训练**，本机可验证） |
+| 状态 | 已完成并实测（同批回归 11 OK / 1 SKIP / 0 FAIL） |
+| 关联 | `codex/ll-train-detail-fix`；`highlevel/mdp/{pre_trained_pick_action,pre_trained_pick_wbc_action,teleop_ll_action,low_level_policy_action,__init__}.py`、`highlevel/high_level_env_cfg.py`；新探针 `scripts/reinforcement_learning/rsl_rl/probe_reset_anchor_timing.py`；`TODO_zh.md` P2 |
+
+**1. 现象（重构前）**
+
+`PreTrainedNavAction` 早就继承 `LowLevelPolicyActionBase`（清单 ⑤ 的 R1），但另外三个
+高层 action term 各自抄了一份**完全同构**的机械代码（每个文件约 200 行）：
+
+* `self.robot = env.scene[cfg.asset_name]`、`load_low_level_policy(cfg.policy_path, ...)`；
+* 手搓三个低层 action term（`low_level_leg_actions` / `..._wheel_actions` / `..._ee_actions`）；
+* `resolve_layout` + `check_low_level_action_cfgs` + `_joint_pos_dim/_wheel_vel_dim/_ee_ik_dim`；
+* 三个 `torch.zeros` 低层动作缓存 + `last_action()` 闭包；
+* `build_low_level_observation_group` + `expected_policy_obs_dim` + `build_low_level_obs_manager`
+  + `verify_low_level_layout` + `build_history_window`；
+* `apply_actions()` 里的 `counter % low_level_decimation` tick 循环 + 策略输出切分 +
+  三个低层 action term 的 `process_actions/apply_actions`。
+
+⇒ 清单 ②③④⑥⑨⑯ 的每一条都要在 3~4 个文件里各改一遍，而且"训练用什么、回放就用什么"
+没有任何结构性保证（历史上 DEF-008/009/010/011 都是这么来的）。
+
+**2. 修正**
+
+三个类改成 `class X(LowLevelPolicyActionBase)`，`__init__` 只保留三段：
+① `_raw_actions` 分配（**必须在 `super().__init__` 之前**，因为基类构造低层观测组时会用到它）
+→ ② `super().__init__(cfg, env)` → ③ 任务专属状态。删掉各自的 `apply_actions`，
+改用基类的 `_on_low_level_tick()` / `_on_reset(env_ids)` / `_extra_cache_tensors()` 三个钩子：
+
+| 类 | `_build_low_level_obs_cfg` | `_extra_cache_tensors` | `_on_low_level_tick` | `_on_reset` |
+|---|---|---|---|---|
+| `PreTrainedPickWBCAction` | 用基类默认（13 宽 `_ll_command`） | `[]`（与迁移前一致，只清三个低层动作缓存） | `push_ee_target_to_ik` | `_target_initialized[ids] = False` |
+| `PreTrainedPickAction` | 覆写：`velocity_commands` 取 `_raw_actions[:, :3]`（**必须**：本类复位时 `_raw_actions` 被清零、`_ll_command` 不会） | `[self._raw_actions]`（与迁移前一致） | `push_ee_target_to_ik` | 同上 |
+| `TeleopLLAction` | 用基类默认（13 宽 `_ll_command`） | `[]` | `push_ee_target_to_ik` | `absolute_commands` ? `recalibrate(ids)` : `_capture_default_ee_pose(ids)` + `_reset_default_body_pose(ids)` |
+
+同时删掉**无人注册**的 `PreTrainedPolicyAction`（`pre_trained_policy_action.py`，371 行：
+仍在本类里就地改 `cfg.low_level_observations`、硬编码 `scale=0.125`、引用
+`mdp.joint_pos_rel_without_wheel`）——它与已删除的 `openvla_pick_action.py` 同属 openvla 时代，
+只在一段 `#` 注释里被提到过。
+
+**3. 验收（本机，`--headless --num_envs 64 --max_iterations 2`）**
+
+* **回归矩阵**：12 任务 **11 OK / 1 SKIP（生成地形，DEF-031）/ 0 FAIL**
+  （`logs/smoke/2026-09-30_regression_p2.md`）。
+* **低层布局打印逐字节一致**：把改动前那批日志（`logs/smoke/2026-09-30_after_cleanup_*.log`）
+  与改动后的（`logs/smoke/2026-09-30_*.log`）只比 `[ll-replay:*]` 行 ——
+  Pick-Flat / Pick-WBC-Flat / Teleop / Teleop-History / Nav-Flat **全部完全一致**：
+
+  | 任务 | 低层 policy 动作维度 | 低层 obs 维度（期望） | 备注 |
+  |---|---|---|---|
+  | `...Pick-Flat-Teacher-v0` | 23（leg 12 + wheel 4 + ee_ik 7） | **83（83）** | L1 显式 `ee_action_dim=7` |
+  | `...Pick-WBC-Flat-Teacher-v0` | 16 | **76（76）** | 观测含 `body_pose_cmd(3,)` |
+  | `Isaac-M20-Piper-Teleop-v0` | 16 | **76（76）** | 同上 |
+  | `Isaac-M20-Piper-Teleop-History-v0` | 16 | **83（83）** + history 10×70 | 双输入 forward |
+  | `...Nav-Flat-Teacher-v0` | 16 | 76（76） | 迁移前就在基类上 |
+
+**4. 复位钩子的时机（新增证据，避免"看着对、其实晚一步"）**
+
+基类的 `reset()` 会被 `ActionManager.reset`（在 `ManagerBasedRLEnv._reset_idx` 里）调到，
+钩子里直接读 `robot.data` 是否已经是**复位后**状态，值得单独验一次（旧实现在
+`apply_actions` 里用 `episode_length_buf == 0` 检测，等于**晚一个 env step**）。
+
+新探针 `probe_reset_anchor_timing.py`（`--action_scale 3.0` 把机器人推翻后强制复位）实测：
+
+```
+[post_step38]                        root_z=+0.5371 ee_z=+0.9127   ← 复位前（终止那一刻）
+[_on_reset(before)]  ep_buf[0]= 40   root_z=+0.5500 ee_z=+0.9827   ← 已经换成复位位姿
+[post_step39]        ep_buf[0]=  0   root_z=+0.5500 ee_z=+0.9827
+[_reset_target_to_current_ee(before)] root_z=+0.5500 ee_z=+0.9827
+[_reset_target_to_current_ee(after)]  target_ee_pos_b[0] = [0.34923, 0.0, 0.43266]
+```
+
+⇒ `_on_reset` 里读到的 `root_z/ee_z`（0.5500 / 0.9827）**是复位位姿**，不是终止的摔倒位姿
+（IsaacLab 的 `write_root_pose_to_sim` / `write_joint_state_to_sim` 会把
+`_body_link_pose_w.timestamp` 置 `-1`，下一次访问 `robot.data` 时重新从 PhysX 取）。两次 episode
+重锚出来的 `target_ee_pos_b` 两次一致到 **1e-7**。
+
+**5. 唯一的（有利的）行为差异**
+
+Pick/WBC 的"重锚 EE 目标"从**复位后第 2 个 env step**（= 新 episode 已跑了 40 个 sim step、
+0.2 s）提前到**第 1 个 env step**（复位当下）。Teleop 的 `recalibrate` /
+`_capture_default_ee_pose` 同理提前，且因为 `_on_reset` 已经能看到复位状态，二者等价。
+⇒ 语义更贴合"把目标锚在 episode 起点位姿"，不是回归。
+
+**6. 本批**没做**的（仍在 TODO P2）**：`mdp/__init__.py` 星号导入遮蔽（影响面小，见 TODO）；
+四个文件里遗留的未使用 import（`Articulation` / `ObservationManager` / `check_file_path` /
+`read_file`，重构前就没有）—— 留到统一的"清理注释与 import"那一批。
+
+**7. 重构暴露的一个真实缺陷：`probe_history_window.py` 的猴子补丁失效**
+
+`probe_history_window.py` 为了核对"history 窗口最后一帧 == 低层训练函数独立复算"，
+把 `teleop_ll_action.run_low_level_policy` 换成了记录用的 wrapper —— 它依赖各 action term
+模块里 `from low_level_replay import run_low_level_policy` 留下的**模块级全局**。
+迁移后调用点移到了基类（`low_level_policy_action.apply_actions`），于是补丁打在了一个
+不再被读的全局上：
+
+```
+AttributeError: module '...highlevel.mdp.teleop_ll_action' has no attribute 'run_low_level_policy'
+```
+
+**修法**：改成对**基类模块**（`low_level_policy_action`）装补丁，并把"还有该全局的模块"
+顺手都装上；`_wrapper` 内部调用**事先保存**的原始实现（不能闭包引用单个 `original`，
+否则多模块同时装同一个函数时会 `NameError`）。
+
+**修后实测**（`--task Isaac-M20-Piper-Teleop-History-v0 --num_envs 8 --steps 40`，EXIT=0）：
+
+```
+[probe] (2) 最后一帧 vs 训练函数独立复算（40 次低层 tick） max|...| = 0.000e+00
+[probe] (3) 整窗顺序核对（含复位填充，72 次带复位填充） max|窗口 − 期望拼接| = 0.000e+00
+[probe] 结论: history 窗口与低层训练口径一致（逐位相同）
+```
+
+⇒ 教训：**探针依赖"模块级全局"时，重构要一起改**；本仓库的探针属于"验收口径"的一部分，
+所以每批改动都要把相关探针也跑一遍（本轮除回归矩阵外，另外跑了
+`probe_history_window.py` / `probe_reset_anchor_timing.py`）。
 
 ### DEF-034 `2026-09-30` 本机可做的收尾批：回归矩阵脚本化 + known_issues ⑧⑩⑪⑫⑱ + 三处工程债
 

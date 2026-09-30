@@ -24,6 +24,18 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
     ④ 扰动加强：push 间隔 5~10 s、x±2/y±1/yaw±0.52；disturbance_ramp 0.2x→1.0x / 50k 步
     ⑤ 遥操 history：新任务 Isaac-M20-Piper-Teleop-History-v0（低层默认指向 history 部署态策略）
 
+  **该分支后续的几批（都在同一分支上，最新 commit 见 `git log -1`）**：
+    DEF-032~033 云端 autodl 接力（环境复制 + 四条 20k 长跑排进队列，见下）
+    DEF-034 本机收尾批：回归矩阵脚本化（smoke_regression.py）/ known_issues ⑧⑩⑪⑫⑱ /
+            cusrl 全删 / 视觉编码器本地权重优先不联网 / openvla 分支删除 / vr 打印改调试图
+    DEF-035 **P2 完成**：PreTrainedPickAction / PreTrainedPickWBCAction / TeleopLLAction
+            全部继承 LowLevelPolicyActionBase（减 ~600 行重复机械），删掉无人注册的
+            PreTrainedPolicyAction；验收 = 回归 11 OK/1 SKIP/0 FAIL + 5 个高层任务的
+            `[ll-replay:*]` 打印逐字节一致 + 新探针 probe_reset_anchor_timing.py
+            （结论：`_on_reset` 钩子里读到的 `robot.data` 已是**复位后**状态）
+    ⇒ **TODO P2 的 action term 收敛已清空**，P2 只剩 `mdp/__init__.py` 星号导入遮蔽
+      + 遗留未使用 import + 调试可视化重复这几条工程债。
+
 【本 session 的实测结论（都在 DONE_zh.md 第七节，务必读那一节再动手）】
   * 固定命令判据：`scripts/.../eval_fixed_command.py`（`Train/mean_reward` 带命令课程、跨 run 不可比）。
     基线（旧代码 20k）命令 (0,0,0)：err_vel_xy = 0.148 m/s、摔倒 0.133。
@@ -66,7 +78,8 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   + templates/。每次改动**必须**：更新 TODO/DONE 的"更新记录"（加日期）、给新缺陷/特性在
   DEFECT_LOG 里加一条（骨架见 templates/DEFECT_ENTRY_TEMPLATE_zh.md）。
   新增条目：DEF-026（静止伫立）、DEF-027（镜像符号）、DEF-028（扰动加强）、DEF-029（多地形）、
-  DEF-030（遥操 history）、DEF-031（本机跑不了生成地形）。
+  DEF-030（遥操 history）、DEF-031（本机跑不了生成地形）、DEF-032/033（云端 autodl 接力）、
+  DEF-034（本机收尾批）、DEF-035（P2 action term 收敛）。
 
 【命令备忘】
   # 训练（低层主线）
@@ -106,6 +119,9 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   * 课程的 print 要节流：curriculum 在每次 episode reset 都被调用（4096 envs 时 ~4~8 次/env step），
     逐次打印会在 25k 步里刷出几万行（`ramp_command_param` 已按"变化 ≥1% 才打印"节流）。
   * `episode_length_buf == 0` 在复位后的整步内都为真；判"刚复位"要用"相比上一次 tick 变小"。
+  * 想"在复位时做点什么"用基类的 `_on_reset(env_ids)` 钩子（`ActionManager.reset` 会转发）——
+    实测那一刻 `robot.data` **已经是复位后状态**（`write_root_pose_to_sim` 会把 body 缓存
+    timestamp 置 -1）；比旧写法（`apply_actions` 里看 `episode_length_buf == 0`）早一个 env step。
   * 课程只在 **env reset** 时推进；关掉终止/超时做实验时课程不会动。
   * `Metrics/*` 是"复位那一刻"的均值，单点抖动很大；判趋势用 summarize_run 的阶段均值。
   * **关节顺序有三套**：动作序 12 腿(fl,fr,hl,hr)+4 轮；articulation 原生序（四个 hipx → arm1 →

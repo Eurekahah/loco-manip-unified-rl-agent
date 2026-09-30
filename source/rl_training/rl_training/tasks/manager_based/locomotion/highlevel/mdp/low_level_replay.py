@@ -432,12 +432,13 @@ def ll_command_world(action_term) -> torch.Tensor:
 
     所以：
 
-    * 已迁移的 term（``PreTrainedPickAction`` / ``PreTrainedPickWBCAction`` /
-      ``TeleopLLAction``）额外提供 ``ll_command_w``，本函数优先用它；
-    * 尚未迁移的 term（``PreTrainedPolicyAction``，见清单 ⑤ 的 R1 步骤）连 ``ll_command``
-      都没有 —— 这里给出明确报错，而不是让上游抛一个难懂的 AttributeError。
-      （``PreTrainedNavAction`` 已迁移；``VLAPickAction`` 是已废弃的 OpenVLA 分支，
-      2026-09-30 随 `openvla_pick_action.py` 一起删除，见 DEFECT_LOG_zh.md DEF-034。）
+    * 全部高层 term（``PreTrainedNavAction`` / ``PreTrainedPickAction`` /
+      ``PreTrainedPickWBCAction`` / ``TeleopLLAction``）均已继承
+      :class:`LowLevelPolicyActionBase` 并额外提供 ``ll_command_w``，本函数优先用它；
+    * 若某个 term 既没有 ``ll_command_w`` 也没有 ``ll_command``，这里给出明确报错，
+      而不是让上游抛一个难懂的 AttributeError。
+      （``VLAPickAction`` / ``PreTrainedPolicyAction`` 是已废弃的 OpenVLA 时代分支，
+      2026-09-30 随 ``openvla_pick_action.py`` 一起删除，见 DEFECT_LOG_zh.md DEF-034/DEF-035。）
     """
     world = getattr(action_term, "ll_command_w", None)
     if world is not None:
