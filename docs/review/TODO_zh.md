@@ -71,7 +71,12 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
   - **已启动 ②**：`686346b9c6-b16aa8d9`（planner 3090，ssh 10.60.144.11:291）跑
     `Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0`（**多地形，本机跑不了**），
     6.3 s/iter ≈ 35 h，`--run_name cloud_roughslopes20k`，日志 `/root/run_roughslopes.log`。
-  - 待做：① 跑完后 `scp` 回 run（或就地 `summarize_run.py` + `eval_fixed_command.py`）回填 DONE；
+  - **中途验收（iter=10000）已完成并回填**（2026-09-30）：run 目录已 `scp` 回本机
+    （`logs/rsl_rl/history_adaptation/2026-09-30_00-09-25_cloud_soft20k`），
+    固定命令 eval 三档的 err_vel_xy 比同代旧代码好 −4%~−15%、步态"右后腿撇"基本消失；
+    训练期 `root_height_below_minimum` 偏高（加强 push + 15% 站姿样本所致），
+    详见 `DONE_zh.md` 第七节 §5。
+  - 待做：① 20k 跑完后**再复核一次**并定稿（同样 `scp` 回来对比）；
     ② 用 `probe_gait_symmetry.py` 复核云端策略的步态对称性；
     ③ 视情况用第三台（`c71a49a292`）跑 `max_noise_std=1.2` 的 20k 对照（P1-1''）；
     ④ **用完记得关机**（DEF-032 §5）。
