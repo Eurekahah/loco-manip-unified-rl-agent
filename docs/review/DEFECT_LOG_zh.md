@@ -23,10 +23,90 @@
 | 2026-09-30 | 新增 **DEF-035**：剩下 3 个高层 action term（`PreTrainedPickAction` / `PreTrainedPickWBCAction` / `TeleopLLAction`）收进 `LowLevelPolicyActionBase`，删掉各自的 ~200 行重复机械；顺带删除无人注册的 `PreTrainedPolicyAction`（openvla 时代遗留）；新增 `probe_reset_anchor_timing.py` 证明复位钩子读到的是**复位后**状态 | 分支 `codex/ll-train-detail-fix` |
 | 2026-09-30 | 新增 **DEF-036**：EE 锚点对照固化成一条命令（新脚本 `sweep_ee_anchor.py`）+ 修掉 `probe_root_height_termination.py` 里 `--freeze_ee_preset none` 的**语义歧义**（当前 cfg 的默认值已经是 low 锚点 ⇒ 原来的 `none` 与 `low` 完全等价）；实测 4 组对照 `full 7.0% / default 1.8% / low 0.8% / cfg 0.8%` | 分支 `codex/ll-train-detail-fix` |
 | 2026-09-30 | 新增 **DEF-037**：`mdp/__init__.py` 星号导入遮蔽**核实并收口** —— 逐名前查后发现 7 个奖励函数是**故意**覆盖（已写进注释块），`randomize_rigid_body_inertia`/`randomize_com_positions` 根本不构成遮蔽（官方没有这两个名字）；唯一**意外**冲突是地形 cfg 同名（本仓库那份已改名 `MIXED_TERRAINS_CFG`） | 分支 `codex/ll-train-detail-fix` |
+| 2026-09-30 | 新增 **DEF-038**：云端长跑**收割 + 全长 20k 定稿验收** —— `cloud_soft20k` 完整跑完并拉回本机，与同代旧代码 20k 对照：静止漂移 **0.1644→0.1067（−35%）**、三档摔倒率全降、"右后腿撇"消失；同期把 `abl_pushonly_10k`（已完成）与 `cloud_roughslopes20k`（52%）的中途 checkpoint 也拉了回来；附"怎么从本机免密进 autodl 实例"的可复现方法 + 两个读数陷阱 | 分支 `codex/ll-train-detail-fix` |
 
 ---
 
 # 记录（新→旧）
+
+### DEF-038 `2026-09-30` 云端长跑收割（cloud_soft20k 全长 20k 定稿验收 + 其它 run 的中途 checkpoint）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 验收 / 基础设施（**本机只做 eval 与探针，不训练**） |
+| 状态 | 已完成（主线 20k 定稿通过；cap12 / 多地形 / 消融仍在云端跑） |
+| 关联 | `codex/ll-train-detail-fix`；`DONE_zh.md` 第七节 d)；云端 run `cloud_soft20k`、`abl_pushonly_10k`、`cloud_roughslopes20k` |
+
+**1. 云端三台实例的现场（2026-09-30 19:35 CST）**
+
+| 实例 | run | 状态 | 处理 |
+|---|---|---|---|
+| `bbc64d91a6-99f1820e`（ssh 1237，3090） | `cloud_soft20k` | **已跑完 20000/20000**（00:09→19:34 CST） | 全部产物拉回本机；队列脚本自动接上 `cloud_cap12_20k` |
+| `686346b9c6-b16aa8d9`（ssh 291，3090） | `cloud_roughslopes20k` | 进行中 **10528/20000**（≈52%，ETA 17 h） | 拉回 `model_10000/10500.pt` + 两份 yaml（**本机跑不了生成地形，只能存档**） |
+| `686346b9c6-1dcaf819`（无 ssh，走 Jupyter） | `abl_pushonly_10k` → `abl_rewardonly_10k` | pushonly **已跑完 10000/10000**；rewardonly 19:33 刚起跑 | 拉回 pushonly 的 `model_9999.pt` + 事件文件（37.7 MB）+ yaml |
+
+**2. 怎么从本机免密进 autodl 实例（可复现，之前只记了"控制台复制登录命令"）**
+
+本机没有 sshpass / plink / paramiko，也没有免密公钥 ⇒ 用 **OpenSSH 的 askpass** 把密码从
+环境变量喂进去（**密码不落盘**）：
+
+```powershell
+# 1) 一个只 echo 环境变量的 .cmd（放在 gitignore 掉的 logs/smoke/ 下）
+@echo off
+echo %CODEX_SSH_PW%
+# 2) 设三个环境变量后正常用 ssh / scp
+$env:CODEX_SSH_PW='<实例密码>'
+$env:SSH_ASKPASS=(Resolve-Path logs\smoke\_ssh_askpass.cmd).Path
+$env:SSH_ASKPASS_REQUIRE='force'
+ssh -p 1237 -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no root@10.60.144.11 "<只读命令>"
+scp -P 1237 ... root@10.60.144.11:<远端路径> logs/rsl_rl/...
+```
+
+实测：`scp` 拉 190 MB（19 个 model + 82 MB 事件文件）只用 **3.9 s**。
+用完把该 `.cmd` 删掉即可（本次已删）。
+
+**3. 两个读数陷阱（**这次差点判错**，必须记下来）**
+
+* **Jupyter `/api/contents` 的 `last_modified` 是 UTC**（`ls --time-style=full-iso` 是本机时区
+  +0800）。第一次看第三台时把 `11:34`（UTC）当成 11:34 CST ⇒ 误判成"8 小时没动、可能挂了"，
+  实际是 **19:34 CST 刚刚在跑**。⇒ 一律先确认时区，再用迭代号（`grep -c "Learning iteration"`）
+  当进度判据。
+* **一个正在长大的日志，`tail` 不一定是"最新业务进度"**：第一台看 `tail -4` 时拿到了
+  "训练结束/导出"那段（长跑收尾打的），接着 `tail -25` 又拿到了 00:09 的启动 banner，
+  一度让人以为"被重复启动了"。**判"到底跑没跑完"要用计数器**：
+  `grep -ac "Starting the simulation"`（应为 1）、`grep -ao "Learning iteration [0-9]*" | tail -1`
+  （应为 19999）、`ls | grep -c "^model_"`（应为 41）、`tr -dc "\0" | wc -c`（应为 0，排除
+  双进程写同一文件造成的稀疏空洞）。实测四项都正常 ⇒ 结论"完整跑完"。
+
+**4. 拉回来的产物（本机）**
+
+```
+logs/rsl_rl/history_adaptation/2026-09-30_00-09-25_cloud_soft20k/      43 文件 / 303 MB（model_0…model_19999 + 事件文件）
+logs/rsl_rl/history_adaptation/2026-09-30_11-20-59_abl_pushonly_10k/   model_9999.pt + 事件文件 + params
+logs/rsl_rl/history_adaptation/2026-09-30_00-14-44_cloud_roughslopes20k/ model_10000/10500.pt + params（存档，本机跑不了生成地形）
+```
+
+**5. 全长 20k 定稿验收（数字与判定见 `DONE_zh.md` 第七节 d)）**
+
+对照组 = 旧代码 20k 基线 `2026-09-20_00-50-31/model_19999.pt`（同任务 / 同 seed 42 /
+同 4096 envs / 同 20k iter）。固定命令 eval（512 envs / 1100 steps）：
+
+| 命令 | `err_vel_xy` 旧 → 新 | 摔倒率 旧 → 新 | 回报 旧 → 新 |
+|---|---|---|---|
+| (0,0,0) | 0.1644 → **0.1067**（−35%） | 0.0370 → **0.0254** | 28.78 → **36.21**（+26%） |
+| (0.5,0,0) | 0.1620 → **0.1332**（−18%） | 0.0312 → **0.0156** | 48.20 → 50.57 |
+| (1.0,0,0) | 0.1903 → 0.1900（≈0） | 0.0254 → **0.0195** | 47.84 → 48.54 |
+
+步态（`-play-v0` / (1.0,0,0)）：后腿膝 hr/hl **−0.374/−1.331 → −1.489/−1.515**、
+后腿左右不对称 **−5.91 cm → +0.42 cm**、`hl~hr` 镜像 RMS knee **1.114 → 0.374**。
+
+训练期回报低 14% 完全由两块**新增**惩罚解释
+（`stand_still_vel` −0.136 + `stand_still_wheel_vel` −0.036 = −0.172/s ≈ −3.4 ≈ 实测差额 −3.38）；
+训练期 `root_height_below_minimum` 高 15% 由"push ±0.5→±2.0（4×）+ 站姿占比 0.02→0.15"解释。
+
+**6. 新增观察项（未定论）**：**前轮距收窄** —— 旧代码 0.482/0.515（差 3.3 cm） vs 软化版
+0.387/0.468（差 8.1 cm）；10k 时还是 0.459/0.458（几乎相等）⇒ 10k 之后才收窄，且暂无
+稳定性代价（三档摔倒率都更低）。已进 `TODO_zh.md` 作为观察项，下次改 EE 区间/课程时复核。
 
 ### DEF-037 `2026-09-30` P2 工程债：`mdp/__init__.py` 星号导入遮蔽的核实与收口
 

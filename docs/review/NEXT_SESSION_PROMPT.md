@@ -81,6 +81,22 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   * 已开两条长跑（4096 envs / seed 42 / 20k iter，**结果待回填 DONE 第七节**）：
     `bbc64d91a6-99f1820e`（ssh 端口 1237）跑 History 主线 `--run_name cloud_soft20k`；
     `686346b9c6-b16aa8d9`（端口 291）跑 Rough-Slopes 多地形 `--run_name cloud_roughslopes20k`。
+  * **2026-09-30 19:35 CST 的收割结果（DEF-038）**：
+    `cloud_soft20k` **已跑完 20000/20000**（00:09→19:34），43 文件/303 MB 已拉回本机
+    `logs/rsl_rl/history_adaptation/2026-09-30_00-09-25_cloud_soft20k/`；同实例队列自动接上
+    `cloud_cap12_20k`（验 P1-1''）。多地形那条 `10528/20000`（≈52%，ETA ~17 h），
+    中途 `model_10000/10500.pt` 已拉回存档（**本机跑不了生成地形 ⇒ 只能存档**）。
+    第三台（无 ssh，走 Jupyter）`abl_pushonly_10k` **已跑完**（`model_9999.pt` 已拉回），
+    `abl_rewardonly_10k` 19:33 刚起跑。
+  * **从本机免密 ssh/scp 进 autodl 的可用方法**（本机没有 sshpass/plink/paramiko，也没配公钥）：
+    用 OpenSSH askpass 把密码从环境变量喂进去（密码不落盘）——
+    `$env:CODEX_SSH_PW='<密码>'; $env:SSH_ASKPASS=<一个只 echo %CODEX_SSH_PW% 的 .cmd>; $env:SSH_ASKPASS_REQUIRE='force';`
+    之后正常 `ssh -p <port> -o PreferredAuthentications=password -o PubkeyAuthentication=no ...` /
+    `scp -P <port> ...`。实测拉 190 MB 只要 3.9 s。**用完把那个 .cmd 删掉。**
+  * **读数陷阱**：Jupyter `/api/contents` 的 `last_modified` 是 **UTC**（`ls --time-style=full-iso` 才是本机时区）；
+    判"跑没跑完"别用 `tail`（正在长大的日志 tail 可能拿到启动 banner），要用
+    `grep -ac "Starting the simulation"`=1 + `grep -ao "Learning iteration [0-9]*" | tail -1`=19999
+    + `ls | grep -c "^model_"`=41 + `tr -dc "\0" | wc -c`=0。
   * 纪律：不超过 4 台；**用完关机**；跑完把 run 拿回来（`scp`）或就地分析。
 
 【文档约定】docs/review/ 只保留 TODO_zh.md / DONE_zh.md / DEFECT_LOG_zh.md / NEXT_SESSION_PROMPT.md
@@ -89,7 +105,7 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   新增条目：DEF-026（静止伫立）、DEF-027（镜像符号）、DEF-028（扰动加强）、DEF-029（多地形）、
   DEF-030（遥操 history）、DEF-031（本机跑不了生成地形）、DEF-032/033（云端 autodl 接力）、
   DEF-034（本机收尾批）、DEF-035（P2 action term 收敛）、DEF-036（P3 EE 锚点一键化）、
-  DEF-037（星号导入遮蔽核实与收口）。
+  DEF-037（星号导入遮蔽核实与收口）、DEF-038（云端收割 + 全长 20k 定稿）。
 
 【命令备忘】
   # 训练（低层主线）
