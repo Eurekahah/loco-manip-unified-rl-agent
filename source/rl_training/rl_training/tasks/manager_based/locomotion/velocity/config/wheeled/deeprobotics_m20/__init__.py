@@ -164,6 +164,29 @@ gym.register(
     },
 )
 
+# ── 消融实验专用（2026-09-30）────────────────────────────────────────────────
+# 只用于拆"加强扰动 / 静止惩罚 / 镜像符号"三项改动的贡献（见 flat_env_wbc_cfg.py 的
+# _apply_ablation 注释与 docs/review/DONE_zh.md 第七节 §5）。**不要当日常配置用。**
+gym.register(
+    id="History-Ablation-PushOnly-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:AblPushOnlyEnvWBCConfig",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="History-Ablation-RewardOnly-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:AblRewardOnlyEnvWBCConfig",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationPPORunnerCfg",
+    },
+)
+
 # 多地形（随机粗糙 0.01~0.05 + 正/反斜坡 + 平地）—— 需求 3（2026-09-29）
 gym.register(
     id="Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0",

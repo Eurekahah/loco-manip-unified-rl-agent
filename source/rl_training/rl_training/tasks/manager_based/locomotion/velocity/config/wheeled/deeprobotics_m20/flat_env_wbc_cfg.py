@@ -831,6 +831,78 @@ class RoughWOStairsEnvWBCConfig_PLAY(RoughWOStairsEnvWBCConfig):
 
 
 # ============================================================================
+# 消融（ablation）：把"加强扰动 / 静止伫立惩罚 / 镜像符号修正"三项改动**单独**打开，
+# 用于判断各自的贡献（2026-09-30 加，配合云端 2×2 对照实验）。
+# ----------------------------------------------------------------------------
+# 背景：完整包（DEFECT_LOG_zh.md DEF-026~028）在 10000 iter 的中途验收里
+# "静止漂移 / 步态对称"都变好了，但**训练期**的 `root_height_below_minimum`
+# 从旧代码的 0.088 涨到 0.28（DEF-026 §4 / DONE 第七节 §5）。要拆开归因，需要两条对照：
+#   A) PushOnly   = 只加强扰动（奖励与镜像都回"旧行为"）
+#   B) RewardOnly = 只改奖励（静止惩罚 + 镜像修正），扰动保持旧值
+# 加上已有的"旧代码 @10k"（`2026-09-20_00-50-31/model_10000.pt`）与
+# "完整包 @10k"（`2026-09-30_00-09-25_cloud_soft20k/model_10000.pt`），
+# 正好凑成 {旧/新 扰动} × {旧/新 奖励} 的 **2×2**，且四条都在 10000 iter / 4096 envs /
+# seed 42 上，可直接用 `eval_fixed_command.py` + `summarize_run.py` 对比。
+# ⚠️ 这两条**只是消融实验**，不要当成"可选配置"日常使用；正式配置 = 三项全开。
+# ============================================================================
+
+
+def _apply_ablation(self, *, new_stand_still: bool, new_mirror: bool, new_push: bool) -> None:
+    """按开关把对应改动**退回旧行为**（幂等；默认三项全开时不改动任何东西）。"""
+    if not new_stand_still:
+        # 静止伫立专项：两项惩罚 + 三条课程全部撤掉，站姿占比回 0.02（= 旧口径）
+        self.rewards.stand_still_vel = None
+        self.rewards.stand_still_wheel_vel = None
+        self.curriculum.stand_still_vel_ramp = None
+        self.curriculum.stand_still_wheel_vel_ramp = None
+        self.curriculum.standing_env_ratio_ramp = None
+        self.commands.base_velocity.rel_standing_envs = 0.02
+    if not new_mirror:
+        # 镜像惩罚退回旧实现：无符号约定的 `joint_mirror`，只留对角 2 对、权重 −0.03
+        self.rewards.joint_mirror.func = mdp.joint_mirror
+        self.rewards.joint_mirror.weight = -0.03
+        self.rewards.joint_mirror.params["mirror_joints"] = [
+            ["fl_(hipx|hipy|knee).*", "hr_(hipx|hipy|knee).*"],
+            ["fr_(hipx|hipy|knee).*", "hl_(hipx|hipy|knee).*"],
+        ]
+        self.rewards.joint_mirror.params.pop("mirror_signs", None)
+    if not new_push:
+        # 扰动退回旧口径：每 10~15 s、±0.5/±0.5 m/s、无 yaw；课程也回到 30%→100% / 25k 步
+        legacy = {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}
+        self.events.randomize_push_robot.interval_range_s = (10.0, 15.0)
+        self.events.randomize_push_robot.params["velocity_range"] = dict(legacy)
+        ramp = getattr(self.curriculum, "disturbance_ramp", None)
+        if ramp is not None:
+            ramp.params["num_steps"] = 25_000
+            ramp.params["start_scale"] = 0.3
+            for item in ramp.params["spec"]:
+                if item["term"] == "randomize_push_robot":
+                    item["base"] = dict(legacy)
+
+
+@configclass
+class AblPushOnlyEnvWBCConfig(FlatEnvWBCConfig):
+    """消融 A：只加强扰动（静止惩罚与镜像符号都回旧行为）。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_ablation(self, new_stand_still=False, new_mirror=False, new_push=True)
+        if self.__class__.__name__ == "AblPushOnlyEnvWBCConfig":
+            self.disable_zero_weight_rewards()
+
+
+@configclass
+class AblRewardOnlyEnvWBCConfig(FlatEnvWBCConfig):
+    """消融 B：只改奖励（静止惩罚 + 镜像符号修正），扰动保持旧值。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_ablation(self, new_stand_still=True, new_mirror=True, new_push=False)
+        if self.__class__.__name__ == "AblRewardOnlyEnvWBCConfig":
+            self.disable_zero_weight_rewards()
+
+
+# ============================================================================
 # 多地形（随机粗糙 + 正/反斜坡 + 平地）—— 需求 3，2026-09-29 新增
 # ----------------------------------------------------------------------------
 # 直接对标已有的两个多地形任务：
