@@ -23,6 +23,7 @@
 | 2026-09-30 | **本机收尾批（DEF-034）**：回归矩阵脚本化（P1-4/P3 完成，11 OK / 1 SKIP / 0 FAIL）+ known_issues ⑧⑩⑪⑫⑱ + 三处工程债；11 条能跑的任务全部 EXIT=0 | `codex/ll-train-detail-fix` |
 | 2026-09-30 | 第二批（按用户答复）：**cusrl 全删**（9 处注册字段 + setup 依赖）、**视觉编码器本地权重优先/默认不联网**（新增 `RL_TRAINING_ENCODER_DIR` / `RL_TRAINING_ALLOW_ENCODER_DOWNLOAD`）、**openvla 分支删除**（含 cfg）、**vr_extented 模块级 print 改成调试图**；sim2sim 因"已在另一个仓库实现"**移出待办**；P2 action term 收敛成一条带做法的待办 | `codex/ll-train-detail-fix` |
 | 2026-09-30 | **P2 action term 收敛完成（DEF-035）**：`PreTrainedPickAction` / `PreTrainedPickWBCAction` / `TeleopLLAction` 全部继承 `LowLevelPolicyActionBase`（共减 ~600 行重复机械）+ 删除无人注册的 `PreTrainedPolicyAction` + 新增复位时机探针；回归 11 OK / 1 SKIP / 0 FAIL、低层布局打印逐字节一致 | `codex/ll-train-detail-fix` |
+| 2026-09-30 | **P3 EE 锚点一键化完成（DEF-036）**：新脚本 `sweep_ee_anchor.py`（4 组 `full/default/low/cfg` 逐组子进程 + Markdown 对比表 + 汇总 JSON）+ 修掉 `probe_root_height_termination.py` 里 `--freeze_ee_preset none` 的语义歧义（当前 cfg 默认已经是 low 锚点，故原 `none ≡ low`）；实测 `full 7.0% / default 1.8% / low 0.8% / cfg 0.8%` | `codex/ll-train-detail-fix` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -229,8 +230,12 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
 - [x] **回归矩阵脚本化** → **2026-09-30 完成**（DEF-034 §1/§6）：
   `scripts/reinforcement_learning/rsl_rl/smoke_regression.py`，13 任务实测
   **11 OK / 1 SKIP（生成地形，本机，DEF-031）/ 0 FAIL**；带卡死检测、Markdown 汇总、
-  FAIL 才非零退出。**仍待办**：把高层四条的低层 checkpoint 路径
-  （`RL_TRAINING_LOW_LEVEL_POLICY_*`）做成脚本参数透传（现在走各自 cfg 默认值）。
+  FAIL 才非零退出。**透传也补齐（2026-09-30，DEF-036 §5）**：新增 `--env KEY=VALUE`
+  （注入环境变量，高层四条的低层 checkpoint 路径 `RL_TRAINING_LOW_LEVEL_POLICY_*` 走这个）
+  和 `--hydra OVERRIDE`（透传 hydra 覆盖项），可重复；实测
+  `--env RL_TRAINING_LOW_LEVEL_POLICY_TELEOP_HISTORY=does/not/exist_policy.pt`
+  时子进程日志里出现该路径并抛 `FileNotFoundError`（证明真的透传到了子进程），
+  且脚本按预期 FAIL 非零退出。
   （矩阵本身 2026-09-20 曾手工整跑一遍：8/8 EXIT=0，见 `DONE_zh.md` 第六节）
   - 低层（main 已有）：`History-Adaptation-Deeprobotics-M20-v0`、
     `Flat-Deeprobotics-M20-Piper-WBC-v0`、`Flat-Deeprobotics-M20-Piper-v0`、
@@ -252,16 +257,15 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
 - [x] ~~sim2sim(MuJoCo) 落地~~ → **不做**（2026-09-30 用户确认：sim2sim 已经在**另一个
   仓库**里实现了；本仓库只保留 DEF-021 的"接口契约 + 部署态导出 + 探针"，不再自己搭 MuJoCo 脚本）。
 
-- [ ] **把"EE 锚点 4 组对照"固化成一键脚本**
-  - **"EE 锚点"是什么**：训练早期（课程 s0）把机械臂的目标位姿**锁死在一个固定点**上，
-    让机械臂先别动、底盘专心学平衡，之后再逐步放开到完整工作空间（课程 s1→s3）。
-    这个"锁死的固定点"就叫锚点。仓库里有 3 种候选锚点：
-    `none`（不锁，= 无课程）/ `default`（锁在**默认姿态**，即机械臂举起）/ `low`（锁在
-    工作空间中心的**低位**前伸位姿）。DEF-006 实测过 20 s 内 `root_z<0.30` 的触发率：
-    none **25.8%** / default **55.5%**（更差！因为举臂抬高重心）/ low **1.0%** ⇒ 所以最终
-    选了 `low`。探针：`probe_root_height_termination.py --freeze_ee_preset {none,default,low}`。
-  - 要做的：把这几组对照（512 envs × 20 s ≈ 2.5 min/组）收成一个脚本，一次跑完并输出对比表，
-    以后改 EE 区间/锚点前先跑一遍。
+- [x] **把"EE 锚点 4 组对照"固化成一键脚本**
+      → **2026-09-30 完成（DEF-036）**：新脚本
+      `scripts/reinforcement_learning/rsl_rl/sweep_ee_anchor.py`（默认 4 组
+      `full/default/low/cfg`，逐组独立 Isaac 子进程 + Markdown 对比表 + 汇总 JSON，
+      FAIL 非零退出）；同时修掉旧探针 `--freeze_ee_preset none` 的语义歧义
+      （当前 cfg 的默认 EE 区间**已经是 low 锚点**，所以原来的 `none ≡ low`），
+      并补 `full`（= 课程 s3 全分布，才是真正的"无课程"）与 `--json_out`。
+      实测：`full 7.0% / default 1.8% / low 0.8% / cfg 0.8%`（20k 策略，512 envs × 20 s）⇒
+      排序与 DEF-006 一致、`cfg≡low` 得到机器验证。（详见 `DEFECT_LOG_zh.md` DEF-036。）
 
 - [x] **文档收尾**（2026-09-20 完成）
   - [x] 合并高层分支时删掉它们带来的旧 `docs/review/*.md`（`30d5411`、`0772757`）：

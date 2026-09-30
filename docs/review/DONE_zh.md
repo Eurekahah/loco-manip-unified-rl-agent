@@ -17,6 +17,7 @@
 | 2026-09-29 | 新增第七节 **训练细节专项**（分支 `codex/ll-train-detail-fix`）：静止伫立（DEF-026）、镜像符号（DEF-027）、扰动加强（DEF-028）、多地形任务（DEF-029）、遥操 history 任务（DEF-030）；另记录本机跑不了生成地形任务的平台问题（DEF-031） | `codex/ll-train-detail-fix` |
 | 2026-09-30 | 新增第八节 **本机收尾批**：回归矩阵脚本化（13 任务 11 OK / 1 SKIP / 0 FAIL）+ known_issues ⑧⑩⑪⑫⑱ + 三处工程债（DEF-034） | `codex/ll-train-detail-fix` |
 | 2026-09-30 | 新增第九节 **P2：高层 action term 收敛**：3 个 action term 继承 `LowLevelPolicyActionBase`（减 ~600 行重复机械）+ 删 `PreTrainedPolicyAction` + 复位时机探针（DEF-035） | `codex/ll-train-detail-fix` |
+| 2026-09-30 | 新增第十节 **P3：EE 锚点对照一键化**：新脚本 `sweep_ee_anchor.py`（4 组 `full/default/low/cfg`，逐组子进程 + 对比表 + 汇总 JSON）+ 修掉旧探针 `none ≡ low` 的语义歧义（DEF-036） | `codex/ll-train-detail-fix` |
 
 ---
 
@@ -245,6 +246,33 @@ run `logs/rsl_rl/history_adaptation/2026-09-30_00-09-25_cloud_soft20k`（就是 
 > 唯一的（有利的）行为差异：Pick/WBC 的"重锚 EE 目标"从复位后**第 2 个 env step**
 > 提前到**第 1 个**（旧实现在 `apply_actions` 用 `episode_length_buf == 0` 检测，晚一步），
 > 语义更贴合"把目标锚在 episode 起点的位姿"。
+
+---
+
+## 十、P3：EE 锚点对照一键化（2026-09-30，分支 `codex/ll-train-detail-fix`）
+
+**"EE 锚点"是什么**：训练早期（课程 s0）把机械臂的目标位姿**锁死在一个固定点**上，让机械臂先
+别乱动、底盘专心学平衡，之后再逐步放开到完整工作空间（课程 s1→s3）。这个"锁死的固定点"就是
+锚点。来龙去脉见 `DEFECT_LOG_zh.md` **DEF-036**。
+
+| 项 | 内容 | 验收 |
+|---|---|---|
+| **一键脚本** | 新增 `scripts/reinforcement_learning/rsl_rl/sweep_ee_anchor.py`：默认 4 组锚点（`full` = 课程 s3 全分布 / `default` = 举臂 / `low` = 低位前伸 / `cfg` = 不改 cfg），逐组起**独立 Isaac 子进程**（一个进程只能建一个 env）、收 JSON、打 Markdown 对比表 + 汇总 JSON，任一失败即非零退出 | 4/4 OK（EXIT=0），汇总 `logs/smoke/2026-09-30_15-33-06_ee_anchor_sweep.json` |
+| **修掉语义歧义** | 旧探针 `probe_root_height_termination.py --freeze_ee_preset none` 的 "none = 不改 cfg" 在当前代码里**就是 low 锚点**（`FlatEnvWBCConfig.__post_init__` 已把 `p_l` 锁成 0.41）⇒ 原来 `none` 与 `low` 必然逐位相同；现补 `full`（真正的"无课程"）+ 默认值改 `cfg` + 加 `ranges:`/`--json_out` 打印 | `cfg` 与 `low` 两组**逐位相同** ⇒ 机器验证"cfg 默认 == low 锚点" |
+| **回归脚本透传** | `smoke_regression.py` 新增 `--env KEY=VALUE`（高层四条换低层 checkpoint 用 `RL_TRAINING_LOW_LEVEL_POLICY_*`）与 `--hydra OVERRIDE`，都可重复 | 负向用例（注入不存在的 path）子进程日志里出现该 path + `FileNotFoundError`、脚本 FAIL 且 EXIT=1；正向用例 2/2 OK |
+
+实测（本机，`512 envs × 1000 steps` = 20 s 窗口，策略 = 旧 20k 部署态）：
+
+| 锚点 | 说明 | root_z p05 (m) | height_error 均值 (m) | 20 s 内 `root_z<0.30` | 倾角>45.8° |
+|---|---|---|---|---|---|
+| `full` | 全任务分布（= 无课程） | 0.3582 | +0.0159 | **7.0%** | 0.0% |
+| `default` | 锁默认姿态（举臂） | 0.3615 | +0.0124 | **1.8%** | 0.0% |
+| `low` | 锁低位前伸 | 0.3607 | +0.0114 | **0.8%** | 0.2% |
+| `cfg` | 不改 cfg（= 当前默认） | 0.3607 | +0.0114 | **0.8%** | 0.2% |
+
+⇒ 排序与 DEF-006 一致（`full` > `default` > `low`），**课程继续用 `low` 锚点是对的**。
+绝对值比 DEF-006 低一大截是因为这次用的是**已训好的 20k 策略**（DEF-006 是 2026-09-19 的早期策略）
+⇒ 两组数字不可横向比较，只能比组内排序。
 
 ---
 

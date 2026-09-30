@@ -81,6 +81,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--log-dir", default=os.path.join(REPO_ROOT, "logs", "smoke"))
     p.add_argument("--out", default=None, help="把汇总 Markdown 写到这里（同时打印）")
     p.add_argument("--tag", default=None, help="日志文件名前缀（默认当天日期）")
+    p.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="给所有子进程额外注入的环境变量，可重复。例："
+        "--env RL_TRAINING_LOW_LEVEL_POLICY_WBC=D:/x/policy.pt（高层四条的低层 checkpoint 路径）",
+    )
+    p.add_argument(
+        "--hydra",
+        action="append",
+        default=[],
+        metavar="OVERRIDE",
+        help="透传给 train.py 的 hydra 覆盖项，可重复。例："
+        "--hydra env.actions.pre_trained_pick_action.policy_path=D:/x/policy.pt",
+    )
     return p.parse_args()
 
 
@@ -97,6 +113,13 @@ def run_one(task: str, args: argparse.Namespace, tag: str) -> dict:
     ]
     env = dict(os.environ)
     env.setdefault("PYTHONIOENCODING", "utf-8")
+    for item in args.env:
+        if "=" not in item:
+            raise SystemExit(f"[smoke] --env 需要 KEY=VALUE 形式，收到 {item!r}")
+        key, value = item.split("=", 1)
+        env[key] = value
+    if args.hydra:
+        cmd += list(args.hydra)
     # 每条任务一个进程组，方便卡死时整组杀掉（Isaac 会再起 kit 子进程）
     popen_kwargs: dict = {}
     if os.name == "nt":

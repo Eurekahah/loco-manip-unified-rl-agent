@@ -21,10 +21,107 @@
 | 2026-09-22 | 回填 **DEF-024 §4**：P1-1 A/B 实测收尾（cap=1.2 通过、**建议作为默认**；`entropy_coef=0.002` 通过但略逊；意外点 `entropy_coef=0` 反而 +15% s3 摔倒）+ **统一窗口口径修正** | 本次（docs-only） |
 | 2026-09-29 | 新增 DEF-026~DEF-031：静止伫立专项（零速漂移 + 站姿占比课程）、`joint_mirror` 镜像符号 bug（"右后腿往右前方撇"的根因）、扰动加强 + 课程拉长、多地形任务（粗糙 0.01~0.05 + 正反斜坡 + 平地）、遥操 history 任务、以及**本机跑不了生成地形任务**的平台问题 | 分支 `codex/ll-train-detail-fix` |
 | 2026-09-30 | 新增 **DEF-035**：剩下 3 个高层 action term（`PreTrainedPickAction` / `PreTrainedPickWBCAction` / `TeleopLLAction`）收进 `LowLevelPolicyActionBase`，删掉各自的 ~200 行重复机械；顺带删除无人注册的 `PreTrainedPolicyAction`（openvla 时代遗留）；新增 `probe_reset_anchor_timing.py` 证明复位钩子读到的是**复位后**状态 | 分支 `codex/ll-train-detail-fix` |
+| 2026-09-30 | 新增 **DEF-036**：EE 锚点对照固化成一条命令（新脚本 `sweep_ee_anchor.py`）+ 修掉 `probe_root_height_termination.py` 里 `--freeze_ee_preset none` 的**语义歧义**（当前 cfg 的默认值已经是 low 锚点 ⇒ 原来的 `none` 与 `low` 完全等价）；实测 4 组对照 `full 7.0% / default 1.8% / low 0.8% / cfg 0.8%` | 分支 `codex/ll-train-detail-fix` |
 
 ---
 
 # 记录（新→旧）
+
+### DEF-036 `2026-09-30` P3：EE 锚点对照一键化（+ 修掉 `none` 预设的语义歧义）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 工具 / 探针缺陷（**不需要训练**，本机可验证） |
+| 状态 | 已完成并实测（4 组全 OK，EXIT=0） |
+| 关联 | `codex/ll-train-detail-fix`；新脚本 `scripts/reinforcement_learning/rsl_rl/sweep_ee_anchor.py`；改 `probe_root_height_termination.py`；`TODO_zh.md` P3 |
+
+**1. 现象（两件事）**
+
+① TODO P3 要求把"EE 锚点对照"从"每次手敲 3 条命令 + 人眼对数字"变成一条命令 —— 而且
+一个进程只能建一个 Isaac env（同进程反复 `gym.make` 会踩 PhysX/kit 全局状态），所以只能编排
+子进程，手敲很容易漏组、也不留汇总。
+
+② 照抄旧写法跑 3 组时会得到一个**可疑结论**：`none` 与 `low` 的数字逐位相同
+（`root_z p05 / height_err / 触发率` 全等）——先怀疑探针坏了。
+
+**2. 根因（②）**
+
+`--freeze_ee_preset` 的实现是"就地改 `env_cfg.commands.ee_pose.ranges`"，
+而 `none` 的语义是"**不改 cfg**"。问题是**当前代码**的
+`FlatEnvWBCConfig.__post_init__` 已经把 EE 区间锁成**低位锚点**
+（`p_l=(0.41,0.41)`、`p_pitch=(-0.08,-0.08)`、`p_yaw/o_*=(0,0)`，见
+`flat_env_wbc_cfg.py:532-537`）⇒ `none` 与 `low` **本来就是同一组**，
+逐位相同是正确结果，不是探针坏了。
+（DEF-006 那次对照（none 25.8% / default 55.5% / low 1.0%）是在 cfg 默认还是"全范围"的年代做的，
+所以当时的 `none` 真的等于"无课程"。）
+
+**3. 修正**
+
+* `probe_root_height_termination.py` 的 `--freeze_ee_preset` 改成
+  `{cfg, none, default, low, full}`：
+  - `cfg`（新，也是默认值）= 不改 cfg；`none` 保留为 `cfg` 的**别名**（兼容旧命令）；
+  - **`full`（新）**= 课程 s3 的完整任务分布（`p_l(0.30,0.52)`、`p_pitch(-π/4,π/5)`、
+    `p_yaw(±2π/5)`、`o_roll/pitch(±π/8)`、`o_yaw(±π)`）——**这才是"无课程"那一组**；
+  - `default` / `low` 不变。
+* 加两行"锚点到底锁没锁上"的打印：建环境后打 `ranges:`，rollout 后打
+  `ee_pose.command` 前 3 维的 min/max/std（并注明**这个 command term 的输出会随机身姿态
+  变化，锚点生效时也不是常数**，判断生效与否要看 `ranges:`）；
+* 新增 `--json_out`，把关键指标落成 JSON（给汇总脚本读）。
+* 新增 `sweep_ee_anchor.py`：逐组起子进程（组内独立 Isaac 进程）、收 JSON、
+  打 Markdown 对比表 + 落汇总 JSON；任一 EXIT≠0 / 超时 → 判 FAIL 并**非零退出**；
+  默认 4 组 `full,default,low,cfg`。
+
+**5. 顺带补齐（同一批）：回归脚本的低层 checkpoint 路径透传**
+
+TODO P3 的"回归矩阵"条目还挂着一条"高层四条要能透传
+`RL_TRAINING_LOW_LEVEL_POLICY_*`"。给 `smoke_regression.py` 加两个可重复参数：
+
+* `--env KEY=VALUE` —— 给所有子进程注入环境变量（高层四条换低层 checkpoint 走这个）；
+* `--hydra OVERRIDE` —— 把 hydra 覆盖项透传给 `train.py`。
+
+实测（负向用例，故意给一个不存在的路径）：
+
+```
+python scripts/.../smoke_regression.py --tasks Isaac-M20-Piper-Teleop-History-v0 \
+  --num_envs 8 --max_iterations 1 --tag 2026-09-30_p3env_neg \
+  --env RL_TRAINING_LOW_LEVEL_POLICY_TELEOP_HISTORY=does/not/exist_policy.pt
+```
+
+子进程日志：
+
+```
+[ll-replay] 低层 checkpoint 路径被环境变量 RL_TRAINING_LOW_LEVEL_POLICY_TELEOP_HISTORY 覆盖: does/not/exist_policy.pt
+FileNotFoundError: [TeleopLLAction] 低层 policy 文件不存在：'does/not/exist_policy.pt'
+```
+
+⇒ 注入确实到达子进程；脚本判 FAIL 且 EXIT=1（符合"FAIL 才非零退出"）。正向用例
+（`--env ...=<真实 policy>` + `--hydra env.actions.pre_trained_pick_action.low_level_decimation=4`）
+2/2 OK。
+
+**4. 实测（本机，2026-09-30；`512 envs × 1000 steps` = 20 s 窗口；策略 = 旧 20k 部署态）**
+
+```
+python scripts/reinforcement_learning/rsl_rl/sweep_ee_anchor.py \
+  --task History-Adaptation-Deeprobotics-M20-v0 \
+  --policy logs/rsl_rl/history_adaptation/2026-09-20_00-50-31/exported_deploy/policy.pt \
+  --num_envs 512 --steps 1000
+```
+
+| 锚点 | 说明 | root_z p05 (m) | height_error 均值 (m) | 20 s 内 `root_z<0.30` | 倾角>45.8° |
+|---|---|---|---|---|---|
+| `full` | 全任务分布（= 无课程） | 0.3582 | +0.0159 | **7.0%** | 0.0% |
+| `default` | 锁默认姿态（举臂） | 0.3615 | +0.0124 | **1.8%** | 0.0% |
+| `low` | 锁低位前伸 | 0.3607 | +0.0114 | **0.8%** | 0.2% |
+| `cfg` | 不改 cfg（= 当前默认） | 0.3607 | +0.0114 | **0.8%** | 0.2% |
+
+**结论**：
+
+* 排序与 DEF-006 一致（`full` 最差 > `default` > `low`），**低层课程继续用 `low` 锚点是对的**；
+  这次全组的绝对值都比 DEF-006 低一大截，因为用的是**已经训好的 20k 策略**（DEF-006 是
+  2026-09-19 那版早期策略）⇒ 这两组数字**不能横向比**，只能比"组内排序"。
+* `cfg` 与 `low` **逐位相同** ⇒ 机器验证了"当前 cfg 的默认 EE 区间就是 low 锚点"。
+* 汇总 JSON：`logs/smoke/2026-09-30_15-33-06_ee_anchor_sweep.json`；
+  每组日志 `logs/smoke/2026-09-30_15-33-06_ee_anchor_{full,default,low,cfg}.log`。
 
 ### DEF-035 `2026-09-30` P2：3 个高层 action term 收进 `LowLevelPolicyActionBase`（用户要求"尽量一个基类"）
 

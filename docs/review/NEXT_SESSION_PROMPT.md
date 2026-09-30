@@ -35,6 +35,11 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
             （结论：`_on_reset` 钩子里读到的 `robot.data` 已是**复位后**状态）
     ⇒ **TODO P2 的 action term 收敛已清空**，P2 只剩 `mdp/__init__.py` 星号导入遮蔽
       + 遗留未使用 import + 调试可视化重复这几条工程债。
+    DEF-036 **P3 完成**：EE 锚点对照一键化 —— 新脚本 `sweep_ee_anchor.py`
+            （4 组 full/default/low/cfg，逐组独立 Isaac 子进程 + 对比表 + 汇总 JSON）；
+            顺带修掉旧探针 `--freeze_ee_preset none` 的语义歧义（当前 cfg 默认 == low 锚点
+            ⇒ 原 `none ≡ low`），并补 `full` 组与 `--json_out`。
+            实测 4 组：full 7.0% / default 1.8% / low 0.8% / cfg 0.8%（20k 策略，512 envs × 20 s）。
 
 【本 session 的实测结论（都在 DONE_zh.md 第七节，务必读那一节再动手）】
   * 固定命令判据：`scripts/.../eval_fixed_command.py`（`Train/mean_reward` 带命令课程、跨 run 不可比）。
@@ -79,7 +84,7 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   DEFECT_LOG 里加一条（骨架见 templates/DEFECT_ENTRY_TEMPLATE_zh.md）。
   新增条目：DEF-026（静止伫立）、DEF-027（镜像符号）、DEF-028（扰动加强）、DEF-029（多地形）、
   DEF-030（遥操 history）、DEF-031（本机跑不了生成地形）、DEF-032/033（云端 autodl 接力）、
-  DEF-034（本机收尾批）、DEF-035（P2 action term 收敛）。
+  DEF-034（本机收尾批）、DEF-035（P2 action term 收敛）、DEF-036（P3 EE 锚点一键化）。
 
 【命令备忘】
   # 训练（低层主线）
@@ -95,12 +100,19 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   python scripts/reinforcement_learning/rsl_rl/probe_gait_symmetry.py \
       --headless --num_envs 256 --steps 600 --warmup 150 --commands "1.0,0,0" \
       --checkpoint <run>/model_1000.pt --label <tag> --out logs/smoke/gait_<tag>.json
+  # EE 锚点 4 组对照（full/default/low/cfg；每组一个独立 Isaac 进程，512 envs × 1000 steps ≈ 3~4 min/组）
+  python scripts/reinforcement_learning/rsl_rl/sweep_ee_anchor.py \
+      --task History-Adaptation-Deeprobotics-M20-v0 \
+      --policy <run>/exported_deploy/policy.pt --num_envs 512 --steps 1000
   # 训练曲线分析（不启动 Isaac；走 <run>/.summary_cache.npz，很快）
   python scripts/reinforcement_learning/rsl_rl/summarize_run.py --run <runA> --baseline <runB> \
       --tags Train/mean_reward --tags Episode_Termination/bad_orientation_2
   # ⚠️ summarize_run 对"短 run vs 长 run"会 hold-last 对齐，两个 run 长度差很多时别用它下结论
   # 冒烟回归（每个改动都要跑；退出码用 `cmd *> log; $LASTEXITCODE`）
   python scripts/reinforcement_learning/rsl_rl/train.py --task <task> --headless --num_envs 64 --max_iterations 2
+  # 冒烟回归矩阵（一次跑全套 + 卡死判 SKIP；--env / --hydra 可透传给子进程，用来换低层 checkpoint）
+  python scripts/reinforcement_learning/rsl_rl/smoke_regression.py --num_envs 64 --max_iterations 2 \
+      [--env RL_TRAINING_LOW_LEVEL_POLICY_WBC=<policy.pt>] [--hydra env.actions.x.y=z]
   # 导出部署态策略（默认写 <run>/exported_deploy/：policy.pt + policy.onnx + policy_layout.json）
   python scripts/reinforcement_learning/rsl_rl/export_deploy_policy.py --run <run> --checkpoint model_19999.pt
 

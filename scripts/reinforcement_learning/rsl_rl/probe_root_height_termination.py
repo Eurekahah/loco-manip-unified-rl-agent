@@ -49,9 +49,14 @@ parser.add_argument("--keep_push", action="store_true", default=False,
 parser.add_argument("--action_noise_std", type=float, default=0.0,
                     help="给策略输出加高斯噪声（训练时 rsl_rl 用 noise_std≈1.0 采样动作；"
                          "0 = 确定性推理）")
-parser.add_argument("--freeze_ee_preset", type=str, default="none", choices=("none", "default", "low"),
-                    help="把 EE 目标锁死：none=按任务采样；default=默认（举起）位姿；"
-                         "low=低位锚点（任务工作空间中心）。用来量机械臂对高度终止的贡献")
+parser.add_argument("--freeze_ee_preset", type=str, default="cfg", choices=("cfg", "none", "default", "low", "full"),
+                    help="EE 目标怎么取：cfg/none=不改 cfg（当前代码里 `FlatEnvWBCConfig.__post_init__` 已经把"
+                         "p_l 锁成低位锚点 ⇒ 等价于 low，列出来是为了验证这一点）；"
+                         "full=课程 s3 的完整任务分布（= 无课程）；"
+                         "default=锁默认（举起）位姿；low=锁低位锚点（任务工作空间中心）。"
+                         "用来量机械臂目标对高度终止的贡献")
+parser.add_argument("--json_out", type=str, default=None,
+                    help="把关键指标落成 JSON（给 sweep_ee_anchor.py 汇总用）")
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -121,21 +126,34 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     env_cfg.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.0)
     env_cfg.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
     env_cfg.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
-    if args_cli.freeze_ee_preset != "none":
+    preset = "cfg" if args_cli.freeze_ee_preset == "none" else args_cli.freeze_ee_preset
+    if preset != "cfg":
         same = lambda v: (v, v)  # noqa: E731
-        if args_cli.freeze_ee_preset == "default":
+        if preset == "full":
+            # 课程 s3 的完整任务分布（= `DeeproboticsM20CommandsCfg.ee_pose` 的原分布，
+            # 见 flat_env_wbc_cfg.py 的 ee_goal_stages 第三段）—— 这才是"无课程"那一组。
+            env_cfg.commands.ee_pose.ranges.p_l = (0.30, 0.52)
+            env_cfg.commands.ee_pose.ranges.p_pitch = (-math.pi / 4, math.pi / 5)
+            env_cfg.commands.ee_pose.ranges.p_yaw = (-2 * math.pi / 5, 2 * math.pi / 5)
+            env_cfg.commands.ee_pose.ranges.o_roll = (-math.pi / 8, math.pi / 8)
+            env_cfg.commands.ee_pose.ranges.o_pitch = (-math.pi / 8, math.pi / 8)
+            env_cfg.commands.ee_pose.ranges.o_yaw = (-math.pi, math.pi)
+        elif preset == "default":
             # `probe_ee_default_pose.py` 实测的默认位姿：r0=0.4035 m、仰角 +1.2615 rad、
             # 方位 +0.1739 rad（机械臂是"举起"的：EE 在采样平面之上 0.32 m）
             env_cfg.commands.ee_pose.ranges.p_l = same(0.4035)
             env_cfg.commands.ee_pose.ranges.p_pitch = same(1.2615)
             env_cfg.commands.ee_pose.ranges.p_yaw = same(0.1739)
+            env_cfg.commands.ee_pose.ranges.o_roll = same(0.0)
+            env_cfg.commands.ee_pose.ranges.o_pitch = same(0.0)
+            env_cfg.commands.ee_pose.ranges.o_yaw = same(0.0)
         else:  # low：任务工作空间的中心（低位、前伸），= 课程 s0 想锁的锚点
             env_cfg.commands.ee_pose.ranges.p_l = same(0.41)
             env_cfg.commands.ee_pose.ranges.p_pitch = same(-0.08)
             env_cfg.commands.ee_pose.ranges.p_yaw = same(0.0)
-        env_cfg.commands.ee_pose.ranges.o_roll = same(0.0)
-        env_cfg.commands.ee_pose.ranges.o_pitch = same(0.0)
-        env_cfg.commands.ee_pose.ranges.o_yaw = same(0.0)
+            env_cfg.commands.ee_pose.ranges.o_roll = same(0.0)
+            env_cfg.commands.ee_pose.ranges.o_pitch = same(0.0)
+            env_cfg.commands.ee_pose.ranges.o_yaw = same(0.0)
     env_cfg.episode_length_s = 1.0e6          # 不超时（反事实按 20 s 窗口另算）
     if not args_cli.keep_push:
         env_cfg.events.randomize_apply_external_force_torque = None
@@ -156,12 +174,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     print(f"[probe] policy={args_cli.policy} kind={layout.get('kind')}")
     print(f"[probe] body_pose.height_range={tuple(body_pose.cfg.height_range)} "
           f"resampling={tuple(body_pose.cfg.resampling_time_range)}")
+    # 把"EE 锚点到底锁没锁上"打印出来（`--freeze_ee_preset` 靠就地改 cfg.ranges 实现，
+    # 只看最终统计量的话"没生效"和"策略很鲁棒"长得一样）——见下面的命令分布行。
+    ee_cmd = env.command_manager.get_term("ee_pose")
+    _ee_r = ee_cmd.cfg.ranges
+    print(f"[probe] ee_pose.preset={preset}（入参 {args_cli.freeze_ee_preset}）"
+          f"ranges: p_l={tuple(_ee_r.p_l)} p_pitch={tuple(_ee_r.p_pitch)} p_yaw={tuple(_ee_r.p_yaw)} "
+          f"o_roll={tuple(_ee_r.o_roll)} o_pitch={tuple(_ee_r.o_pitch)} o_yaw={tuple(_ee_r.o_yaw)}")
     print(f"[probe] 本轮要分析的终止阈值：root_height_below_minimum={min_height} "
           f"bad_orientation_2.limit_angle={limit_angle}")
 
     env.reset()
     n = env.num_envs
     rec_hcmd, rec_hmeas, rec_rootz, rec_tilt = [], [], [], []
+    rec_ee = []
     first_hit = {thr: torch.full((n,), -1.0, device=env.device) for thr in (0.24, 0.26, 0.28, 0.30, 0.32)}
     below_frac = {thr: 0 for thr in first_hit}
     n_samples = 0
@@ -182,6 +208,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
         env.step(actions)
 
         h_cmd = body_pose.command[:, 0]
+        rec_ee.append(ee_cmd.command[:, :3].clone())
         h_meas = compute_base_height_rel_to_feet(env, body_pose.cfg.asset_cfg, feet_cfg)
         root_z = robot.data.root_pos_w[:, 2]
         tilt = torch.acos(torch.clamp(-robot.data.projected_gravity_b[:, 2], -1.0, 1.0))
@@ -206,6 +233,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     h_cmd = torch.cat(rec_hcmd); h_meas = torch.cat(rec_hmeas)
     root_z = torch.cat(rec_rootz); tilt = torch.cat(rec_tilt)
     err = h_cmd - h_meas          # 与 Metrics/body_pose/height_error 同号（命令 − 实际）
+    ee_xyz = torch.cat(rec_ee)
+    _ee_std = float(ee_xyz.std())
+    print(
+        "[probe] 命令分布核对（ee_pose.command 前 3 维，root 系 xyz）："
+        + "  ".join(
+            f"[{i}] min={float(ee_xyz[:, i].min()):+.4f} max={float(ee_xyz[:, i].max()):+.4f} "
+            f"std={float(ee_xyz[:, i].std()):.4f}"
+            for i in range(3)
+        )
+        + f"  ⇒ 三维整体 std={_ee_std:.4f}"
+        # 注意：`ee_pose.command` 是 **HeightInvariantEECommand** 的输出（相对脚下地面，
+        # 会随机身高度/俯仰变化），所以"锚点锁死"时这三维**也不是常数**。
+        # 判断 `--freeze_ee_preset` 有没有生效要看上面那行 `ranges:` 打印，不是看这里的 std。
+        + "（仅作参考：本 command term 的输出随机身姿态变化，锚点生效时也非恒定）"
+    )
+    print(f"[probe] rollout 结束时 ee_pose.ranges.p_l={tuple(ee_cmd.cfg.ranges.p_l)} "
+          f"p_pitch={tuple(ee_cmd.cfg.ranges.p_pitch)} "
+          f"common_step_counter={getattr(env, 'common_step_counter', None)}")
 
     print("\n" + "-" * 96)
     print("[probe] (1) 命令 vs 实际（height 用 compute_base_height_rel_to_feet，root_z 是终止项的判据）")
@@ -262,6 +307,60 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     print(f"\n    结论提示：若'root_z<0.26 的比例'仍与 0.30 接近，说明降低阈值只是把门槛往下挪、")
     print(f"    并不能减少'压得过低'这件事；反过来若 0.26 明显更小，说明阈值确实是主要瓶颈。")
     print("=" * 96 + "\n")
+
+    # ── 关键指标落盘（给 sweep_ee_anchor.py 汇总）───────────────────────────
+    if args_cli.json_out:
+        import json
+
+        metrics = {
+            "task": args_cli.task,
+            "preset": preset,
+            "policy": args_cli.policy,
+            "num_envs": int(env.num_envs),
+            "steps": int(args_cli.steps),
+            "step_dt": float(env.step_dt),
+            "window_s": float(args_cli.steps * env.step_dt),
+            "min_height_threshold": float(min_height),
+            "limit_angle_rad": float(limit_angle),
+            "height_error_mean": float(err.mean()),
+            "height_error_mae": float(err.abs().mean()),
+            "height_error_p95abs": _pct(err.abs(), 0.95),
+            "root_z_min": float(root_z.min()),
+            "root_z_p01": _pct(root_z, 0.01),
+            "root_z_p05": _pct(root_z, 0.05),
+            "root_z_mean": float(root_z.mean()),
+            "tilt_mean_deg": math.degrees(float(tilt.mean())),
+            "tilt_p99_deg": math.degrees(_pct(tilt, 0.99)),
+            "tilt_max_deg": math.degrees(float(tilt.max())),
+            "term_h_count": int(n_term_h),
+            "term_h_profile": (
+                {
+                    "h_cmd_mean": float(torch.cat(term_profile["h_cmd"]).mean()),
+                    "h_meas_mean": float(torch.cat(term_profile["h_meas"]).mean()),
+                    "root_z_mean": float(torch.cat(term_profile["root_z"]).mean()),
+                    "tilt_deg_mean": math.degrees(float(torch.cat(term_profile["tilt"]).mean())),
+                    "frac_also_tilted": float(
+                        (torch.cat(term_profile["tilt"]) > limit_angle).float().mean()
+                    ),
+                }
+                if term_profile["root_z"]
+                else None
+            ),
+            "thresholds": {
+                f"{thr:.2f}": {
+                    "inst_frac": below_frac[thr] / max(n_samples, 1),
+                    "episode_frac": float((buf >= 0).float().mean()),
+                    "mean_first_s": (
+                        float(buf[buf >= 0].mean()) * env.step_dt if (buf >= 0).any() else None
+                    ),
+                }
+                for thr, buf in first_hit.items()
+            },
+            "tilt_episode_frac": float((first_tilt >= 0).float().mean()),
+        }
+        with open(args_cli.json_out, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, ensure_ascii=False, indent=2)
+        print(f"[probe] 关键指标已写入 {args_cli.json_out}")
 
 
 if __name__ == "__main__":
