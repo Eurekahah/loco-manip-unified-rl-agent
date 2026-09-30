@@ -25,6 +25,7 @@
 | 2026-09-30 | **P2 action term 收敛完成（DEF-035）**：`PreTrainedPickAction` / `PreTrainedPickWBCAction` / `TeleopLLAction` 全部继承 `LowLevelPolicyActionBase`（共减 ~600 行重复机械）+ 删除无人注册的 `PreTrainedPolicyAction` + 新增复位时机探针；回归 11 OK / 1 SKIP / 0 FAIL、低层布局打印逐字节一致 | `codex/ll-train-detail-fix` |
 | 2026-09-30 | **P3 EE 锚点一键化完成（DEF-036）**：新脚本 `sweep_ee_anchor.py`（4 组 `full/default/low/cfg` 逐组子进程 + Markdown 对比表 + 汇总 JSON）+ 修掉 `probe_root_height_termination.py` 里 `--freeze_ee_preset none` 的语义歧义（当前 cfg 默认已经是 low 锚点，故原 `none ≡ low`）；实测 `full 7.0% / default 1.8% / low 0.8% / cfg 0.8%` | `codex/ll-train-detail-fix` |
 | 2026-09-30 | **星号导入遮蔽核实并收口（DEF-037）**：7 个奖励函数是故意覆盖（写进注释）、2 个事件函数不是遮蔽（官方没这两个名字）、地形 cfg 同名冲突 → 本仓库那份改名 `MIXED_TERRAINS_CFG`；4 任务冒烟全 OK | `codex/ll-train-detail-fix` |
+| 2026-09-30 | 低层 known_issues **⑬ 作废**（当前实现是 `> 0.1`，原本的 "`> 0.0` 空操作" 已不成立）；`vr_extented` 的"无超时线程"**评估后降级**（daemon 线程 + 服务器主循环本不该有超时，唯一 UDP connect 不阻塞；盲改风险大于收益）；IsaacLab 本地魔改条目补注"不属于本仓库" | `codex/ll-train-detail-fix` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -173,12 +174,12 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
     `_update_metrics()` 每步更新（只比 `pose_command_b` 晚一拍），"永不更新"不成立
   - [x] ⑫ reset 后第一帧 `pose_command_b` 全 0（观测/奖励看到零位姿目标）
     → **2026-09-30 实测确认并修复**（DEF-034 §2）：加 `reset()` 覆写，修后与真实 EE 位姿差 0.000e+00
-  - ⑬ `UniformThresholdVelocityCommand._resample_command` 的 `> 0.0` 是空操作；
-  - ⑭ EE 目标碰撞检查静默降级 + 硬编码 AABB；⑮ 硬编码常数（0.513 / 0.09 / 0.135 / action scale）；
+  - [x] ⑬ `UniformThresholdVelocityCommand._resample_command` 的 `> 0.0` 是空操作
+    → **2026-09-30 复核后作废**：当前实现用的是 `> 0.1`（不是 `> 0.0`），语义正确 ⇒ 本条**不再存在**；
+  - ⑭ EE 目标碰撞检查静默降级 + 硬编码 AABB；
+  - ⑮ 硬编码常数（0.513 / 0.09 / 0.135 / action scale）；
   - [x] ⑱ 接触传感器与 articulation body 顺序不同（归因陷阱）
     → **2026-09-30 加启动期打印 + 名字可归因检查**（DEF-034 §5）
-  - ⑬ 复核结论（2026-09-30）：当前 `UniformThresholdVelocityCommand._resample_command` 用的是
-    `> 0.1`（不是 `> 0.0`），语义正确 ⇒ **该条已过时**，下次清理时可直接删掉这一行。
 
 - [ ] `[可选]` **执行器刚度课程 / 刚度标定**
   - 依据：`piper_arm` 现在 `DelayedPD(300/20)`，注释里的目标区间是 60~100 / 0~20；
@@ -217,9 +218,15 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
   - [x] `cusrl_cfg_entry_point` 有 9 处指向不存在的 `agents/cusrl_ppo_cfg.py`
     → **2026-09-30 全部删除**（`deeprobotics_m20` 7 处 + `deeprobotics_lite3` 2 处；用户确认
     不用 cusrl 训练）+ 连 `setup.py` 里的 `cusrl[all]` 依赖一起删掉（DEF-034 §7）；
-  - 依赖被本地魔改：`IsaacLab-5.1.0/.../task_space_actions.py`（`[IK DEBUG]` 打印 + 私有成员）；
-  - `devices/vr_extented.py` 模块级 print（第 59~63 行）+ 无超时线程（线程是 `daemon=True`，
-    但网络操作没有超时）；
+  - 依赖被本地魔改：`IsaacLab-5.1.0/.../task_space_actions.py`（`[IK DEBUG]` 打印 + 私有成员）——
+    **注意这不在本仓库里**（是 editable 安装的 IsaacLab 检出），改它属于"动依赖"，建议改成
+    给上游提 issue / 打 patch 文件，而不是直接改本地文件；
+  - [x] `devices/vr_extented.py` 模块级 print → **2026-09-30 改成 `RL_TRAINING_VR_DEBUG=1` 才打**（DEF-034 §7）；
+    剩下的"无超时线程"**评估后降级**（2026-09-30）：该线程是 `daemon=True`
+    （不会挡住进程退出），`serve_forever()` / `run_forever()` 是服务器主循环**本来就不该有超时**；
+    唯一的"网络调用"是 `_display_info()` 里为拿本机 IP 的 UDP `connect()`（UDP connect 不发包、不阻塞）。
+    真正的问题只是"HTTPS/证书起不来时只在 daemon 线程里打 traceback"——但用户实测 VR 能正常连接，
+    盲改（本机无法验证）风险大于收益 ⇒ 留着，等真出问题再动；
   - [x] `scripts/utils/mp4-png-composition.py` 4 处裸 `except:` → **2026-09-30 改成
     `except Exception:`**（DEF-034 §5）；
   - `logs/` 每个 run 50 个 `model_*.pt`（~5 MB/个，注意磁盘）；
