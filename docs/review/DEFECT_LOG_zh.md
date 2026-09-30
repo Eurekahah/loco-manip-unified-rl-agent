@@ -125,10 +125,39 @@
 ⇒ 本批改动（删两个 reward term、EE 命令 reset 覆写、启动期多打印、setup/encoder/mp4 清理）
 **没有引入回归**：11 个能跑的任务全部 EXIT=0 且 `Learning iteration` 计数 = 2。
 
-**7. 本批**没做**的（仍在 TODO）**：`cusrl_cfg_entry_point` 有 9 处指向不存在的
-`agents/cusrl_ppo_cfg.py`（要决定"删注册字段"还是"补模块"）；`devices/vr_extented.py`
-模块级 print 与无超时线程；`pre_trained_policy_action` / `openvla_pick_action` 迁移到
-`LowLevelPolicyActionBase`；sim2sim(MuJoCo) 落地；EE 锚点 4 组一键脚本。
+**7. 第二批（同日，按用户答复调整）**
+
+* **cusrl 全部删除**（用户确认"本身没有使用 cusrl 训练"）：
+  `.../deeprobotics_m20/__init__.py` 的 **7 处** + `.../deeprobotics_lite3/__init__.py` 的
+  **2 处** `cusrl_cfg_entry_point` 注册字段，以及 `source/rl_training/setup.py` 里的
+  `"cusrl[all]"` 依赖。⇒ 不再引用不存在的 `agents/cusrl_ppo_cfg.py`，装包时也不会去拉 cusrl。
+* **视觉编码器"本地权重优先、默认不联网"**（`highlevel/mdp/encoder.py`）：
+  新增两个环境变量 —— `RL_TRAINING_ENCODER_DIR`（默认 `~/.cache/rl_training/encoders`）、
+  `RL_TRAINING_ALLOW_ENCODER_DOWNLOAD`（默认 **0**）。`dinov2_small/dinov2_base/clip_vit/cnn`
+  一律先找 `<ENCODER_DIR>/<name>.pth`；找不到就**报错**并给出"权重该放哪 + 怎么自己导出一份"的
+  说明；只有显式开开关才回退 `torch.hub` / `open_clip(pretrained='openai')` 联网下载。
+  `UnfrozenResNet18` 也改成默认 `weights=None`（不再拉 ImageNet 权重）。
+  另外把 `cnn` 分支里 `from my_project.models import ...`（**不存在的模块**，死代码）换成
+  本文件自带的 `LightweightCNN` + 本地 checkpoint。实测：无本地权重时
+  `get_encoder("dinov2_small")` 抛出可操作报错而不是默默联网。
+* **openvla 分支删除**（用户确认"遗弃很久了"）：删除
+  `mdp/openvla_pick_action.py`（22 KB）、其配置
+  `config/high_level/hl_flat_openvla_env_cfg.py`、`mdp/__init__.py` 的 star-import，
+  以及 `low_level_policy_action.py` / `low_level_replay.py` 里的两处提及。
+  依据：该 cfg **没有被任何 task 注册引用**，`VLAPickAction` 也没有其它使用点 ⇒ 死分支。
+* **`devices/vr_extented.py` 的模块级 print**：那 3 行是在**模块导入时**执行的（不在函数里），
+  只要 import 就会往 stdout 写 XLeVR 路径 —— 与"VR 能不能连上"无关（连接由后台线程
+  `_run_vr_services()` 负责）。现在改成 `RL_TRAINING_VR_DEBUG=1` 才打印。
+
+**8. 本批**没做**的（仍在 TODO）**：`mdp/__init__.py` 星号导入遮蔽；
+`pre_trained_pick_action` / `pre_trained_pick_wbc_action` / `teleop_ll_action` 迁移到
+`LowLevelPolicyActionBase`（**用户要求：尽量收成一个基类**，基类已有
+`_build_low_level_obs_cfg` / `_on_low_level_tick` / `_route_policy_output` 三个钩子，
+迁移时还需要给基类补一个 `_on_reset(env_ids)` 钩子以承载 pick 的"重锚 EE 目标"与
+teleop 的"重新标定"）；EE 锚点 4 组一键脚本。
+> 其中 **`_on_reset(env_ids)` + `reset()` 基类钩子已经在本次预置好**（行为中性：
+> 默认空实现，现有子类不覆盖 ⇒ 实测 Teleop-History / Pick-WBC / Nav 三个任务仍 OK），
+> 剩下的三个类的迁移是纯机械改动（下次做）。
 
 ### DEF-032 `2026-09-30` 云端（autodl 私有云 TiEV）接力：环境复制方法 + 已启动的长跑
 

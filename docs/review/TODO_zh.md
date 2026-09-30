@@ -21,6 +21,7 @@
 | 2026-09-20 | P1-1 进入实测：新增**探索噪声上界** `max_noise_std`（默认 0 = 不限制，投影梯度实现，DEF-024），并启动 4000-iter 的 cap=1.2 / entropy_coef=0.002 A/B（结果待回填） | `docs: P1-1 A/B` 提交 |
 | 2026-09-29 | 新分支 `codex/ll-train-detail-fix`：**静止伫立专项**（DEF-026，两项惩罚 + 三条课程）、**镜像符号修复**（DEF-027，"右后腿往右前方撇"）、**扰动加强**（DEF-028）、**多地形任务**（DEF-029）、**遥操 history 任务**（DEF-030）；新增 P1-1'~P1-4 四条待办 | `codex/ll-train-detail-fix` |
 | 2026-09-30 | **本机收尾批（DEF-034）**：回归矩阵脚本化（P1-4/P3 完成，11 OK / 1 SKIP / 0 FAIL）+ known_issues ⑧⑩⑪⑫⑱ + 三处工程债；11 条能跑的任务全部 EXIT=0 | `codex/ll-train-detail-fix` |
+| 2026-09-30 | 第二批（按用户答复）：**cusrl 全删**（9 处注册字段 + setup 依赖）、**视觉编码器本地权重优先/默认不联网**（新增 `RL_TRAINING_ENCODER_DIR` / `RL_TRAINING_ALLOW_ENCODER_DOWNLOAD`）、**openvla 分支删除**（含 cfg）、**vr_extented 模块级 print 改成调试图**；sim2sim 因"已在另一个仓库实现"**移出待办**；P2 action term 收敛成一条带做法的待办 | `codex/ll-train-detail-fix` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -186,11 +187,22 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
 
 ## P2 —— 高层 replay 与工程债（"高层修改先暂放"期间不动）
 
-- [ ] **`pre_trained_policy_action` / `openvla_pick_action` 迁移到 `LowLevelPolicyActionBase`**
-  - 现状：只补了 `ll_command`/`ll_command_w` 接口；本体仍是"就地改 cfg + 自己的
-    last_action 闭包 + 无布局校验/history"；`openvla_pick_action` 的 `ee_goal` 仍是**世界系**
-    （③ 只统一了 3 个 term）。
-  - 限制：前者没被任何 task 注册、后者要 OpenVLA 7B 模型 → 只能做 import + 维度级验证。
+- [ ] **把剩下 3 个高层 action term 收进 `LowLevelPolicyActionBase`**（用户要求：尽量一个基类）
+  - 现状：`PreTrainedNavAction` 已迁移（清单 ⑤ 的 R1）；**`PreTrainedPickAction`（29.9 KB）、
+    `PreTrainedPickWBCAction`（28.7 KB）、`TeleopLLAction`（27 KB）仍各自抄了一份**
+    "载入策略 / 三个低层 action term / 布局解析 / 低层观测组 / history 窗口 / 低层 tick 循环"
+    （每个文件约 200 行重复代码；基类 `low_level_policy_action.py` 已经把这块抽好了）。
+  - **openvla 已删除**（2026-09-30，用户确认废弃；DEF-034 §7）——`PreTrainedPolicyAction`
+    没被任何 task 注册，可以顺手一起迁或删（**建议删**，与 openvla 同理）。
+  - 做法（已验证可行的路线）：① 基类补一个 `_on_reset(env_ids)` 钩子（pick 用来
+    `_reset_target_to_current_ee`、teleop 用来 `recalibrate`/`_reset_default_body_pose`）；
+    ② 三个类改成 `class X(LowLevelPolicyActionBase)`，`__init__` 只留"分配 `_raw_actions`
+    （必须在 `super().__init__` 之前）→ `super().__init__(cfg, env)` → 任务专属状态"；
+    ③ 删掉各自的 `apply_actions`（基类已实现 tick 循环），需要额外动作的写进
+    `_on_low_level_tick()`（teleop 的 `push_ee_target_to_ik`）；④ `process_actions` /
+    properties / 调试可视化保持原样。
+  - 验收：`smoke_regression.py` 覆盖到全部三个类（Pick-Flat / Pick-WBC-Flat / Teleop /
+    Teleop-History 各 2 iter）+ 对比改动前后启动打印的"低层 obs 维度 == checkpoint 期望"。
 
 - [ ] **高层 `high_level_todo.md` 第 10 条的"待确认"**
   - `HLFlatPickTerminationsCfg_PLAY` 里 `lift_object` 与 `pick_success` 语义/命名重复；
@@ -243,16 +255,19 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
     首次解析 70 MB 事件文件 30~50 s，之后走 `<run>/.summary_cache.npz`（<1 s）。
   - 已用它完成 DEF-023（P1-1 归因 + P1-2 新证据）。
 
-- [ ] **sim2sim(MuJoCo) 落地**（承接 DEF-021 的部署文档）
-  - 现在只有"接口契约 + 探针 + 文档"，**还没有可运行的 MuJoCo 部署脚本**。
-  - 下一步：用 `deep_robotics_model/M20_Piper_own/mjcf/M20_Piper_own.xml` 按文档第 8 节的
-    七步顺序搭（零动作站立 → 零位移命令 → 开 IK → 小步进 → 速度命令）；
-    数值验收用第 8 节的"ONNX vs TorchScript 相对误差 ~1e-6"。
-  - 已知待解：MJCF 的 `timestep=0.002` vs Isaac `0.005`；IK 需要自己实现（DLS λ=0.01）。
+- [x] ~~sim2sim(MuJoCo) 落地~~ → **不做**（2026-09-30 用户确认：sim2sim 已经在**另一个
+  仓库**里实现了；本仓库只保留 DEF-021 的"接口契约 + 部署态导出 + 探针"，不再自己搭 MuJoCo 脚本）。
 
 - [ ] **把"EE 锚点 4 组对照"固化成一键脚本**
-  - 现在靠 `probe_root_height_termination.py --freeze_ee_preset {none,default,low}` 手工跑
-    （512 envs × 20 s ≈ 2.5 min）。以后改 EE 区间/锚点前先跑一遍。
+  - **"EE 锚点"是什么**：训练早期（课程 s0）把机械臂的目标位姿**锁死在一个固定点**上，
+    让机械臂先别动、底盘专心学平衡，之后再逐步放开到完整工作空间（课程 s1→s3）。
+    这个"锁死的固定点"就叫锚点。仓库里有 3 种候选锚点：
+    `none`（不锁，= 无课程）/ `default`（锁在**默认姿态**，即机械臂举起）/ `low`（锁在
+    工作空间中心的**低位**前伸位姿）。DEF-006 实测过 20 s 内 `root_z<0.30` 的触发率：
+    none **25.8%** / default **55.5%**（更差！因为举臂抬高重心）/ low **1.0%** ⇒ 所以最终
+    选了 `low`。探针：`probe_root_height_termination.py --freeze_ee_preset {none,default,low}`。
+  - 要做的：把这几组对照（512 envs × 20 s ≈ 2.5 min/组）收成一个脚本，一次跑完并输出对比表，
+    以后改 EE 区间/锚点前先跑一遍。
 
 - [x] **文档收尾**（2026-09-20 完成）
   - [x] 合并高层分支时删掉它们带来的旧 `docs/review/*.md`（`30d5411`、`0772757`）：

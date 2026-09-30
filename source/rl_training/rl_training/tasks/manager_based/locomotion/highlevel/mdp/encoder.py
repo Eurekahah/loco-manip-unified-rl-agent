@@ -1,8 +1,49 @@
 # encoder.py
 
+import os
+
 import torch
 import torch.nn as nn
 from typing import Optional
+
+# --------------------------------------------------------------------------- #
+# 本地权重优先 / 默认**不联网**（2026-09-30，见 docs/review/DEFECT_LOG_zh.md DEF-034）
+#
+# 背景：这几个 frozen encoder 以前一律走“联网下载”（`torch.hub.load(...)` /
+# `open_clip(pretrained="openai")` / `torchvision(weights=DEFAULT)`），在离线机器
+# （比如实验室集群、MuJoCo 部署机）上会直接失败或者卡住几十秒。
+#
+# 现在的策略：
+#   1. 先在 ``RL_TRAINING_ENCODER_DIR``（默认 ``~/.cache/rl_training/encoders``）里找
+#      ``<name>.pth``；找到就**只用本地权重**；
+#   2. 找不到就**报错**，并在错误信息里写清楚该把权重放到哪、以及怎么显式允许下载；
+#   3. 只有显式设 ``RL_TRAINING_ALLOW_ENCODER_DOWNLOAD=1`` 才会回退到联网下载。
+# --------------------------------------------------------------------------- #
+ENCODER_DIR = os.environ.get(
+    "RL_TRAINING_ENCODER_DIR",
+    os.path.join(os.path.expanduser("~"), ".cache", "rl_training", "encoders"),
+)
+
+
+def allow_encoder_download() -> bool:
+    """是否允许联网下载预训练权重（默认否）。"""
+    return os.environ.get("RL_TRAINING_ALLOW_ENCODER_DOWNLOAD", "0").strip().lower() in {"1", "true", "yes"}
+
+
+def local_encoder_weights(name: str) -> Optional[str]:
+    """返回 ``<ENCODER_DIR>/<name>.pth``（存在时），否则 ``None``。"""
+    path = os.path.join(ENCODER_DIR, f"{name}.pth")
+    return path if os.path.isfile(path) else None
+
+
+def _weights_missing(name: str, how_to: str) -> RuntimeError:
+    return RuntimeError(
+        f"[VisionEncoderRegistry] 找不到 '{name}' 的本地权重（默认不联网）。\n"
+        f"  · 请把权重放到：{os.path.join(ENCODER_DIR, name + '.pth')}"
+        f"（或设环境变量 RL_TRAINING_ENCODER_DIR 指向别的目录）\n"
+        f"  · {how_to}\n"
+        f"  · 如果确实想让它自己下载：设 RL_TRAINING_ALLOW_ENCODER_DOWNLOAD=1"
+    )
 
 
 class VisionEncoderRegistry:
@@ -63,22 +104,34 @@ class VisionEncoderRegistry:
 
     @classmethod
     def _build_frozen_encoder(cls, name: str, device: str) -> nn.Module:
+        """构建 frozen encoder：**本地权重优先，默认不联网**（见文件头注释）。"""
+        ckpt = local_encoder_weights(name)
         if name == "dinov2_small":
-            model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+            model = cls._build_dinov2("dinov2_vits14", ckpt, name, device)
         elif name == "dinov2_base":
-            model = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14")
+            model = cls._build_dinov2("dinov2_vitb14", ckpt, name, device)
         elif name == "clip_vit":
             import open_clip
-            model, _, _ = open_clip.create_model_and_transforms(
-                "ViT-B-32", pretrained="openai"
-            )
+            if ckpt is not None:
+                model, _, _ = open_clip.create_model_and_transforms("ViT-B-32", pretrained=ckpt)
+            elif allow_encoder_download():
+                model, _, _ = open_clip.create_model_and_transforms("ViT-B-32", pretrained="openai")
+            else:
+                raise _weights_missing(
+                    name,
+                    "open_clip 的 ViT-B-32(openai) 需自备："
+                    "`open_clip.create_model_and_transforms('ViT-B-32')` + "
+                    "`torch.save(model.visual.state_dict(), '<ENCODER_DIR>/clip_vit.pth')`。",
+                )
             model = model.visual
         elif name == "cnn":
-            # 这里保留你原来的静态 CNN checkpoint 加载逻辑
-            from my_project.models import MyResNetEncoder
-            model = MyResNetEncoder()
-            ckpt = torch.load("/path/to/checkpoint.pth", map_location=device)
-            model.load_state_dict(ckpt["encoder"])
+            # 用本仓库自带的 LightweightCNN（原来这里 import 一个不存在的 `my_project.models`
+            # ⇒ 死代码；现在改成"本地 checkpoint + 自带网络结构"）。
+            if ckpt is None:
+                raise _weights_missing(name, "先用 LightweightCNN 训练/或直接拷一个 checkpoint 过来。")
+            model = LightweightCNN(in_channels=3, feature_dim=256)
+            state = torch.load(ckpt, map_location=device)
+            model.load_state_dict(state.get("encoder", state))
         else:
             raise ValueError(
                 f"Unknown encoder: '{name}'。"
@@ -89,6 +142,31 @@ class VisionEncoderRegistry:
         for p in model.parameters():
             p.requires_grad_(False)
         return model
+
+    @classmethod
+    def _build_dinov2(cls, arch: str, ckpt: Optional[str], name: str, device: str) -> nn.Module:
+        """DINOv2：本地 checkpoint 优先；没有就报错（除非显式允许下载）。"""
+        repo = "facebookresearch/dinov2"
+        hub_cached = os.path.isdir(os.path.join(torch.hub.get_dir(), "facebookresearch_dinov2_main"))
+        if ckpt is not None:
+            if not hub_cached and not allow_encoder_download():
+                raise RuntimeError(
+                    f"[VisionEncoderRegistry] 有本地权重 {ckpt}，但 torch.hub 里没有 DINOv2 的"
+                    f"**网络结构代码**（{os.path.join(torch.hub.get_dir(), 'facebookresearch_dinov2_main')}）。\n"
+                    "  · 离线做法：把 dinov2 仓库也拷到 hub 目录（`git clone` 后改名），"
+                    "或者用 `RL_TRAINING_ALLOW_ENCODER_DOWNLOAD=1` 先跑一次把代码缓存下来。"
+                )
+            model = torch.hub.load(repo, arch, pretrained=False, source="local")
+            state = torch.load(ckpt, map_location="cpu")
+            model.load_state_dict(state.get("model", state))
+            return model
+        if allow_encoder_download():
+            return torch.hub.load(repo, arch)
+        raise _weights_missing(
+            name,
+            f"DINOv2 权重自备方式：`torch.hub.load('{repo}', '{arch}')` 后 "
+            f"`torch.save(model.state_dict(), '<ENCODER_DIR>/{name}.pth')`（在有网的机器上做一次即可）。",
+        )
 
 # your_env/vision_encoders.py
 """
@@ -135,7 +213,18 @@ class UnfrozenResNet18(nn.Module):
     def __init__(self):
         super().__init__()
         import torchvision.models as models
-        backbone = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        # 默认**不联网**：只建结构（weights=None）。想用 ImageNet 预训练权重的话：
+        #   ① （推荐）把 resnet18 权重放到本地：<ENCODER_DIR>/resnet18.pth，然后走下面分支；
+        #   ② 或者显式设 RL_TRAINING_ALLOW_ENCODER_DOWNLOAD=1 允许联网下载。
+        ckpt = local_encoder_weights("resnet18")
+        if ckpt is not None:
+            backbone = models.resnet18(weights=None)
+            state = torch.load(ckpt, map_location="cpu")
+            backbone.load_state_dict(state)
+        elif allow_encoder_download():
+            backbone = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        else:
+            backbone = models.resnet18(weights=None)
         # 去掉最后的分类头，保留到 avgpool
         self.encoder = nn.Sequential(*list(backbone.children())[:-1])  # (N,512,1,1)
         self.flatten = nn.Flatten()

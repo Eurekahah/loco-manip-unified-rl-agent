@@ -56,11 +56,18 @@ from rl_training.xtrainer_utils.XLeVR.xlevr.inputs.vr_ws_server import VRWebSock
 
 _current_dir = os.path.dirname(os.path.abspath(__file__))
 _base_dir    = os.path.dirname(os.path.dirname(_current_dir))
-print(_current_dir)
-print(f"[VR Device] Attempting to import XLeVR from {_base_dir}...")
+# ⚠️ 这几行原来是**模块级 print**：只要 `import` 这个模块就会往 stdout 写 3 行
+# （训练日志里会凭空多出 XLeVR 路径，让人以为是错误）。它们与"VR 能不能连上"无关
+# —— 真正建立连接的是 `_run_vr_services()`（在后台线程里跑）。
+# 现在改成显式开调试才打：`RL_TRAINING_VR_DEBUG=1`。
+_VR_DEBUG = os.environ.get("RL_TRAINING_VR_DEBUG", "0").strip().lower() in {"1", "true", "yes"}
+if _VR_DEBUG:
+    print(_current_dir)
+    print(f"[VR Device] Attempting to import XLeVR from {_base_dir}...")
 
 XLEVR_PATH   = os.path.join(_base_dir,"rl_training", "xtrainer_utils", "XLeVR")
-print(f"[VR Device] XLeVR path set to: {XLEVR_PATH}")
+if _VR_DEBUG:
+    print(f"[VR Device] XLeVR path set to: {XLEVR_PATH}")
 _XLEVR_AVAILABLE = True
 # except ImportError:
 #     _XLEVR_AVAILABLE = False

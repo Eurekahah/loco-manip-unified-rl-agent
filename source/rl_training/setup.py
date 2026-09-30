@@ -26,8 +26,6 @@ INSTALL_REQUIRES = [
     "numpy",
     "pandas",
     "pinocchio",
-    # rl
-    "cusrl[all]",
 ]
 
 # Installation operation

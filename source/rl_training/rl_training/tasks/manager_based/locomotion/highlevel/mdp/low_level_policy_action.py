@@ -6,7 +6,7 @@
 背景
 ----
 ``pre_trained_pick_action`` / ``pre_trained_pick_wbc_action`` / ``teleop_ll_action`` /
-``pre_trained_nav_action`` / ``pre_trained_policy_action`` / ``openvla_pick_action``
+``pre_trained_nav_action`` / ``pre_trained_policy_action``
 这 6 个 action term 各自抄了一份：
 
 * 载入低层 TorchScript 策略；
@@ -190,6 +190,27 @@ class LowLevelPolicyActionBase(ActionTerm):
     def _on_low_level_tick(self) -> None:
         """在低层 tick（跑策略之前）做额外处理，默认什么都不做。"""
         return None
+
+    def _on_reset(self, env_ids) -> None:
+        """episode 复位时的额外处理，默认什么都不做。
+
+        为把 ``PreTrainedPickAction`` / ``PreTrainedPickWBCAction`` / ``TeleopLLAction``
+        也收进本基类预留的钩子（用户要求"尽量一个基类"，见 ``TODO_zh.md`` P2）：
+
+        * pick 系：复位后要把 EE 目标**重锚**到当前位姿
+          （``_reset_target_to_current_ee``）；
+        * teleop：复位后要 ``recalibrate``（绝对目标语义）或
+          ``_capture_default_ee_pose`` + ``_reset_default_body_pose``（增量语义）。
+
+        由 :meth:`reset` 调用；默认实现是空操作 ⇒ 现有子类行为不变。
+        """
+        return None
+
+    def reset(self, env_ids=None):
+        """``ActionManager.reset`` 会在 episode 复位时调用：转发给子类的 ``_on_reset``。"""
+        extras = super().reset(env_ids)
+        self._on_reset(env_ids)
+        return extras
 
     def _route_policy_output(self, policy_output: torch.Tensor) -> None:
         """把低层策略输出切分给低层 action term。"""
