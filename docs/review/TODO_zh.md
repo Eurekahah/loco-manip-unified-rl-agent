@@ -24,6 +24,7 @@
 | 2026-09-30 | 第二批（按用户答复）：**cusrl 全删**（9 处注册字段 + setup 依赖）、**视觉编码器本地权重优先/默认不联网**（新增 `RL_TRAINING_ENCODER_DIR` / `RL_TRAINING_ALLOW_ENCODER_DOWNLOAD`）、**openvla 分支删除**（含 cfg）、**vr_extented 模块级 print 改成调试图**；sim2sim 因"已在另一个仓库实现"**移出待办**；P2 action term 收敛成一条带做法的待办 | `codex/ll-train-detail-fix` |
 | 2026-09-30 | **P2 action term 收敛完成（DEF-035）**：`PreTrainedPickAction` / `PreTrainedPickWBCAction` / `TeleopLLAction` 全部继承 `LowLevelPolicyActionBase`（共减 ~600 行重复机械）+ 删除无人注册的 `PreTrainedPolicyAction` + 新增复位时机探针；回归 11 OK / 1 SKIP / 0 FAIL、低层布局打印逐字节一致 | `codex/ll-train-detail-fix` |
 | 2026-09-30 | **P3 EE 锚点一键化完成（DEF-036）**：新脚本 `sweep_ee_anchor.py`（4 组 `full/default/low/cfg` 逐组子进程 + Markdown 对比表 + 汇总 JSON）+ 修掉 `probe_root_height_termination.py` 里 `--freeze_ee_preset none` 的语义歧义（当前 cfg 默认已经是 low 锚点，故原 `none ≡ low`）；实测 `full 7.0% / default 1.8% / low 0.8% / cfg 0.8%` | `codex/ll-train-detail-fix` |
+| 2026-09-30 | **星号导入遮蔽核实并收口（DEF-037）**：7 个奖励函数是故意覆盖（写进注释）、2 个事件函数不是遮蔽（官方没这两个名字）、地形 cfg 同名冲突 → 本仓库那份改名 `MIXED_TERRAINS_CFG`；4 任务冒烟全 OK | `codex/ll-train-detail-fix` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -206,11 +207,12 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
     建议改成"本地权重优先，缺失再联网"。
 
 - [ ] **工程性清理**（原 `known_issues.md` 二、1-8）
-  - `mdp/__init__.py` 星号导入造成同名遮蔽（`ROUGH_TERRAINS_CFG` /
-    `randomize_rigid_body_inertia` / `randomize_com_positions` 覆盖官方实现）；
-    **复核结论（2026-09-30）**：现在 `velocity_env_cfg.py` 显式
-    `from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG`，遮蔽只影响
-    `mdp.rough_terrains_cfg` 这类间接引用 ⇒ 影响面小，留待下次一起清；
+  - [x] `mdp/__init__.py` 星号导入造成同名遮蔽 → **2026-09-30 核实并收口（DEF-037）**：
+    逐名前查（ast 集合交集）后，`randomize_rigid_body_inertia` / `randomize_com_positions`
+    **不是**遮蔽（官方没有这两个名字，是本仓库新增）；7 个奖励函数 + highlevel 的
+    `undesired_contacts` 是**故意**同名覆盖（行为不变，已写进两个 `mdp/__init__.py` 的注释块）；
+    唯一**意外**冲突是地形 cfg 同名 → 本仓库那份改名 `MIXED_TERRAINS_CFG`
+    （`TERRAIN_CFGS["mixed"]` 不变，全仓库无其它引用）。验收：`py_compile` + 4 任务冒烟全 OK。
   - [x] `setup.py` 的 `packages` 只列顶层包 → **2026-09-30 改成 `find_packages`**（DEF-034 §5）；
   - [x] `cusrl_cfg_entry_point` 有 9 处指向不存在的 `agents/cusrl_ppo_cfg.py`
     → **2026-09-30 全部删除**（`deeprobotics_m20` 7 处 + `deeprobotics_lite3` 2 处；用户确认

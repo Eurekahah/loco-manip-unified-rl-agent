@@ -142,7 +142,7 @@ ALL_TERRAINS_CFG = TerrainGeneratorCfg(
 """
 拆分后的地形配置。
 
-原始的 ROUGH_TERRAINS_CFG 把多种地形按比例混在同一个 TerrainGeneratorCfg 里，
+原始的 ROUGH_TERRAINS_CFG（IsaacLab 官方那份）把多种地形按比例混在同一个 TerrainGeneratorCfg 里，
 无法单独测试机器人在某一种地形上的表现。这里把每种地形拆成独立的
 TerrainGeneratorCfg（proportion=1.0），并额外加了一个纯平地配置，
 方便逐个地形做专项测试。
@@ -153,7 +153,7 @@ TerrainGeneratorCfg（proportion=1.0），并额外加了一个纯平地配置�
 """
 
 # --------------------------------------------------------------------------- #
-#  公共参数（与原始 ROUGH_TERRAINS_CFG 保持一致）
+#  公共参数（与官方 ROUGH_TERRAINS_CFG 保持一致）
 # --------------------------------------------------------------------------- #
 _COMMON_KW = dict(
     size=(8.0, 8.0),
@@ -282,7 +282,13 @@ FLAT_TERRAIN_CFG = TerrainGeneratorCfg(
 # --------------------------------------------------------------------------- #
 #  8. 原始混合地形（保留，便于对比/回归测试）
 # --------------------------------------------------------------------------- #
-ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
+# ⚠️ 名字故意**不叫** `ROUGH_TERRAINS_CFG`：IsaacLab 官方
+# `isaaclab.terrains.config.rough.ROUGH_TERRAINS_CFG` 已经在用那个名字，而本文件经
+# `velocity/mdp/__init__.py` 的 star-import 之后，`mdp.ROUGH_TERRAINS_CFG` 会指向**这一份**
+# ——写代码的人若想引用官方那份却写成 `mdp.ROUGH_TERRAINS_CFG`，会静默拿到"混合地形"
+# （见 `docs/review/DEFECT_LOG_zh.md` DEF-037）。这份是"保留的原始混合地形"，改名为
+# `MIXED_TERRAINS_CFG`（`TERRAIN_CFGS["mixed"]` 不变；仓库内无其它引用）。
+MIXED_TERRAINS_CFG = TerrainGeneratorCfg(
     **_COMMON_KW,
     sub_terrains={
         "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
@@ -342,7 +348,7 @@ NONE_STAIRS_TERRAINS_CFG = TerrainGeneratorCfg(
 # 10. 多地形（随机粗糙 + 正/反斜坡 + 平地）—— 2026-09-29 新增
 #
 # 需求：只要**随机粗糙、正反斜坡、平地**三种，并且随机粗糙的噪声要"温和"
-# （noise_range 0.01 ~ 0.05，而不是 ROUGH_TERRAINS_CFG / NONE_STAIRS 的 0.02 ~ 0.10）。
+# （noise_range 0.01 ~ 0.05，而不是 MIXED_TERRAINS_CFG / NONE_STAIRS 的 0.02 ~ 0.10）。
 # 与 Rough-WO-Stairs（`NONE_STAIRS_TERRAINS_CFG`）的区别有两点：
 #   1. 粗噪幅度 0.02~0.10 → **0.01~0.05**（噪声步长 0.02 → 0.01），
 #      让轮足先在"轻微不平"上学稳，而不是一上来就啃大颗粒；
@@ -379,7 +385,7 @@ TERRAIN_CFGS = {
     "random_rough": RANDOM_ROUGH_TERRAIN_CFG,
     "slope": SLOPE_TERRAIN_CFG,
     "slope_inv": SLOPE_INV_TERRAIN_CFG,
-    "mixed": ROUGH_TERRAINS_CFG,
+    "mixed": MIXED_TERRAINS_CFG,
     "rough_slopes_flat": ROUGH_SLOPES_FLAT_TERRAINS_CFG,
 }
 """名称 -> TerrainGeneratorCfg 的映射，供测试脚本 --terrain 参数使用。"""

@@ -22,10 +22,70 @@
 | 2026-09-29 | 新增 DEF-026~DEF-031：静止伫立专项（零速漂移 + 站姿占比课程）、`joint_mirror` 镜像符号 bug（"右后腿往右前方撇"的根因）、扰动加强 + 课程拉长、多地形任务（粗糙 0.01~0.05 + 正反斜坡 + 平地）、遥操 history 任务、以及**本机跑不了生成地形任务**的平台问题 | 分支 `codex/ll-train-detail-fix` |
 | 2026-09-30 | 新增 **DEF-035**：剩下 3 个高层 action term（`PreTrainedPickAction` / `PreTrainedPickWBCAction` / `TeleopLLAction`）收进 `LowLevelPolicyActionBase`，删掉各自的 ~200 行重复机械；顺带删除无人注册的 `PreTrainedPolicyAction`（openvla 时代遗留）；新增 `probe_reset_anchor_timing.py` 证明复位钩子读到的是**复位后**状态 | 分支 `codex/ll-train-detail-fix` |
 | 2026-09-30 | 新增 **DEF-036**：EE 锚点对照固化成一条命令（新脚本 `sweep_ee_anchor.py`）+ 修掉 `probe_root_height_termination.py` 里 `--freeze_ee_preset none` 的**语义歧义**（当前 cfg 的默认值已经是 low 锚点 ⇒ 原来的 `none` 与 `low` 完全等价）；实测 4 组对照 `full 7.0% / default 1.8% / low 0.8% / cfg 0.8%` | 分支 `codex/ll-train-detail-fix` |
+| 2026-09-30 | 新增 **DEF-037**：`mdp/__init__.py` 星号导入遮蔽**核实并收口** —— 逐名前查后发现 7 个奖励函数是**故意**覆盖（已写进注释块），`randomize_rigid_body_inertia`/`randomize_com_positions` 根本不构成遮蔽（官方没有这两个名字）；唯一**意外**冲突是地形 cfg 同名（本仓库那份已改名 `MIXED_TERRAINS_CFG`） | 分支 `codex/ll-train-detail-fix` |
 
 ---
 
 # 记录（新→旧）
+
+### DEF-037 `2026-09-30` P2 工程债：`mdp/__init__.py` 星号导入遮蔽的核实与收口
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 工程债 / 清理（**不需要训练**，本机可验证） |
+| 状态 | 已完成并实测（4 个任务冒烟全 OK） |
+| 关联 | `codex/ll-train-detail-fix`；`velocity/mdp/{terrains,__init__}.py`、`highlevel/mdp/__init__.py`；`TODO_zh.md` P2 工程性清理 |
+
+**1. 原条目（原 `known_issues.md` 二、1）说了什么**
+
+> `mdp/__init__.py` 星号导入造成同名遮蔽（`ROUGH_TERRAINS_CFG` /
+> `randomize_rigid_body_inertia` / `randomize_com_positions` 覆盖官方实现）
+
+**2. 核实方法（可复现）**
+
+用 `ast` 解析"本仓库 `velocity/mdp`、`highlevel/mdp` 的顶层定义名"与
+"IsaacLab 官方 `isaaclab/envs/mdp/*.py` 的顶层定义名"，取**集合交集**：
+
+```
+official isaaclab.envs.mdp 顶层名字数 = 84
+--- velocity/mdp 与官方同名 7 个:
+    ['ang_vel_xy_l2', 'base_height_l2', 'flat_orientation_l2', 'lin_vel_z_l2',
+     'track_ang_vel_z_exp', 'track_lin_vel_xy_exp', 'undesired_contacts']
+--- highlevel/mdp 与官方同名 1 个: ['undesired_contacts']
+```
+
+**3. 结论（原条目三分之二不成立）**
+
+* `randomize_rigid_body_inertia` / `randomize_com_positions` **不构成遮蔽**：IsaacLab 5.1 官方
+  `isaaclab/envs/mdp/events.py` 的顶层函数里没有这两个名字（官方的对应物叫
+  `randomize_rigid_body_com`）⇒ 本仓库这两个是**新增**，没有覆盖任何东西。原条目记错了。
+* 7 个奖励函数（+ highlevel 的 `undesired_contacts`）确实是"同名覆盖"，但是**故意的**：
+  本仓库所有 cfg 都写成 `mdp.<name>`，语义就是"用本仓库这份"；而且签名/语义按本机型改过
+  （例如 `track_lin_vel_xy_exp` 支持命令课程下的 std、`undesired_contacts` 按本仓库的
+  传感器约定实现）。**不改行为**，只把它写清楚 —— 见
+  `velocity/mdp/__init__.py` 末尾新增的注释块（列出这 8 个名字）+ `highlevel/mdp/__init__.py`
+  的一句说明。
+* 唯一**意外**的同名冲突是**地形**：本仓库 `velocity/mdp/terrains.py` 里那份"原始混合地形"
+  原先也叫 `ROUGH_TERRAINS_CFG`，而 IsaacLab 官方
+  `isaaclab.terrains.config.rough.ROUGH_TERRAINS_CFG` 早就在用这个名字（并且
+  `velocity_env_cfg.py:39` 显式 import 了它当 `terrain_generator`）⇒ 谁想引用官方那份却写成
+  `mdp.ROUGH_TERRAINS_CFG`，会**静默**拿到"混合地形（含楼梯/boxes/rails/pit）"。
+
+**4. 修正**
+
+* 把本仓库那份改名为 `MIXED_TERRAINS_CFG`（并在定义处写明"为什么故意不叫
+  `ROUGH_TERRAINS_CFG`"）；`TERRAIN_CFGS["mixed"]` 保持不变；全仓库 `grep` 确认
+  改名后**除注释外无其它引用**（`velocity_env_cfg.py` 用的是显式 import 的官方那份，
+  多地形两个任务用的是 `NONE_STAIRS_TERRAINS_CFG` / `ROUGH_SLOPES_FLAT_TERRAINS_CFG`）。
+* 两个 `mdp/__init__.py` 各加一段注释块，把"哪些同名是故意的、哪些是新增的、
+  唯一意外冲突是什么"写在读者一定会看到的地方。
+
+**5. 验收（本机）**
+
+* `py_compile` 通过；
+* 冒烟 4 任务（`History-Adaptation` / `Flat-M20-Piper-WBC` / `High-Level-Pick-Flat-Teacher` /
+  `Isaac-M20-Piper-Teleop-History`，各 `--num_envs 64 --max_iterations 2`）
+  **4 OK / 0 SKIP / 0 FAIL**，日志 `logs/smoke/2026-09-30_p2shadow_*.log`。
 
 ### DEF-036 `2026-09-30` P3：EE 锚点对照一键化（+ 修掉 `none` 预设的语义歧义）
 

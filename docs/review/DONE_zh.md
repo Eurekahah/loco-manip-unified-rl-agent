@@ -18,6 +18,7 @@
 | 2026-09-30 | 新增第八节 **本机收尾批**：回归矩阵脚本化（13 任务 11 OK / 1 SKIP / 0 FAIL）+ known_issues ⑧⑩⑪⑫⑱ + 三处工程债（DEF-034） | `codex/ll-train-detail-fix` |
 | 2026-09-30 | 新增第九节 **P2：高层 action term 收敛**：3 个 action term 继承 `LowLevelPolicyActionBase`（减 ~600 行重复机械）+ 删 `PreTrainedPolicyAction` + 复位时机探针（DEF-035） | `codex/ll-train-detail-fix` |
 | 2026-09-30 | 新增第十节 **P3：EE 锚点对照一键化**：新脚本 `sweep_ee_anchor.py`（4 组 `full/default/low/cfg`，逐组子进程 + 对比表 + 汇总 JSON）+ 修掉旧探针 `none ≡ low` 的语义歧义（DEF-036） | `codex/ll-train-detail-fix` |
+| 2026-09-30 | 新增第十一节 **星号导入遮蔽核实并收口**：7 个奖励函数是故意覆盖（已注释说明）、2 个事件函数不是遮蔽、地形 cfg 同名冲突 → 改名 `MIXED_TERRAINS_CFG`（DEF-037） | `codex/ll-train-detail-fix` |
 
 ---
 
@@ -273,6 +274,25 @@ run `logs/rsl_rl/history_adaptation/2026-09-30_00-09-25_cloud_soft20k`（就是 
 ⇒ 排序与 DEF-006 一致（`full` > `default` > `low`），**课程继续用 `low` 锚点是对的**。
 绝对值比 DEF-006 低一大截是因为这次用的是**已训好的 20k 策略**（DEF-006 是 2026-09-19 的早期策略）
 ⇒ 两组数字不可横向比较，只能比组内排序。
+
+---
+
+## 十一、星号导入遮蔽核实并收口（2026-09-30，分支 `codex/ll-train-detail-fix`）
+
+原 `known_issues.md` 二、1 的"`mdp/__init__.py` 星号导入同名遮蔽"这条，2026-09-30 逐名前查了
+一遍（用 `ast` 取"本仓库 mdp 顶层定义名"∩"官方 `isaaclab/envs/mdp` 顶层定义名"）。
+来龙去脉见 `DEFECT_LOG_zh.md` **DEF-037**。
+
+| 类别 | 名字 | 结论 | 处理 |
+|---|---|---|---|
+| 奖励函数（7 个） | `track_lin_vel_xy_exp` / `track_ang_vel_z_exp` / `base_height_l2` / `lin_vel_z_l2` / `ang_vel_xy_l2` / `flat_orientation_l2` / `undesired_contacts` | **故意**同名覆盖（本仓库 cfg 全部按"用本仓库版本"写） | 行为不变，写进 `velocity/mdp/__init__.py` 末尾注释块 |
+| 高层奖励（1 个） | `undesired_contacts` | 同上 | `highlevel/mdp/__init__.py` 加一句说明 |
+| 事件函数（2 个） | `randomize_rigid_body_inertia` / `randomize_com_positions` | **不是**遮蔽：IsaacLab 5.1 官方 `events.py` 里没有这两个名字（官方的叫 `randomize_rigid_body_com`）⇒ 本仓库是**新增** | 原条目记错，注释里写明 |
+| 地形 cfg（1 个） | 本仓库的 `ROUGH_TERRAINS_CFG`（"混合地形"，含楼梯/boxes/rails/pit）与官方 `isaaclab.terrains.config.rough.ROUGH_TERRAINS_CFG` 同名 | **唯一意外冲突**：写 `mdp.ROUGH_TERRAINS_CFG` 想引用官方那份会静默拿到本仓库的混合地形 | 本仓库那份改名 **`MIXED_TERRAINS_CFG`**（`TERRAIN_CFGS["mixed"]` 不变；全仓库 grep 确认无其它引用） |
+
+验收：`py_compile` 通过 + 冒烟 4 任务（History / Flat-M20-Piper-WBC / Pick-Flat-Teacher /
+Teleop-History，各 64 envs × 2 iter）**4 OK / 0 SKIP / 0 FAIL**
+（`logs/smoke/2026-09-30_p2shadow_*.log`）。
 
 ---
 

@@ -40,6 +40,10 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
             顺带修掉旧探针 `--freeze_ee_preset none` 的语义歧义（当前 cfg 默认 == low 锚点
             ⇒ 原 `none ≡ low`），并补 `full` 组与 `--json_out`。
             实测 4 组：full 7.0% / default 1.8% / low 0.8% / cfg 0.8%（20k 策略，512 envs × 20 s）。
+    DEF-037 **P2 工程债之一完成**：星号导入遮蔽核实 —— 7 个奖励函数是"故意同名覆盖"（已注释）、
+            `randomize_rigid_body_inertia`/`randomize_com_positions` 不是遮蔽（官方无此名字）、
+            唯一意外冲突是地形 cfg 同名 ⇒ 本仓库那份改名 `MIXED_TERRAINS_CFG`。
+            P2 只剩"依赖被本地魔改 / vr_extented 无超时线程 / logs 占盘 / 注释与死代码"这几条。
 
 【本 session 的实测结论（都在 DONE_zh.md 第七节，务必读那一节再动手）】
   * 固定命令判据：`scripts/.../eval_fixed_command.py`（`Train/mean_reward` 带命令课程、跨 run 不可比）。
@@ -84,7 +88,8 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   DEFECT_LOG 里加一条（骨架见 templates/DEFECT_ENTRY_TEMPLATE_zh.md）。
   新增条目：DEF-026（静止伫立）、DEF-027（镜像符号）、DEF-028（扰动加强）、DEF-029（多地形）、
   DEF-030（遥操 history）、DEF-031（本机跑不了生成地形）、DEF-032/033（云端 autodl 接力）、
-  DEF-034（本机收尾批）、DEF-035（P2 action term 收敛）、DEF-036（P3 EE 锚点一键化）。
+  DEF-034（本机收尾批）、DEF-035（P2 action term 收敛）、DEF-036（P3 EE 锚点一键化）、
+  DEF-037（星号导入遮蔽核实与收口）。
 
 【命令备忘】
   # 训练（低层主线）
