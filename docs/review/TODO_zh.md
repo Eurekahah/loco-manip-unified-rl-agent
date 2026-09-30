@@ -218,8 +218,9 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
     `from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG`，遮蔽只影响
     `mdp.rough_terrains_cfg` 这类间接引用 ⇒ 影响面小，留待下次一起清；
   - [x] `setup.py` 的 `packages` 只列顶层包 → **2026-09-30 改成 `find_packages`**（DEF-034 §5）；
-    **仍待办**：`cusrl_cfg_entry_point` 有 **9 处**指向不存在的 `agents/cusrl_ppo_cfg.py`
-    （要决定"删注册字段"还是"补模块"，前者更干净）；
+  - [x] `cusrl_cfg_entry_point` 有 9 处指向不存在的 `agents/cusrl_ppo_cfg.py`
+    → **2026-09-30 全部删除**（`deeprobotics_m20` 7 处 + `deeprobotics_lite3` 2 处；用户确认
+    不用 cusrl 训练）+ 连 `setup.py` 里的 `cusrl[all]` 依赖一起删掉（DEF-034 §7）；
   - 依赖被本地魔改：`IsaacLab-5.1.0/.../task_space_actions.py`（`[IK DEBUG]` 打印 + 私有成员）；
   - `devices/vr_extented.py` 模块级 print（第 59~63 行）+ 无超时线程（线程是 `daemon=True`，
     但网络操作没有超时）；
