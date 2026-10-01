@@ -91,6 +91,14 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
   - [ ] **新观察项（跟随本项，未定论）**：**前轮距收窄** —— 旧代码 0.482/0.515（差 3.3 cm）
     vs 软化版 **0.387/0.468**（差 8.1 cm）；10k 时还是 0.459/0.458（几乎相等）⇒ 10k 之后才收窄，
     且暂无稳定性代价（三档摔倒率都更低）。下次改 EE 区间 / 课程时复核（DEF-038 §6）。
+  - [ ] **新观察项 2（步态归因，未定论）**：消融 2×2 显示 **`joint_mirror` 符号 bug 不是
+    "右后腿撇"的唯一根因** —— `abl_pushonly`（**仍用旧镜像惩罚**，已逐字段核对与 main 一致）
+    的步态也已经对称（hl/hr 膝差 **0.065** rad，旧代码 10k 是 1.16）。而 `abl_pushonly` 与
+    `abl_rewardonly` 共有的、**未被这套消融控制**的改动里有 `HeightInvariantEECommand.reset()`
+    （DEF-034 §2 的 ⑫ 修复）⇒ 想彻底归因要再加一根轴：**`main + ⑫ only` 跑一次 10k**（≈8 h）。
+    见 `DEFECT_LOG_zh.md` DEF-040 §3。
+  - [x] **消融 2×2 已完成**（2026-10-02）：pushonly / rewardonly 都跑完 10k 并拉回；结论
+    "静止漂移的改善主要来自加强扰动（(0,0,0) −37%）" + 上述步态归因修正（DEF-040）。
   - 云端队列现状（2026-09-30 19:35 CST，三台都在跑，**别关机**）：
     ① `cloud_soft20k` **已完成**；② `cloud_cap12_20k`（同实例队列自动接上，验证 P1-1''）；
     ③ `cloud_roughslopes20k` **10528/20000（≈52%）**，中途 checkpoint 已拉回存档
@@ -99,22 +107,33 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
   - 待做：① ③④ 跑完后同样拉回来对比；② 多地形端到端验收（本机做不了，见 DEF-031）；
     ③ **用完记得关机**（DEF-032 §5）。
 
-- [ ] **P1-1'' 把 P1-1 的 `max_noise_std=1.2` 落成 cfg 默认值**
-  - 现状：DEF-024 §4 已证明 cap=1.2 在 4000 iter 上全面更好，但 `rsl_rl_ppo_cfg.py` 的
-    `RslRlPpoActorCriticHistoryCfg.max_noise_std` 仍是 0（不限制），只能命令行覆盖。
-  - 依据（DEF-024 的遗留条件）：先在**全长 20k / 同 seed / 4096 envs** 上再验一次，
-    通过后把默认值改成 1.2。
-  - 验收：全长 run 的 `Policy/mean_noise_std` 平台 ≤1.2，`Train/mean_reward` 不劣于基线。
-  - 注：本次 2000-iter 的静止专项 run 仍是 `max_noise_std=0`，与基线口径一致，便于对比。
+- [x] **P1-1'' 把 P1-1 的 `max_noise_std=1.2` 落成 cfg 默认值** → **2026-10-02 完成（DEF-039）**
+  - 云端 `cloud_cap12_20k`（4096 envs / seed 42 / 20k / cap=1.2）**跑完并拉回**；与同 seed
+    同长度的 `cloud_soft20k`（cap=0）对照：`Policy/mean_noise_std` 平台 **1.13（≤1.2）**、
+    `Loss/learning_rate` 末段 **2.56e-4**（不再是 1e-5 地板）、`Train/mean_reward` 末 1000
+    **35.92 vs 20.23**（基线 23.61）；固定命令 eval 三档 `err_vel_xy` **0.1014 / 0.1301 / 0.1594**
+    （软 20k 是 0.1067 / 0.1332 / 0.1900）、**摔倒率 0.000 / 0.002 / 0.000**。
+  - 已把 `RslRlPpoActorCriticHistoryCfg.max_noise_std` 默认值 **0.0 → 1.2**（复现旧行为：
+    `agent.policy.max_noise_std=0`）；2-iter 冒烟通过 + run 的 `params/agent.yaml` 里
+    `max_noise_std: 1.2`（证明默认值生效）。详见 `DONE_zh.md` 第十三节。
 
-- [ ] **P1-3 多地形任务的端到端验收（被 DEF-031 挡住）**
-  - 现状：`Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0` 只做到 cfg 级验证；
-    本机（Windows + A4000）跑 `terrain_type="generator"` 的任务会在 env 创建期死锁
-    （DEF-031，原始代码同样复现）。
-  - 要做什么：换到能跑生成地形的机器后 ① `--num_envs 64 --max_iterations 2` 冒烟；
-    ② 短训（≥2000 iter）看地形通过率与 `root_height`/`bad_orientation_2` 合计摔倒；
-    ③ 把数字回填 DEF-029。
-  - 同批要补的还有 `Rough-*` / `Rough-WO-Stairs-*` 三个老任务 —— 它们在本机也从未跑过。
+- [x] **P1-3 多地形任务的端到端验收** → **2026-10-02 完成（云端，DEF-040）**
+  - 本机（Windows + A4000）跑 `terrain_type="generator"` 的任务会在 env 创建期死锁
+    （DEF-031，原始代码同样复现）⇒ 全部改到云端做。
+  - 云端 `Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0`：2-iter 冒烟 ✅ →
+    **全长 20k 跑完**（09-30 00:14 → 10-01 13:07）并拉回本机。训练期结果：
+    地形等级中段峰值 **5.80**（满分 9）→ 末段回落到 **3.6**；末段
+    `time_out 0.803` / `bad_orientation_2 0.194` / `terrain_out_of_bounds 0.003`、
+    `ep_len 901`（上限 1000）。
+  - 注意：该任务**关掉了** `root_height_below_minimum`（反斜坡地形有低于 0 m 的部分），
+    所以"摔倒"只能看 `bad_orientation_2`；`error_vel_xy 3.58` 是**口径产物**
+    （v_x 课程重开到 ±5 m/s），不能与平地 run 的 0.84 直接比。
+  - **遗留（新 TODO）**：① 后 1/3 的"地形等级回落"需要处理（把 v_x 课程推迟到地形稳定后放开 /
+    拉长到 40k / 用 `-play-v0` 单独量地形能力）；② 云端固定命令验收**这次没拿到**——
+    该实例上实测 ≈**1 s/env-step**（跑 3 档 × 1100 步要 1 h+），已改用"2 档 × 400 步 +
+    `episode_length_s=6`"的短口径在后台重跑（结果写 `/root/roughslopes_eval_short.json`，
+    见 DEF-040 §4）。
+  - 同批的 `Rough-*` / `Rough-WO-Stairs-*` 三个老任务仍未跑（要在地形可用的机器上补）。
 
 - [x] **P1-4 把"本机跑不了生成地形任务"钉进回归脚本** → **已完成（2026-09-30，DEF-034 §1）**
   - `scripts/reinforcement_learning/rsl_rl/smoke_regression.py`：逐任务独立进程 + 日志落盘 +

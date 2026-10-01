@@ -88,6 +88,23 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
     中途 `model_10000/10500.pt` 已拉回存档（**本机跑不了生成地形 ⇒ 只能存档**）。
     第三台（无 ssh，走 Jupyter）`abl_pushonly_10k` **已跑完**（`model_9999.pt` 已拉回），
     `abl_rewardonly_10k` 19:33 刚起跑。
+  * **2026-10-02 00:20 CST 的收割结果（DEF-039/040）：四条 run 全部跑完**
+    - `cloud_soft20k`：20000 ✅（DEF-038）｜`cloud_cap12_20k`：**20000 ✅**
+      （09-30 19:36→10-01 14:44）⇒ **已把 `max_noise_std` 默认值 0→1.2 定稿**（DEF-039）。
+    - `cloud_roughslopes20k`（多地形）：**20000 ✅**（09-30 00:14→10-01 13:07，300 MB 已拉回）。
+      训练期：地形等级峰值 5.80 → 末段 **3.6/9**；末段 `time_out 0.803` /
+      `bad_orientation_2 0.194` / `terrain_out_of_bounds 0.003`、`ep_len 901`。
+      该任务**关掉**了 `root_height_below_minimum`（反斜坡有 <0 m 部分）。
+    - `abl_pushonly_10k` / `abl_rewardonly_10k`：都 **10000 ✅** 并已拉回。
+    - 三台实例现在都**空着**（GPU 0%）⇒ **记得关机**；`roughslopes_eval_short.json`
+      是唯一还挂着的一个后台验收（云端固定命令验收很慢：该实例 ≈1 s/env-step）。
+  * **消融 2×2 的结论（DEF-040，10k 同口径）**：`(0,0,0)` 的 `err_vel_xy`
+    旧代码 0.1543 / **只加强扰动 0.0968（−37%）** / 只改奖励 0.1361 / 两样都改 0.1074。
+    ⇒ **静止漂移的改善主要来自"加强扰动"**。步态那栏有个**反直觉发现**：`abl_pushonly`
+    用的是**旧镜像惩罚**（已与 main 的 `params/env.yaml` 逐字段核对），步态却也已经对称
+    ⇒ **`joint_mirror` 符号 bug 不是"右后腿撇"的唯一根因**（DEF-027 的归因要降级）；
+    未控制的疑似因素：`HeightInvariantEECommand.reset()`（⑫ 修复）。要彻底归因就再加一根
+    消融轴 `main + ⑫ only`（10k ≈8 h）。
   * **从本机免密 ssh/scp 进 autodl 的可用方法**（本机没有 sshpass/plink/paramiko，也没配公钥）：
     用 OpenSSH askpass 把密码从环境变量喂进去（密码不落盘）——
     `$env:CODEX_SSH_PW='<密码>'; $env:SSH_ASKPASS=<一个只 echo %CODEX_SSH_PW% 的 .cmd>; $env:SSH_ASKPASS_REQUIRE='force';`
@@ -105,7 +122,8 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   新增条目：DEF-026（静止伫立）、DEF-027（镜像符号）、DEF-028（扰动加强）、DEF-029（多地形）、
   DEF-030（遥操 history）、DEF-031（本机跑不了生成地形）、DEF-032/033（云端 autodl 接力）、
   DEF-034（本机收尾批）、DEF-035（P2 action term 收敛）、DEF-036（P3 EE 锚点一键化）、
-  DEF-037（星号导入遮蔽核实与收口）、DEF-038（云端收割 + 全长 20k 定稿）。
+  DEF-037（星号导入遮蔽核实与收口）、DEF-038（云端收割 + 全长 20k 定稿）、
+  DEF-039（`max_noise_std` 默认 1.2 定稿）、DEF-040（多地形 20k + 消融 2×2 归因）。
 
 【命令备忘】
   # 训练（低层主线）

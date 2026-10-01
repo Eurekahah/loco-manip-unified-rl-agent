@@ -99,8 +99,8 @@ class RslRlPpoActorCriticHistoryCfg(RslRlPpoActorCriticCfg):
     privileged_encoder_hidden_dims: tuple[int, ...] = MISSING
     """特权信息编码器的隐藏层维度。"""
 
-    max_noise_std: float = 0.0
-    """探索噪声（动作标准差）的上界；**0（默认）= 不限制**，即旧行为。
+    max_noise_std: float = 1.2
+    """探索噪声（动作标准差）的上界；**0 = 不限制**（旧行为）。**默认 1.2**。
 
     P1-1（见 docs/review/DEFECT_LOG_zh.md DEF-023）：`entropy_coef` 的熵奖励 + 无上界的
     `log_std` 会把 `Policy/mean_noise_std` 顶到 ~1.5 并停在那，同时 adaptive 调度把学习率
@@ -110,7 +110,13 @@ class RslRlPpoActorCriticHistoryCfg(RslRlPpoActorCriticCfg):
     注意：这里不用 `float | None` —— IsaacLab 的 `update_class_from_dict` 是按**当前值的类型**
     校验 hydra 覆盖的（`value is None or isinstance(value, type(obj_mem))`），默认 None 会让
     `agent.policy.max_noise_std=1.2` 报 "Incorrect type ... Expected NoneType"。
-    用法：`python .../train.py --task ... agent.policy.max_noise_std=1.2`
+    **默认值定稿（2026-10-01，DEF-039）**：全长 20k / 同 seed 42 / 4096 envs 的对照
+    （`cloud_cap12_20k` vs `cloud_soft20k`）通过全部判据 ⇒ 默认从 0 改成 **1.2**：
+    `Policy/mean_noise_std` 平台 **1.13（≤1.2）**、`Loss/learning_rate` 末段回到 2.6e-4
+    （软 20k 还是贴在 1e-5 地板）、`Train/mean_reward` 末 1000 **35.92 vs 20.23**；
+    固定命令 eval 三档速度误差 0.1014/0.1301/0.1594（软 20k 0.1067/0.1332/0.1900），
+    摔倒率 0.000/0.002/0.000。要复现旧行为就 `agent.policy.max_noise_std=0`。
+    用法：`python .../train.py --task ... agent.policy.max_noise_std=0`
     """
 
 @configclass
