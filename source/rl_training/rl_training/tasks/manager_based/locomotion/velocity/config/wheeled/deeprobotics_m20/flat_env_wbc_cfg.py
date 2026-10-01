@@ -902,6 +902,28 @@ class AblRewardOnlyEnvWBCConfig(FlatEnvWBCConfig):
             self.disable_zero_weight_rewards()
 
 
+@configclass
+class AblLegacyAllEnvWBCConfig(FlatEnvWBCConfig):
+    """消融 C（2026-10-02 新增）：三项改动**全退**（静止奖励 / 镜像 / 扰动都回旧行为）。
+
+    用途：`AblPushOnly` 与 `AblRewardOnly` 共同包含、但**未被 2×2 控制**的那部分改动
+    （最典型的是 `HeightInvariantEECommand.reset()` 即 DEF-034 §2 的 ⑫ 修复：
+    复位首帧的 EE 目标不再是全 0 位姿）。本变体 = "main 行为 + ⑫ 等工程修复"，
+    与云端旧代码 run（`2026-09-20_00-50-31`，同 seed / 同 10k）对照，就能单独量出 ⑫ 的影响。
+
+    注意：本变体与 `main` 的差别**不止 ⑫** —— 分支上还有若干与训练无关的改动
+    （删死代码 ⑧、加报错提示 ⑩、加启动打印 ⑱、`setup.py` 打包、视觉编码器本地权重、
+    `vr_extented` 调试开关等），它们对低层训练是惰性的，但严格说这条轴测的是
+    "⑫ + 这些惰性改动"。见 `docs/review/DEFECT_LOG_zh.md` DEF-040 §3。
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_ablation(self, new_stand_still=False, new_mirror=False, new_push=False)
+        if self.__class__.__name__ == "AblLegacyAllEnvWBCConfig":
+            self.disable_zero_weight_rewards()
+
+
 # ============================================================================
 # 多地形（随机粗糙 + 正/反斜坡 + 平地）—— 需求 3，2026-09-29 新增
 # ----------------------------------------------------------------------------
@@ -1003,4 +1025,41 @@ class RoughSlopesEnvWBCConfig_PLAY(RoughSlopesEnvWBCConfig):
         self.rewards.stand_still_vel.weight = -2.0
         self.rewards.stand_still_wheel_vel.weight = -0.0005
         if self.__class__.__name__ == "RoughSlopesEnvWBCConfig_PLAY":
+            self.disable_zero_weight_rewards()
+
+
+# ============================================================================
+# 多地形 + **v_x 命令课程推迟一倍**（2026-10-02 新增，DEF-040 §2 的候选修法）
+# ----------------------------------------------------------------------------
+# 背景：`cloud_roughslopes20k` 的地形等级在中段爬到峰值 5.80（满分 9），后 1/3 回落到 3.6。
+# 后 1/3 恰好在放开 v_x 命令课程（±2→±5 m/s，s4~s7 分别在 3125/4167/5208/6250 iter 生效）
+# ⇒ 猜想是"命令难度涨得比地形课程快"，把 v_x 课程的四个台阶各推迟一倍
+# （±5 从 31% 推迟到 62% 的训练进度）。
+# 与 `cloud_roughslopes20k` 的差异**有两条**（要一起看）：
+#   ① 本变体吃到了新的全局默认 `max_noise_std=1.2`（DEF-039）；
+#   ② v_x 课程台阶 ×2。
+# `-play-` 变体不另开：PLAY 本来就关掉 v_x 课程（把所有台阶置 None），
+# 所以验收直接用 `Rough-Slopes-History-Adaptation-Deeprobotics-M20-play-v0` 即可。
+# ============================================================================
+SLOW_VX_FACTOR: int = 2
+"""v_x 命令课程台阶的推迟倍数（`RoughSlopesSlowVxEnvWBCConfig` 用）。"""
+
+
+@configclass
+class RoughSlopesSlowVxEnvWBCConfig(RoughSlopesEnvWBCConfig):
+    """多地形 + v_x 课程台阶 ×2（其余全部与 `RoughSlopesEnvWBCConfig` 一致）。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        for name in (
+            "base_velocity_lin_vel_x_s4",
+            "base_velocity_lin_vel_x_s5",
+            "base_velocity_lin_vel_x_s6",
+            "base_velocity_lin_vel_x_s7",
+        ):
+            term = getattr(self.curriculum, name)
+            if term is not None:
+                mp = term.params["modify_params"]
+                mp["num_steps"] = int(mp["num_steps"] * SLOW_VX_FACTOR)
+        if self.__class__.__name__ == "RoughSlopesSlowVxEnvWBCConfig":
             self.disable_zero_weight_rewards()

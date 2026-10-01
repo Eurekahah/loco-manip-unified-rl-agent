@@ -180,6 +180,18 @@ gym.register(
     },
 )
 
+# 消融 C（2026-10-02）：三项改动**全退**（= main 行为 + ⑫ 等工程修复）。
+# 与云端旧代码 run（2026-09-20_00-50-31，同 seed / 同 10k）对照 ⇒ 单独量 ⑫ 的影响。
+gym.register(
+    id="History-Ablation-LegacyAll-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:AblLegacyAllEnvWBCConfig",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationPPORunnerCfg",
+    },
+)
+
 # 多地形（随机粗糙 0.01~0.05 + 正/反斜坡 + 平地）—— 需求 3（2026-09-29）
 gym.register(
     id="Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0",
@@ -197,6 +209,19 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:RoughSlopesEnvWBCConfig_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationPPORunnerCfg",
+    },
+)
+
+# 多地形 + v_x 命令课程推迟一倍（2026-10-02，DEF-040 §2 的候选修法）。
+# 其余（地形组成、奖励、其它课程）与上面那条完全一致 ⇒ 与 cloud_roughslopes20k 可直接对比；
+# 注意它还同时吃到了新的全局默认 `max_noise_std=1.2`（DEF-039）⇒ 差异有两条，看结论时要一起说。
+gym.register(
+    id="Rough-Slopes-SlowVx-History-Adaptation-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:RoughSlopesSlowVxEnvWBCConfig",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationPPORunnerCfg",
     },
 )
