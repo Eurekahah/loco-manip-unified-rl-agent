@@ -49,6 +49,10 @@
 
 （`cloud_cap12_20k` 也跑完，数字见 DEF-039。）
 
+> 本机存档内容：三条 20k run 都是**全套**（41 个 `model_*.pt` + 事件文件 + `params/`，
+> 各 ≈300 MB）；两条消融只拉了**最终 checkpoint + 事件文件 + params**
+> （`model_9999.pt`；pushonly 44 MB / rewardonly 48 MB）——中间 checkpoint 要用再按需从云端取。
+
 **2. 多地形 20k 的训练期结论（`cloud_roughslopes20k`）**
 
 * **地形等级先升后降**：`Curriculum/terrain_levels` 轨迹大致
