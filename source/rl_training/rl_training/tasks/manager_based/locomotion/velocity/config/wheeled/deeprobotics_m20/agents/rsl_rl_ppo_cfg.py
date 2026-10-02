@@ -115,8 +115,12 @@ class RslRlPpoActorCriticHistoryCfg(RslRlPpoActorCriticCfg):
     `Policy/mean_noise_std` 平台 **1.13（≤1.2）**、`Loss/learning_rate` 末段回到 2.6e-4
     （软 20k 还是贴在 1e-5 地板）、`Train/mean_reward` 末 1000 **35.92 vs 20.23**；
     固定命令 eval 三档速度误差 0.1014/0.1301/0.1594（软 20k 0.1067/0.1332/0.1900），
-    摔倒率 0.000/0.002/0.000。要复现旧行为就 `agent.policy.max_noise_std=0`。
-    用法：`python .../train.py --task ... agent.policy.max_noise_std=0`
+    摔倒率 0.000/0.002/0.000。要复现旧行为就用 `agent.policy.max_noise_std=0.0`（**见下面的类型坑**）。
+    ⚠️ **恢复旧行为必须写 `=0.0`（float），不能写 `=0`** —— IsaacLab 的
+    `update_class_from_dict` 按**当前值的类型**校验 hydra 覆盖，而 hydra 会把 `0` 解析成
+    `int` ⇒ 报 `ValueError: Incorrect type under namespace: /policy/max_noise_std.
+    Expected: <class 'float'>, Received: <class 'int'>`（2026-10-02 实测踩过，见 DEF-040 §5）。
+    用法：`python .../train.py --task ... agent.policy.max_noise_std=0.0`
     """
 
 @configclass

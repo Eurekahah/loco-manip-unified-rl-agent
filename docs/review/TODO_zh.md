@@ -27,6 +27,8 @@
 | 2026-09-30 | **星号导入遮蔽核实并收口（DEF-037）**：7 个奖励函数是故意覆盖（写进注释）、2 个事件函数不是遮蔽（官方没这两个名字）、地形 cfg 同名冲突 → 本仓库那份改名 `MIXED_TERRAINS_CFG`；4 任务冒烟全 OK | `codex/ll-train-detail-fix` |
 | 2026-09-30 | 低层 known_issues **⑬ 作废**（当前实现是 `> 0.1`，原本的 "`> 0.0` 空操作" 已不成立）；`vr_extented` 的"无超时线程"**评估后降级**（daemon 线程 + 服务器主循环本不该有超时，唯一 UDP connect 不阻塞；盲改风险大于收益）；IsaacLab 本地魔改条目补注"不属于本仓库" | `codex/ll-train-detail-fix` |
 | 2026-09-30 | **云端收割 + P1-1''' 主线定稿（DEF-038）**：`cloud_soft20k` 跑完并拉回本机（43 文件/303 MB），与同代旧代码 20k 对照 —— 静止漂移 **−35%**、三档摔倒率全降、步态"右后腿撇"消失；另拉回 `abl_pushonly_10k`（已完成）与 `cloud_roughslopes20k@10500`；新增观察项"前轮距收窄" | `codex/ll-train-detail-fix` |
+| 2026-10-02 | **缺陷根因修正（DEF-040 §3/§5）**："右后腿往右前方撇"的根因是 **⑫**（`HeightInvariantEECommand.reset()`），不是镜像符号 bug —— 补跑第四根轴 `abl_legacyall_10k`（= main + ⑫）膝差 **1.156→0.008 rad**；`(0,0,0)` 速度误差 **0.1543→0.0916**。DEF-027 归因降级；顺带记下 hydra 传 `0`（int）被类型校验拒、要写 `0.0` 的坑 | `codex/ll-train-detail-fix` |
+| 2026-10-02 | **两条新长跑已上云**：① `cloud_slowvx20k`（多地形 + v_x 课程台阶 ×2，验证地形等级能否不回退）② `abl_legacyall_10k`（第四根消融轴，**已跑完并拉回**，见上）；新增任务 `Rough-Slopes-SlowVx-History-Adaptation-Deeprobotics-M20-v0` / `History-Ablation-LegacyAll-Deeprobotics-M20-v0` | `codex/ll-train-detail-fix` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -91,14 +93,19 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
   - [ ] **新观察项（跟随本项，未定论）**：**前轮距收窄** —— 旧代码 0.482/0.515（差 3.3 cm）
     vs 软化版 **0.387/0.468**（差 8.1 cm）；10k 时还是 0.459/0.458（几乎相等）⇒ 10k 之后才收窄，
     且暂无稳定性代价（三档摔倒率都更低）。下次改 EE 区间 / 课程时复核（DEF-038 §6）。
-  - [ ] **新观察项 2（步态归因，未定论）**：消融 2×2 显示 **`joint_mirror` 符号 bug 不是
-    "右后腿撇"的唯一根因** —— `abl_pushonly`（**仍用旧镜像惩罚**，已逐字段核对与 main 一致）
-    的步态也已经对称（hl/hr 膝差 **0.065** rad，旧代码 10k 是 1.16）。而 `abl_pushonly` 与
-    `abl_rewardonly` 共有的、**未被这套消融控制**的改动里有 `HeightInvariantEECommand.reset()`
-    （DEF-034 §2 的 ⑫ 修复）⇒ 想彻底归因要再加一根轴：**`main + ⑫ only` 跑一次 10k**（≈8 h）。
-    见 `DEFECT_LOG_zh.md` DEF-040 §3。
-  - [x] **消融 2×2 已完成**（2026-10-02）：pushonly / rewardonly 都跑完 10k 并拉回；结论
-    "静止漂移的改善主要来自加强扰动（(0,0,0) −37%）" + 上述步态归因修正（DEF-040）。
+  - [x] **步态归因：已查清（2026-10-02，DEF-040 §3 ④）** —— 补跑第四根轴
+    `abl_legacyall_10k`（= `main` 行为 + ⑫，其余三项全退）⇒
+    **"右后腿往右前方撇"的根因是 ⑫（`HeightInvariantEECommand.reset()`，DEF-034 §2），
+    不是 `joint_mirror` 的符号 bug**：膝差 **1.156 → 0.008 rad**、`hl~hr` 膝镜像 RMS
+    **1.257 → 0.334**（且 main 与 LegacyAll 的扰动完全相同 ⇒ 扰动/奖励都控制住了）。
+    `params/env.yaml` 全文只差 32 行（行为差异仅"只读的启动期检查 + 删两个 weight=0 死项 + ⑫"）。
+    **DEF-027 的归因已降级**（镜像符号修复仍保留：语义正确 + `abl_rewardonly` 的 `fl~hr` 膝 RMS
+    0.749 是四格最好，但"修它是为了治撇腿"不成立）。
+    顺带修正速度误差的归因：`main + ⑫` 的 `(0,0,0)` 是 **0.0916**（旧代码 0.1543，**−41%**），
+    四格最好、摔倒率 0 ⇒ **⑫ 也是静止漂移那笔的最大贡献**，"加强扰动"（0.0968）与它同档。
+  - [x] **消融 2×2 已完成**（2026-10-02）：pushonly / rewardonly 都跑完 10k 并拉回（DEF-040）。
+    口径提醒：`eval_fixed_command.py` 不关 push 事件 ⇒ **"摔倒率"列不是同口径**
+    （⑫-only/LegacyAll 用旧扰动 ±0.5，另三格用加强扰动 ±2/±1/yaw）；速度误差与步态列不受影响。
   - 云端队列现状（2026-09-30 19:35 CST，三台都在跑，**别关机**）：
     ① `cloud_soft20k` **已完成**；② `cloud_cap12_20k`（同实例队列自动接上，验证 P1-1''）；
     ③ `cloud_roughslopes20k` **10528/20000（≈52%）**，中途 checkpoint 已拉回存档

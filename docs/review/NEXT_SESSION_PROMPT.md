@@ -105,6 +105,17 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
     ⇒ **`joint_mirror` 符号 bug 不是"右后腿撇"的唯一根因**（DEF-027 的归因要降级）；
     未控制的疑似因素：`HeightInvariantEECommand.reset()`（⑫ 修复）。要彻底归因就再加一根
     消融轴 `main + ⑫ only`（10k ≈8 h）。
+  * **2026-10-02 22:20 CST：两件新事**
+    - **第四根轴已跑完并结案**：`abl_legacyall_10k` = 三项全退 + 只留 ⑫ ⇒
+      **"右后腿撇"的根因是 ⑫**（膝差 **1.156 → 0.008 rad**），不是镜像符号（DEF-027 降级）；
+      `(0,0,0)` 速度误差 **0.1543 → 0.0916**（−41%，四格最好、摔倒率 0）。
+      ⚠️ 口径提醒：`eval_fixed_command.py` 不关 push ⇒ "摔倒率"列跨格不可比。
+    - 新长跑在跑：**`cloud_slowvx20k`**（1237，多地形 + v **x 课程台阶 ×2** = 150k/200k/250k/300k，
+      cap=1.2）—— 10-02 22:18 时 **10801/20000**、7.04 s/iter、ETA ≈18 h；
+      目的：验证"把 v_x 课程推迟一倍能否让地形等级不回退"（DEF-040 §2）。
+      新任务 id：`Rough-Slopes-SlowVx-History-Adaptation-Deeprobotics-M20-v0`。
+      跑完后照旧：`scp` 回来 → `summarize_run.py` 看 `Curriculum/terrain_levels` 轨迹。
+    - 291 现在**空闲**（legacyall 已跑完，GPU 0%）⇒ 可以关机或安排新 run。
   * **从本机免密 ssh/scp 进 autodl 的可用方法**（本机没有 sshpass/plink/paramiko，也没配公钥）：
     用 OpenSSH askpass 把密码从环境变量喂进去（密码不落盘）——
     `$env:CODEX_SSH_PW='<密码>'; $env:SSH_ASKPASS=<一个只 echo %CODEX_SSH_PW% 的 .cmd>; $env:SSH_ASKPASS_REQUIRE='force';`
@@ -170,6 +181,9 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   * 课程的 print 要节流：curriculum 在每次 episode reset 都被调用（4096 envs 时 ~4~8 次/env step），
     逐次打印会在 25k 步里刷出几万行（`ramp_command_param` 已按"变化 ≥1% 才打印"节流）。
   * `episode_length_buf == 0` 在复位后的整步内都为真；判"刚复位"要用"相比上一次 tick 变小"。
+  * **hydra 覆盖 `float` 字段要写小数**：`max_noise_std` 默认改成 1.2 之后，`agent.policy.max_noise_std=0`
+    会被 `update_class_from_dict` 拒（hydra 把 `0` 解析成 int，报 `Expected: <class 'float'>,
+    Received: <class 'int'>`）⇒ 必须写 **`0.0`**（DEF-040 §5）。
   * 想"在复位时做点什么"用基类的 `_on_reset(env_ids)` 钩子（`ActionManager.reset` 会转发）——
     实测那一刻 `robot.data` **已经是复位后状态**（`write_root_pose_to_sim` 会把 body 缓存
     timestamp 置 -1）；比旧写法（`apply_actions` 里看 `episode_length_buf == 0`）早一个 env step。
