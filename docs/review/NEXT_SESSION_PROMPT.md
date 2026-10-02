@@ -184,6 +184,15 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   * **hydra 覆盖 `float` 字段要写小数**：`max_noise_std` 默认改成 1.2 之后，`agent.policy.max_noise_std=0`
     会被 `update_class_from_dict` 拒（hydra 把 `0` 解析成 int，报 `Expected: <class 'float'>,
     Received: <class 'int'>`）⇒ 必须写 **`0.0`**（DEF-040 §5）。
+  * **要看策略表现就别再翻那 4 个老 test 脚本了**：`gait_test`/`torque_test`/`tracking_test`/
+    `test` 已被 **`scripts/reinforcement_learning/rsl_rl/policy_report.py`** 取代（DEF-041）——
+    一次滚动出 10 个角度（跟踪/步态/关节/力矩+峰值因子/对称/姿态/臂 EE/地形点云/A-B 对比）
+    + `report.md` + `summary.json` + `data.npz`：
+    `python scripts/reinforcement_learning/rsl_rl/policy_report.py --headless --task <task>
+    --checkpoint <run>/model_19999.pt --compare <另一份>/model_19999.pt --commands "0,0,0;0.5,0,0;1.0,0,0"
+    --num_envs 32 --steps 200 --out-dir logs/smoke/report_x`
+    （地形任务用小环境数 1~16；脚本会临时加一个**只用于诊断**的 height_scanner 才能画地形点云；
+    力矩限幅元数据在 IsaacLab 里是 1e9 占位值 ⇒ 报告用"峰值因子"代替。）
   * 想"在复位时做点什么"用基类的 `_on_reset(env_ids)` 钩子（`ActionManager.reset` 会转发）——
     实测那一刻 `robot.data` **已经是复位后状态**（`write_root_pose_to_sim` 会把 body 缓存
     timestamp 置 -1）；比旧写法（`apply_actions` 里看 `episode_length_buf == 0`）早一个 env step。

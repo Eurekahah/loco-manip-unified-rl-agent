@@ -1,4 +1,18 @@
 """
+
+⚠️ **本脚本已由 `policy_report.py` 取代**（2026-10-02）。它只做"跟踪性能"一个角度
+（且把指标写进 TensorBoard 的 `play_metrics`），而 `policy_report.py` 的
+`fig01/fig02/fig03` 给出「指令-实际时序 + 逐档误差柱状 + 指令-实际散点 + 终止构成 +
+姿态/高度」，并支持 `--compare` 直接 A/B。等价用法：
+
+    python scripts/reinforcement_learning/rsl_rl/policy_report.py --headless \
+        --task <task> --checkpoint <run>/model_<iter>.pt \
+        --commands "0,0,0;0.5,0,0;1.0,0,0" --num_envs 32 --steps 200 \
+        --out-dir logs/smoke/report_x
+
+（要"随机重采样命令、看整段统计"的话用 `eval_fixed_command.py` / `summarize_run.py`。）
+下面原始说明仍有效。
+
 跟踪性能测试脚本
 用于测试搭载机械臂的机器狗低层运动控制策略的速度/姿态跟踪性能。
 

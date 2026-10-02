@@ -22,6 +22,7 @@
 | 2026-09-30 | 第七节新增 **d) 全长 20k 定稿**：云端 `cloud_soft20k` 跑完并拉回本机，与同代旧代码 20k 做固定命令 eval —— 静止漂移 **0.1644→0.1067（−35%）**、三档摔倒率全降、步态"右后腿撇"消失（后腿不对称 −5.9cm→+0.4cm）；另记观察项"前轮距收窄"（DEF-038） | `codex/ll-train-detail-fix` |
 | 2026-10-02 | 新增第十二节 **多地形 20k + 消融 2×2**：`cloud_roughslopes20k` 跑完（地形等级峰值 5.8 / 末段 3.6、末段 timeout 0.80）；消融显示**静止漂移的改善主要来自"加强扰动"**（只加强扰动 −37%），而"镜像符号修复"不是步态对称的唯一根因（DEF-040） | `codex/ll-train-detail-fix` |
 | 2026-10-02 | 新增第十三节 **P1-1'' 定稿**：`max_noise_std` 默认 0 → **1.2**（噪声平台 1.13、训练回报 35.92 vs 20.23、eval 三档速度误差全线最优且摔倒率≈0）（DEF-039） | `codex/ll-train-detail-fix` |
+| 2026-10-02 | 新增第十四节 **可视化脚本收敛成 `policy_report.py`**：4 个老 test 脚本（~96 KB、各自一份样板）→ 一次滚动出 10 个角度 + `report.md`/`summary.json`/`data.npz` + `--compare` A/B；并出"平地 cap12 vs 旧代码"与"多地形 20k"两份实测报告（DEF-041） | `codex/ll-train-detail-fix` |
 
 ---
 
@@ -424,6 +425,22 @@ DEF-034 §2）—— `main + ⑫` 就是四格最好（`(0,0,0)` **0.1543 → 0.
 `RslRlPpoActorCriticHistoryCfg.max_noise_std` 默认值由 **0.0 改成 1.2**
 （复现旧行为：`agent.policy.max_noise_std=0`）。验证：2-iter 冒烟通过，且该 run 的
 `params/agent.yaml` 里 `max_noise_std: 1.2`。
+
+---
+
+## 十四、可视化/测试脚本收敛（2026-10-02，分支 `codex/ll-train-detail-fix`）
+
+来龙去脉见 `DEFECT_LOG_zh.md` **DEF-041**。
+
+| 项 | 内容 | 验收 |
+|---|---|---|
+| **4 → 1** | `gait_test.py` / `torque_test.py` / `tracking_test.py` / `test.py`（共 ~96 KB，各一份 Isaac+argparse+画图样板、各只看一个角度、没有 A/B）收敛成 **`scripts/reinforcement_learning/rsl_rl/policy_report.py`**：采集（`Harness`）与画图（`figXX`）分离、指标为纯函数、`series={label:[EpisodeData]}` 让单策略与 A/B 共用一条路径 | 平地 A/B 报告 **10 图**、多地形报告 **9 图**，均 EXIT=0；旧脚本加"已被取代"说明后保留 |
+| **10 个角度** | 跟踪时序 / 跟踪汇总 / 姿态高度 / 步态图 / 关节轨迹 / 执行器+峰值因子 / 对称性（含足端俯视图）/ 机械臂 EE / 地形点云 / A-B 对比表 | 输出 `report.md` + `summary.json` + `data.npz` + PNG；`--compare` 一套命令出 A/B |
+| **平地实测（cap12 vs 旧代码）** | `logs/smoke/report_flat_AB/`（32 envs × 200 步 × 3 档） | `(0,0,0)` `err_vel_xy` **0.1061 vs 0.1829**；`hl~hr` 膝镜像 RMS **0.301 vs 1.213**；静止轨迹长 **0.40 vs 0.75 m**；平均关节功率 **29.0 vs 36.1 W** |
+| **多地形实测（rough 20k）** | `logs/smoke/report_terrain/`（2 envs × 150 步 × 3 档，含地形点云） | `(0,0,0)` `err_vel_yaw` **0.2404**（平地 0.0461）、`高度std` **0.0481**（平地 0.0057，8.4×）；`(1.0,0,0)` `err_vel_xy` **0.3744**（平地 0.0905，4.1×）；地形上 1 次 `bad_orientation_2` |
+
+> 两个"坑"也在这一批里解决：WBC 配置把 `height_scanner` 关了（脚本临时加一份**只用于诊断**的，
+> 不进观测），以及 `joint_effort_limits` 读出来是 **1e9 占位值**（改成画**峰值因子**）。
 
 ---
 

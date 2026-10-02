@@ -1,4 +1,16 @@
 """
+
+⚠️ **本脚本已由 `policy_report.py` 取代**（2026-10-02）。它只画"全身关节力矩"一个角度，
+而 `policy_report.py` 的 `fig06_actuation.png` 同时给出「力矩 RMS / 峰值 / 峰值因子 /
+关节功率」，并且还能跟另一个 checkpoint 叠在一起比。等价用法：
+
+    python scripts/reinforcement_learning/rsl_rl/policy_report.py --headless \
+        --task <task> --checkpoint <run>/model_<iter>.pt \
+        --commands "1.0,0,0" --num_envs 8 --steps 400 --out-dir logs/smoke/report_x
+
+注意：本资产在 IsaacLab 里读到的 `joint_effort_limits` 是 **1e9 占位值**（不是真实限幅），
+所以新脚本不画"峰值/限幅"而改画"峰值因子"。下面原始说明仍有效。
+
 全身关节力矩记录测试脚本
 用于记录搭载机械臂的机器狗低层运动控制策略在推理时，全身关节
 （底盘 4 条腿 × 4 关节 = 16 个 + 机械臂 6 个关节 + 夹爪 1 个关节，共 23 个）

@@ -30,6 +30,69 @@
 
 ---
 
+### DEF-041 `2026-10-02` 4 个老 test 可视化脚本 → 统一成 `policy_report.py`（10 个角度 + A/B）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 工具重构（**本机可跑，不需要训练**） |
+| 状态 | 已完成并实测（平地 A/B 报告 + 多地形报告各出一套图） |
+| 关联 | `codex/ll-train-detail-fix`；新增 `scripts/reinforcement_learning/rsl_rl/policy_report.py`；旧的 `gait_test.py` / `torque_test.py` / `tracking_test.py` / `test.py` 加了"已被取代"说明（保留对照，可随时删） |
+
+**1. 原来那 4 个脚本的问题**
+
+`gait_test.py`(22 KB) / `torque_test.py`(28 KB) / `tracking_test.py`(20 KB) / `test.py`(25 KB)
+各写一份"Isaac 启动 + argparse + 建环境 + 装 checkpoint + 内联画图"的样板，而且：
+
+* **一次只能看一个角度**（步态 / 力矩 / 跟踪三选一），看全就要建 3~4 次 Isaac env（每次 ~40 s）；
+* 参数语义各不同（`--terrain` / `--cmd_*` / `--record_time` / `--scheme` / `--save_fig`…），
+  同一个"地平线"要记三套；
+* 采集与绘图混在 `main()` 里，加一个指标要动一大段；
+* **没有 A/B 能力**（而"同 env 同命令比两个 checkpoint"是这个项目最常见的动作）。
+
+**2. 新脚本 `policy_report.py`：一次滚动 = 10 个角度**
+
+设计上把"采集（`Harness`）"与"画图（`figXX`）"分开，指标是纯函数（`mirror_rms` /
+`lateral_asymmetry` / `stance_width` / `duty_factor` / `dominant_freq` / `summarize`），
+所以加指标只改一处；`series = {label: [EpisodeData, ...]}` 的结构让"单策略"和"A/B 叠加"
+走同一条代码路径。
+
+| # | 图 | 看什么 |
+|---|---|---|
+| 1 | `fig01_tracking_timeseries` | 逐档命令的 vx/vy/wz「指令 vs 实际」时序 |
+| 2 | `fig02_tracking_summary` | 逐档误差柱状 + 指令-实际散点（带 y=x）+ 终止构成 |
+| 3 | `fig03_posture` | 机身高度（相对足端）vs 高度指令 / 俯仰-侧倾 vs 姿态指令 / root_z 分布 |
+| 4 | `fig04_gait_diagram` | 四足触地条带 + 轮心离地高度 + 占空比 + 踏步主频 + 四轮转速 |
+| 5 | `fig05_joints` | 12 个腿关节的位置/速度（网格） |
+| 6 | `fig06_actuation` | 力矩 RMS / 峰值 / **峰值因子** / 关节功率（23~24 个关节全覆盖） |
+| 7 | `fig07_symmetry` | 镜像 RMS（4 对 × 3 关节）+ 左右不对称度 + **足端俯视图** + 前后轮距 |
+| 8 | `fig08_arm_ee` | 机械臂 EE 位置/姿态跟踪误差 + 臂/夹爪关节角 |
+| 9 | `fig09_terrain` | 地形扫描点云（俯视，颜色=高度）+ 地形高度波动 + 足端离地间隙 |
+| 10 | `fig10_compare`(+`_table`) | 两个 checkpoint 的关键指标并排 + 一张数字表 |
+
+输出：`report.md`（三张汇总表 + 图清单）/ `summary.json`（全部标量）/ `data.npz`（原始时序）。
+
+顺带解决的两个"踩坑"：
+
+* **`height_scanner` 被 WBC 配置关掉了**（`RoughEnvWBCConfig.__post_init__`）⇒ 地形任务上
+  脚本会**临时加一份只用于诊断的扫描器**（不进 observations、不影响策略），否则 fig09 无从谈起；
+  小环境数（≤16）时另把地形网格缩到 5×5（绕开 DEF-040 §4 里那个"512 envs × 5×5 卡死"）。
+* **`joint_effort_limits` 是 1e9 占位值**（不是真实限幅）⇒ 不画"峰值/限幅"（会永远显示 0.00），
+  改画**峰值因子** `|τ|max / RMS`（始终可算，且能看出负载是否平滑）。
+
+**3. 两份实测报告（本机，2026-10-02）**
+
+* **平地 A/B**：`--task History-Adaptation-…-play-v0`，`cap12_20k`(A) vs `oldcode_20k`(B)，
+  32 envs × 200 步 × 3 档命令 ⇒ `logs/smoke/report_flat_AB/`（10 图）。
+  实测（`report.md` 表）：`(0,0,0)` 的 `err_vel_xy` **0.1061 vs 0.1829**、
+  `hl~hr` 膝镜像 RMS **0.301 vs 1.213**、静止时轨迹长 **0.40 m vs 0.75 m**（4 s 内），
+  平均关节功率 **29.0 W vs 36.1 W** ⇒ 与固定命令 eval 的结论一致，且**多了"镜像/轨迹/功率"三个新角度**。
+* **多地形**：`Rough-Slopes-…-play-v0`，`rough_20k`，2 envs × 150 步 × 3 档 ⇒
+  `logs/smoke/report_terrain/`（9 图，含地形点云）。
+  实测：`(0,0,0)` 的 `err_vel_yaw` **0.2404**（平地同档 0.0461）、`高度std` **0.0481**（平地 0.0057，**8.4×**）、
+  `(1.0,0,0)` 的 `err_vel_xy` **0.3744**（平地同档 0.0905，**4.1×**）、地形上出现 1 次
+  `bad_orientation_2` 终止 ⇒ **多地形策略能走，但高速档跟踪与静止抗偏航明显弱于平地**，
+  这正好解释了 DEF-040 §2 里"地形等级后 1/3 回落"的现象。
+
 # 记录（新→旧）
 
 ### DEF-040 `2026-10-01/02` 多地形 20k 跑完 + 消融 2×2 收口（谁修好了什么）

@@ -9,6 +9,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+# ⚠️ **本脚本已由 `policy_report.py` 取代**（2026-10-02）：这里的 `--scheme 1~4` 只做
+# "把跟踪指标写进 TensorBoard `play_metrics`"这一件事，而 `policy_report.py`
+# 一次滚动就出 10 张诊断图 + `report.md` + `summary.json` + `data.npz`，
+# 并且支持 `--compare` 直接 A/B。等价用法见 `policy_report.py` 的模块文档。
 """Script to play a checkpoint if an RL agent from RSL-RL."""
 
 """Launch Isaac Sim Simulator first."""

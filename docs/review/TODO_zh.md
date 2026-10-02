@@ -29,6 +29,7 @@
 | 2026-09-30 | **云端收割 + P1-1''' 主线定稿（DEF-038）**：`cloud_soft20k` 跑完并拉回本机（43 文件/303 MB），与同代旧代码 20k 对照 —— 静止漂移 **−35%**、三档摔倒率全降、步态"右后腿撇"消失；另拉回 `abl_pushonly_10k`（已完成）与 `cloud_roughslopes20k@10500`；新增观察项"前轮距收窄" | `codex/ll-train-detail-fix` |
 | 2026-10-02 | **缺陷根因修正（DEF-040 §3/§5）**："右后腿往右前方撇"的根因是 **⑫**（`HeightInvariantEECommand.reset()`），不是镜像符号 bug —— 补跑第四根轴 `abl_legacyall_10k`（= main + ⑫）膝差 **1.156→0.008 rad**；`(0,0,0)` 速度误差 **0.1543→0.0916**。DEF-027 归因降级；顺带记下 hydra 传 `0`（int）被类型校验拒、要写 `0.0` 的坑 | `codex/ll-train-detail-fix` |
 | 2026-10-02 | **两条新长跑已上云**：① `cloud_slowvx20k`（多地形 + v_x 课程台阶 ×2，验证地形等级能否不回退）② `abl_legacyall_10k`（第四根消融轴，**已跑完并拉回**，见上）；新增任务 `Rough-Slopes-SlowVx-History-Adaptation-Deeprobotics-M20-v0` / `History-Ablation-LegacyAll-Deeprobotics-M20-v0` | `codex/ll-train-detail-fix` |
+| 2026-10-02 | **可视化脚本收敛（DEF-041）**：`gait_test`/`torque_test`/`tracking_test`/`test` 4 个老脚本 → 统一 `policy_report.py`（10 个角度 + `--compare` A/B + `report.md`/`summary.json`/`data.npz`）；出平地（cap12 vs 旧代码）与多地形 20k 两份实测报告；旧脚本加"已被取代"说明（保留待删） | `codex/ll-train-detail-fix` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -242,6 +243,9 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
     建议改成"本地权重优先，缺失再联网"。
 
 - [ ] **工程性清理**（原 `known_issues.md` 二、1-8）
+  - [ ] 删掉已被 `policy_report.py` 取代的 4 个老脚本（`gait_test.py` / `torque_test.py` /
+    `tracking_test.py` / `test.py`）—— 2026-10-02 已给它们加"已被取代"说明（DEF-041），
+    保留只为对照旧口径；确认不再需要后一条 `git rm` 即可（历史里可查回）。
   - [x] `mdp/__init__.py` 星号导入造成同名遮蔽 → **2026-09-30 核实并收口（DEF-037）**：
     逐名前查（ast 集合交集）后，`randomize_rigid_body_inertia` / `randomize_com_positions`
     **不是**遮蔽（官方没有这两个名字，是本仓库新增）；7 个奖励函数 + highlevel 的

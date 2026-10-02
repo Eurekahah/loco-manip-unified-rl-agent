@@ -1,4 +1,17 @@
 """
+
+⚠️ **本脚本已由 `policy_report.py` 取代**（2026-10-02）。
+它只覆盖"步态/触地时序"这一个角度，而 `policy_report.py` 一次滚动就给出 10 个角度
+（跟踪 / 步态 / 关节 / 力矩 / 对称 / 姿态 / 机械臂 / 地形 / A-B 对比），并输出
+`report.md` + `summary.json` + `data.npz`。等价用法：
+
+    python scripts/reinforcement_learning/rsl_rl/policy_report.py --headless \
+        --task <task> --checkpoint <run>/model_<iter>.pt \
+        --commands "1.0,0,0" --num_envs 8 --steps 400 --out-dir logs/smoke/report_x
+
+保留本文件只为对照旧口径（`--terrain` / `--method air_time|force` 这些参数在新脚本里
+没有再实现）。下面的原始说明仍然有效。
+
 步态检测测试脚本
 用于记录搭载机械臂的机器狗低层运动控制策略在推理时，四条腿（轮）的
 触地/腾空时序，并绘制步态图（gait diagram）、计算占空比/相位等指标。
