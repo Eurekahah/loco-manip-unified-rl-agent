@@ -32,6 +32,9 @@
 
 ### DEF-041 `2026-10-02` 4 个老 test 可视化脚本 → 统一成 `policy_report.py`（10 个角度 + A/B）
 
+> ⚠️ **DEF-042（2026-10-03，见下一节）是对本文的增补**：加了分地形统计、指令切换测试、
+> root_z 图重画、时长放宽到 10 s、以及 `--from-npz` 只画图模式。
+
 | 项 | 内容 |
 |---|---|
 | 类型 | 工具重构（**本机可跑，不需要训练**） |
@@ -94,6 +97,54 @@
   这正好解释了 DEF-040 §2 里"地形等级后 1/3 回落"的现象。
 
 # 记录（新→旧）
+
+### DEF-042 `2026-10-03` `policy_report.py` 第二轮：分地形统计 / 指令切换 / root_z 澄清 / 10 s / 云端采集+本机画图
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 工具增强（按用户 2026-10-03 的四点反馈） |
+| 状态 | 代码已完成并通过 `py_compile`；**切换测试已出图**；分地形与"10 s 长时长"两份报告未跑完（见"卡点"） |
+| 关联 | `scripts/reinforcement_learning/rsl_rl/policy_report.py` |
+
+**1. 四点反馈对应的改动**
+
+| 反馈 | 实现 |
+|---|---|
+| 多地形要**按地形分别**测各项指标 | 新增 `fig11_per_terrain` + report §4：逐 env 汇总（不存 (T,N) 大数组）后按"该 env 落在哪种地形上"分组。地形名映射照抄 IsaacLab 的按列分配规则（`sub_col/num_cols + 0.001 < cumsum(proportions)`，见 `terrain_generator.py:241`）。**必须 `--terrain-grid keep`**：缩成 5×5 时只有 5 列，会丢掉"平地"（20 列时 8 粗糙 / 5 上坡 / 5 下坡 / 2 平地） |
+| 一次测试里**切换速度/姿态指令**，考察变换能力 | 新增 `--switch <秒>`：一次连续滚动里按段切换「速度 + 机身高度/俯仰/侧倾」（默认 3 段速度 + 4 段姿态 = 7 段；`--switch 1.5` ⇒ 10.5 s）。新增 `fig12_switch` + `fig12_switch_table` + report §5，给出每个切换点的**峰值误差（切换后 0.5 s）/ 稳态误差 / 稳定时间** |
+| `root_z` 那张图看不懂 | 原来画的是"全体命令混在一起的 root_z 直方图"（没意义）。改为 **`root_z` vs "相对足端高度" 散点**，并在标题写明区别：`root_z` 是**世界系**机身高度（受地形起伏/抬腿影响），而"相对足端高度"才是身体姿态控制的那个量，两者相差 = 足端离地 |
+| 测试时长放宽到 ~10 s | 默认 `--steps` 从 400 提到可用 500（0.02 s/步 ⇒ 10 s/档），切换模式总长也是 ~10 s |
+
+**2. 新增 `--from-npz`：云端采集 + 本机画图**（用户提"测试也可以放云端跑"）
+
+云端一般没有中文字体（图里中文会变方块），而且地形任务在大环境数下更适合云端。
+所以把"采集"与"画图"彻底解耦：`data.npz` 现在带上 `per_env` / `env_terrain` /
+`schedule` / `joint_names_all` 等元数据 + 一份 `meta.json`，于是可以
+
+```bash
+# 云端（大 num_envs、--terrain-grid keep）
+python scripts/reinforcement_learning/rsl_rl/policy_report.py --headless --task <task> \
+  --checkpoint <run>/model_19999.pt --commands "0,0,0;0.5,0,0;1.0,0,0" --num_envs 256 --steps 500 \
+  --terrain-grid keep --out-dir /root/report_x
+# 拉回来（只要 data.npz + meta.json）
+scp root@host:/root/report_x/data.npz root@host:/root/report_x/meta.json logs/smoke/report_x/
+# 本机画图（不启动 Isaac 环境，字体/配色都在本机）
+python scripts/reinforcement_learning/rsl_rl/policy_report.py --from-npz logs/smoke/report_x/data.npz \
+  --out-dir logs/smoke/report_x
+```
+
+（`--from-npz` 目前仍会起 Isaac 的 App（~25 s，脚本结构所限），但**不建环境、不装 checkpoint**，
+纯画图。）
+
+**3. 已产出的图**：`logs/smoke/report_switch_flat/`（指令切换：`fig12_switch.png` +
+`fig12_switch_table.png` + 跟踪/对称三张；32 envs、7 段 × 1.5 s）。
+
+**4. 卡点（未跑完的那两份）**：本机从 2026-10-03 00:17 起**连续三次** Isaac 启动卡死
+（日志停在 `Loading user config located at ...` 之后一行，进程 CPU 只有几秒、内存正常 ⇒ 是启动期挂住，
+不是我的代码；同一脚本在 00:08 那次跑得很好）。已清理残留进程。
+⇒ **下一步按用户建议放到云端跑**：291 实例现在空闲，且它本地就有 `cloud_roughslopes20k` 的
+checkpoint；把它同步过去（`scp policy_report.py`）、跑 `--terrain-grid keep --num_envs 256`，
+再把 `data.npz` 拉回本机用 `--from-npz` 出图（分地形 fig11 + 地形点云 fig09）。
 
 ### DEF-040 `2026-10-01/02` 多地形 20k 跑完 + 消融 2×2 收口（谁修好了什么）
 

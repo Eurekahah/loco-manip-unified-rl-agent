@@ -66,6 +66,19 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+# 画图依赖放在 AppLauncher 之前 import：这样才能支持 `--from-npz` 的"只画图"模式
+# （云端只负责采集，图回本机画 —— 云端通常没有中文字体）。
+import matplotlib  # noqa: E402
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+
+_CJK_FONTS = ["Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Source Han Sans SC",
+              "WenQuanYi Micro Hei", "DejaVu Sans"]
+matplotlib.rcParams["font.sans-serif"] = _CJK_FONTS
+matplotlib.rcParams["font.family"] = "sans-serif"
+matplotlib.rcParams["axes.unicode_minus"] = False
+
 from isaaclab.app import AppLauncher
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -117,12 +130,32 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out-dir", type=str, required=True, help="输出目录（PNG + report.md + data.npz）")
     p.add_argument("--no-push", action="store_true", default=False, help="关掉 push 事件（只看纯跟踪/步态）")
     p.add_argument(
+        "--switch",
+        type=float,
+        default=0.0,
+        help=">0 时进入「指令切换」模式：每段这么多秒，按 --commands 切速度、再切机身高度/俯仰/侧倾"
+        "（用来考察指令间的变换能力；总时长 ≈ 段数 × 该值）",
+    )
+    p.add_argument(
+        "--terrain-grid",
+        choices=("auto", "keep", "5x5"),
+        default="auto",
+        help="地形网格：auto = num_envs<=16 时缩成 5×5（生成快），否则保持训练网格；"
+        "keep = 一定保持训练网格（分地形统计要用它，否则 5列 会丢掉部分地形）",
+    )
+    p.add_argument(
         "--no-height-scan",
         action="store_true",
         default=False,
         help="地形任务上不要临时加诊断用 height_scanner（加上才能画 fig09_terrain）",
     )
     p.add_argument("--dpi", type=int, default=140, help="PNG 分辨率")
+    p.add_argument(
+        "--from-npz",
+        type=str,
+        default=None,
+        help="只画图：从 data.npz 读回数据渲染（**不启动 Isaac**）。用于『云端采集 + 本机画图』",
+    )
     cli_args.add_rsl_rl_args(p)
     AppLauncher.add_app_launcher_args(p)
     return p
@@ -130,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 parser = build_parser()
 args_cli, hydra_args = parser.parse_known_args()
-if not args_cli.checkpoint:
+if not args_cli.checkpoint and not args_cli.from_npz:
     parser.error("必须给 --checkpoint <run 目录>/model_<iter>.pt")
 sys.argv = [sys.argv[0]] + hydra_args
 
@@ -240,6 +273,13 @@ class EpisodeData:
     scan_min: np.ndarray | None = None
     scan_max: np.ndarray | None = None
     scan_mean: np.ndarray | None = None
+    #: 每个 env 落在哪种地形上 / 地形等级（多地形任务才有）
+    env_terrain: list[str] | None = None
+    env_terrain_level: np.ndarray | None = None
+    #: 逐 env 的汇总（用于"分地形"统计，避免存 (T,N) 大数组）
+    per_env: dict | None = None
+    #: 指令切换模式：[(t0, t1, vel_cmd, body_cmd), ...]
+    schedule: list | None = None
 
     @property
     def err_xy(self) -> np.ndarray:
@@ -361,9 +401,64 @@ class Harness:
         self.feet_cfg = SceneEntityCfg("robot", body_names=".*wheel")
         self.feet_cfg.resolve(self.raw.scene)
 
+        # ── 地形：每个 env 落在哪种地形上 ──────────────────────────────────
+        # IsaacLab 把子地形**按列**分配：sub_indices[c] = min(i : c/num_cols+0.001 < cumsum(prop))
+        # （见 isaaclab/terrains/terrain_generator.py:241），所以知道 terrain_types[env]
+        # 就能反查名字。这里把映射和每 env 的名字都算好（拿不到就 None，后面跳过相关图）。
+        self.env_terrain: list[str] | None = None
+        self.env_terrain_level: np.ndarray | None = None
+        terr = getattr(self.raw.scene, "terrain", None)
+        gen = getattr(terr, "terrain_generator", None) if terr is not None else None
+        if gen is not None and getattr(gen, "sub_terrains", None):
+            try:
+                props = np.array([c.proportion for c in gen.sub_terrains.values()], dtype=float)
+                props = props / props.sum()
+                cum = np.cumsum(props)
+                names = list(gen.sub_terrains.keys())
+                col2name = [
+                    names[int(np.min(np.where(c / gen.num_cols + 0.001 < cum)[0]))]
+                    for c in range(gen.num_cols)
+                ]
+                types = np.asarray(terr.terrain_types.detach().cpu().numpy(), dtype=int).ravel()
+                self.env_terrain = [col2name[min(int(t), len(col2name) - 1)] for t in types]
+                levels = getattr(terr, "terrain_levels", None)
+                if levels is not None:
+                    self.env_terrain_level = np.asarray(levels.detach().cpu().numpy(), dtype=int).ravel()
+                uniq = {}
+                for n in self.env_terrain:
+                    uniq[n] = uniq.get(n, 0) + 1
+                print(f"[report] 地形分布（按 env）：{uniq}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[report] 地形名映射失败（跳过分地形统计）：{exc}")
+
     # ---------------- 与环境交互 ----------------
     def _write_cmd(self, cmd: tuple[float, float, float]) -> None:
         self.term.vel_command_b[:] = torch.tensor(cmd, device=self.device, dtype=torch.float32)
+
+    def _write_body_cmd(self, body) -> None:
+        """写机身姿态指令。不同实现的字段名不同（`pose_command_b` 或 `command`），两个都试。"""
+        if body is None or self.body_cmd is None:
+            return
+        t = torch.tensor(body, device=self.device, dtype=torch.float32).expand(self.n_envs, -1)
+        for attr in ("pose_command_b", "command"):
+            buf = getattr(self.body_cmd, attr, None)
+            if isinstance(buf, torch.Tensor) and buf.shape[-1] >= 3:
+                buf[:, :3] = t
+
+    def _read_body_cmd(self) -> np.ndarray:
+        """读回"策略实际看到的"机身姿态指令（优先 pose_command_b）。"""
+        if self.body_cmd is None:
+            return np.zeros(3)
+        for attr in ("pose_command_b", "command"):
+            buf = getattr(self.body_cmd, attr, None)
+            if isinstance(buf, torch.Tensor) and buf.shape[-1] >= 3:
+                return buf[self.env_id, :3].detach().cpu().numpy().copy()
+        return np.zeros(3)
+
+    def disable_body_resample(self) -> None:
+        """切换测试里机身姿态指令由脚本手写 ⇒ 关掉这个命令项自己的重采样。"""
+        if self.body_cmd is not None:
+            self.body_cmd._resample_command = lambda env_ids: None  # noqa: ARG005
 
     def _step(self, cmd: tuple[float, float, float], obs):
         self._write_cmd(cmd)
@@ -404,6 +499,11 @@ class Harness:
             rec["scan"] = [] if self.height_sensor is not None else None
             term_counts = {n: 0 for n in term_names}
             n_done = 0
+            # 逐 env 累加（"分地形"统计用；不存 (T,N) 大数组）
+            _N, _dev = self.n_envs, self.device
+            acc = {k: torch.zeros(_N, device=_dev) for k in
+                   ("xy", "xy2", "yaw", "yaw2", "h", "h2", "z", "z2", "pitch2", "roll2", "tau", "done")}
+            c_cnt = torch.zeros(_N, 4, device=_dev)
             for _ in range(steps):
                 # 误差用"动作施加前"的状态算（与 eval_fixed_command 同口径）
                 v_b = self.robot.data.root_lin_vel_b[:, :2].clone()
@@ -442,7 +542,7 @@ class Harness:
                 rec["foot_xy"].append(foot_xy_b[i].cpu().numpy())
                 rec["foot_z"].append(foot_z[i].cpu().numpy())
                 if rec["body_cmd"] is not None:
-                    rec["body_cmd"].append(self.body_cmd.command[i].cpu().numpy().copy())
+                    rec["body_cmd"].append(self._read_body_cmd())
                 if rec["ee"] is not None:
                     rec["ee"].append(self._ee_row(i))
                 if rec["scan"] is not None:
@@ -455,6 +555,20 @@ class Harness:
                     for name in term_names:
                         term_counts[name] += int(self.raw.termination_manager.get_term(name)[done].sum())
                     n_done += int(done.sum())
+                # ---- 逐 env 累加 ----
+                e_xy = torch.norm(cmd_t[:, :2] - v_b, dim=-1)
+                acc["xy"] += e_xy
+                acc["xy2"] += e_xy ** 2
+                acc["yaw"] += torch.abs(cmd_t[:, 2] - w_z)
+                acc["h"] += h
+                acc["h2"] += h ** 2
+                acc["z"] += z
+                acc["z2"] += z ** 2
+                acc["pitch2"] += pitch ** 2
+                acc["roll2"] += roll ** 2
+                acc["tau"] = torch.maximum(acc["tau"], torch.sqrt((tau ** 2).mean(dim=-1)))
+                acc["done"] += done.float()
+                c_cnt += contact.float()
 
             data = EpisodeData(label=self.label, command=cmd)
             data.t = np.array(rec["t"])
@@ -486,11 +600,114 @@ class Harness:
             data.col = {n: i for i, n in enumerate(self.joint_names)}
             data.torque_limit = self.torque_limit
             data.mirror_rms = mirror_rms(data.joint_pos, self.joint_names)
+            _n = float(max(steps, 1))
+            data.per_env = {
+                "err_xy": (acc["xy"] / _n).cpu().numpy(),
+                "err_yaw": (acc["yaw"] / _n).cpu().numpy(),
+                "height_mean": (acc["h"] / _n).cpu().numpy(),
+                "height_std": torch.sqrt(
+                    torch.clamp(acc["h2"] / _n - (acc["h"] / _n) ** 2, min=0)
+                ).cpu().numpy(),
+                "root_z_mean": (acc["z"] / _n).cpu().numpy(),
+                "pitch_std_deg": np.degrees(
+                    torch.sqrt(torch.clamp(acc["pitch2"] / _n, min=0)).cpu().numpy()
+                ),
+                "roll_std_deg": np.degrees(
+                    torch.sqrt(torch.clamp(acc["roll2"] / _n, min=0)).cpu().numpy()
+                ),
+                "tau_rms_max": acc["tau"].cpu().numpy(),
+                "duty": (c_cnt / _n).cpu().numpy(),
+                "done": acc["done"].cpu().numpy(),
+            }
+            data.env_terrain = self.env_terrain
+            data.env_terrain_level = self.env_terrain_level
             if want_terrain and self.height_sensor is not None:
                 hits = self.height_sensor.data.ray_hits_w[self.env_id].detach().cpu().numpy()
                 data.terrain_pts_w = np.asarray(hits, dtype=float).reshape(-1, 3)
             out.append(data)
         return out
+
+    # ---------------- 指令切换（考察指令间的变换能力）----------------
+    def collect_schedule(self, segments, policy, term_names):
+        """在一次连续滚动里按 ``segments`` 切换「速度 + 机身姿态」指令。
+
+        ``segments = [(秒数, (vx,vy,wz), (height,pitch,roll) | None), ...]``；
+        返回单个 :class:`EpisodeData`（``.schedule`` 记着每段的 ``(t0, t1, vel, body)``），
+        用来算"切换后的稳定时间 / 超调 / 稳态误差"。
+        """
+        self.policy = policy
+        obs = self.env.get_observations()
+        rec = {k: [] for k in ("t", "cmd", "vel_b", "yaw", "h", "pitch", "roll", "body_cmd")}
+        for k in ("xy", "z", "qpos", "qvel", "tau", "contact", "foot_xy", "foot_z"):
+            rec[k] = []
+        schedule: list = []
+        term_counts = {n: 0 for n in term_names}
+        t = 0.0
+        obs = self._force_reset(segments[0][1], obs)
+        for dur_s, vel, body in segments:
+            n_steps = int(round(dur_s / self.dt))
+            t0 = t
+            for _ in range(n_steps):
+                v_b = self.robot.data.root_lin_vel_b[:, :2].clone()
+                w_z = self.robot.data.root_ang_vel_b[:, 2].clone()
+                g_b = self.robot.data.projected_gravity_b
+                h = compute_base_height_rel_to_feet(self.raw, self.asset_cfg, self.feet_cfg)
+                xy = self.robot.data.root_pos_w[:, :2].clone()
+                z = self.robot.data.root_pos_w[:, 2].clone()
+                qpos = self.robot.data.joint_pos[:, self.joint_sel].clone()
+                qvel = self.robot.data.joint_vel[:, self.joint_sel].clone()
+                tau = self.robot.data.applied_torque[:, self.joint_sel].clone()
+                foot_xy, _ = _foot_xy_body(self.robot, self.foot_sel)
+                foot_z = self.robot.data.body_pos_w[:, self.foot_sel, 2].clone()
+                contact = self._contact_mask()
+                self._write_cmd(vel)
+                self._write_body_cmd(body)
+                bcmd = self._read_body_cmd()
+                with torch.inference_mode():
+                    obs, _, dones, _ = self.env.step(self.policy(obs))
+                i = self.env_id
+                rec["t"].append(t); t += self.dt
+                rec["cmd"].append(np.asarray(vel, dtype=float))
+                rec["vel_b"].append(v_b[i].cpu().numpy())
+                rec["yaw"].append(float(w_z[i]))
+                rec["h"].append(float(h[i]))
+                rec["pitch"].append(float(torch.asin(torch.clamp(-g_b[i, 0], -1.0, 1.0))))
+                rec["roll"].append(float(torch.atan2(-g_b[i, 1], -g_b[i, 2])))
+                rec["body_cmd"].append(bcmd)
+                rec["xy"].append(xy[i].cpu().numpy())
+                rec["z"].append(float(z[i]))
+                rec["qpos"].append(qpos[i].cpu().numpy())
+                rec["qvel"].append(qvel[i].cpu().numpy())
+                rec["tau"].append(tau[i].cpu().numpy())
+                rec["contact"].append(contact[i].cpu().numpy())
+                rec["foot_xy"].append(foot_xy[i].cpu().numpy())
+                rec["foot_z"].append(foot_z[i].cpu().numpy())
+                done = dones.bool()
+                if bool(done.any()):
+                    for name in term_names:
+                        term_counts[name] += int(
+                            self.raw.termination_manager.get_term(name)[done].sum()
+                        )
+            schedule.append((t0, t, tuple(vel), None if body is None else tuple(body)))
+        data = EpisodeData(label=self.label, command=(0.0, 0.0, 0.0))
+        data.t = np.array(rec["t"]); data.cmd = np.array(rec["cmd"])
+        data.vel_b = np.array(rec["vel_b"]); data.yaw_rate = np.array(rec["yaw"])
+        data.height = np.array(rec["h"]); data.pitch = np.array(rec["pitch"])
+        data.roll = np.array(rec["roll"]); data.body_cmd = np.array(rec["body_cmd"])
+        data.root_xy = np.array(rec["xy"]); data.root_z = np.array(rec["z"])
+        data.joint_pos = np.array(rec["qpos"]); data.joint_vel = np.array(rec["qvel"])
+        data.torque = np.array(rec["tau"]); data.contact = np.array(rec["contact"], dtype=bool)
+        data.foot_xy_b = np.array(rec["foot_xy"]); data.foot_z_w = np.array(rec["foot_z"])
+        data.schedule = schedule
+        data.term_counts = term_counts
+        data.joint_names_all = list(self.joint_names)
+        data.col = {n: i for i, n in enumerate(self.joint_names)}
+        data.torque_limit = self.torque_limit
+        data.mirror_rms = mirror_rms(data.joint_pos, self.joint_names)
+        data.per_env = None
+        data.env_terrain = self.env_terrain
+        data.env_terrain_level = self.env_terrain_level
+        return data
 
     def _contact_mask(self) -> torch.Tensor:
         if self.contact_ids is None:
@@ -576,9 +793,13 @@ def _resolve_effort_limits(robot, joint_sel: torch.Tensor) -> np.ndarray | None:
 def mirror_rms(qpos: np.ndarray, joint_names: list[str]) -> dict[str, list[float]]:
     """4 个镜像对的逐关节类型 RMS（符号约定见 DEF-027）。"""
     out: dict[str, list[float]] = {}
+    if qpos is None or np.size(qpos) == 0 or not joint_names:
+        return out
     for a, b, signs in MIRROR_PAIRS:
         vals = []
         for jt in JOINT_TYPES:
+            if f"{a}_{jt}_joint" not in joint_names or f"{b}_{jt}_joint" not in joint_names:
+                return {}
             ia, ib = joint_names.index(f"{a}_{jt}_joint"), joint_names.index(f"{b}_{jt}_joint")
             vals.append(float(np.sqrt(np.mean((qpos[:, ia] - signs[jt] * qpos[:, ib]) ** 2))))
         out[f"{a}~{b}"] = vals
@@ -618,10 +839,13 @@ def dominant_freq(sig: np.ndarray, dt: float) -> float:
 
 def summarize(ep: EpisodeData, joint_names: list[str], torque_limit: np.ndarray | None) -> dict:
     """一档命令的标量指标（写进 report.md / JSON）。"""
+    has_joints = np.size(ep.joint_pos) > 0 and bool(joint_names)
+    has_feet = np.size(ep.foot_xy_b) > 0
+    has_contact = np.size(ep.contact) > 0
     mir = mirror_rms(ep.joint_pos, joint_names)
-    fa, ha = lateral_asymmetry(ep.foot_xy_b)
-    swf, swh = stance_width(ep.foot_xy_b)
-    pw = ep.torque * ep.joint_vel
+    fa, ha = lateral_asymmetry(ep.foot_xy_b) if has_feet else (float("nan"), float("nan"))
+    swf, swh = stance_width(ep.foot_xy_b) if has_feet else (float("nan"), float("nan"))
+    pw = ep.torque * ep.joint_vel if has_joints else np.zeros(0)
     out = {
         "label": ep.label,
         "command": list(ep.command),
@@ -641,23 +865,28 @@ def summarize(ep: EpisodeData, joint_names: list[str], torque_limit: np.ndarray 
         "roll_mean_deg": float(np.degrees(ep.roll.mean())),
         "pitch_std_deg": float(np.degrees(ep.pitch.std())),
         "roll_std_deg": float(np.degrees(ep.roll.std())),
-        "joint_pos_std": [float(ep.joint_pos[:, i].std()) for i in range(len(joint_names))],
-        "torque_rms": [float(np.sqrt(np.mean(ep.torque[:, i] ** 2))) for i in range(len(joint_names))],
-        "torque_absmax": [float(np.abs(ep.torque[:, i]).max()) for i in range(len(joint_names))],
-        "power_mean_abs": float(np.abs(pw).mean()),
-        "duty_factor": [float(x) for x in duty_factor(ep.contact)],
-        "wheel_omega_mean": [
-            float(ep.joint_vel[:, joint_names.index(f"{leg}_wheel_joint")].mean()) for leg in LEGS
-        ],
-        "step_freq_hz": {
-            leg: dominant_freq(ep.foot_z_w[:, k], 0.02) for k, leg in enumerate(LEGS)
-        },
+        "joint_pos_std": ([float(ep.joint_pos[:, i].std()) for i in range(len(joint_names))]
+                          if has_joints else []),
+        "torque_rms": ([float(np.sqrt(np.mean(ep.torque[:, i] ** 2))) for i in range(len(joint_names))]
+                       if has_joints else []),
+        "torque_absmax": ([float(np.abs(ep.torque[:, i]).max()) for i in range(len(joint_names))]
+                          if has_joints else []),
+        "power_mean_abs": float(np.abs(pw).mean()) if pw.size else float("nan"),
+        "duty_factor": [float(x) for x in duty_factor(ep.contact)] if has_contact else [],
+        "wheel_omega_mean": (
+            [float(ep.joint_vel[:, joint_names.index(f"{leg}_wheel_joint")].mean()) for leg in LEGS]
+            if has_joints else []
+        ),
+        "step_freq_hz": (
+            {leg: dominant_freq(ep.foot_z_w[:, k], 0.02) for k, leg in enumerate(LEGS)}
+            if has_feet else {}
+        ),
         "mirror_rms": mir,
         "lateral_asymmetry_cm": [fa * 100.0, ha * 100.0],
         "stance_width": [swf, swh],
         "path_length_m": float(np.linalg.norm(np.diff(ep.root_xy, axis=0), axis=1).sum()),
     }
-    if torque_limit is not None:
+    if torque_limit is not None and has_joints:
         out["torque_limit_usage"] = [
             (
                 float(np.abs(ep.torque[:, i]).max() / torque_limit[i])
@@ -786,14 +1015,20 @@ def fig03_posture(series, out_dir, dpi, meta):
             axes[a][j].grid(alpha=0.3)
             if j == 0:
                 axes[a][j].legend(fontsize=6)
+    # root_z 的物理含义容易混：它是**世界系**机身高度，会被地形起伏/抬腿带着上下动；
+    # 而上面第一列画的"机身高度"是**相对足端**的量（= 机身 − 足端，身体姿态控制的那个量）。
+    # 用散点把两者的关系画出来最直观：纵轴 root_z、横轴"相对足端高度"。
     ax = axes[0][n]
     for k, lab in enumerate(labels):
-        ax.hist([np.degrees(e.pitch).mean() for e in series[lab]], bins=1, alpha=0.0)
-        vals = np.concatenate([e.root_z for e in series[lab]])
-        ax.hist(vals, bins=30, alpha=0.5, color=COLORS[k % len(COLORS)], label=lab)
-    ax.set_title("root_z 分布（全体命令）")
+        for ep in series[lab]:
+            step = max(ep.t.size // 400, 1)
+            ax.scatter(ep.height[::step], ep.root_z[::step], s=3, alpha=0.35,
+                       color=COLORS[k % len(COLORS)], label=lab if ep is series[lab][0] else None)
+    ax.set_xlabel("机身高度（相对足端, m）")
+    ax.set_ylabel("root_z（世界系, m）")
+    ax.set_title("root_z vs 相对足端高度\n（两者相差 = 足端离地；地形起伏只改 root_z）", fontsize=9)
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=7)
+    ax.legend(fontsize=6)
     fig.suptitle(f"③ 姿态与高度（{meta['task']}）")
     return _save(fig, out_dir, "fig03_posture", dpi)
 
@@ -801,6 +1036,8 @@ def fig03_posture(series, out_dir, dpi, meta):
 def fig04_gait(series, out_dir, dpi, meta):
     """步态图：四足触地时序 + 占空比 + 踏步主频 + 轮速。"""
     labels = list(series.keys())
+    if np.size(series[labels[0]][0].contact) == 0:
+        return None  # 切换模式等没记录接触数据的情形，直接跳过
     fig, axes = plt.subplots(4, 2, figsize=(13, 9), squeeze=False)
     ep = series[labels[0]][0]
     for k, leg in enumerate(LEGS):
@@ -858,6 +1095,8 @@ def fig04_gait(series, out_dir, dpi, meta):
 def fig05_joints(series, out_dir, dpi, meta):
     """12 个腿关节的位置/速度（网格）+ 4 个轮转速。"""
     labels = list(series.keys())
+    if np.size(series[labels[0]][0].joint_pos) == 0:
+        return None
     fig, axes = plt.subplots(3, 4, figsize=(15, 8.5), squeeze=False)
     for k, leg in enumerate(LEGS):
         for a, jt in enumerate(JOINT_TYPES):
@@ -880,6 +1119,8 @@ def fig05_joints(series, out_dir, dpi, meta):
 def fig06_actuation(series, out_dir, dpi, meta):
     """力矩：逐关节 RMS / 峰值占限幅比例 / 关节功率。"""
     labels = list(series.keys())
+    if np.size(series[labels[0]][0].torque) == 0:
+        return None
     names = series[labels[0]][0].joint_names_all
     fig, axes = plt.subplots(2, 2, figsize=(14, 7.5))
     x = np.arange(len(names))
@@ -918,6 +1159,8 @@ def fig06_actuation(series, out_dir, dpi, meta):
 def fig07_symmetry(series, out_dir, dpi, meta):
     """左右镜像：散点 + RMS 柱状 + 足端俯视图（"撇腿"角度）。"""
     labels = list(series.keys())
+    if not series[labels[0]][0].mirror_rms:
+        return None
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
     ep = series[labels[0]][0]
     pairs = list(ep.mirror_rms.keys())
@@ -1061,8 +1304,9 @@ def fig10_compare(series, out_dir, dpi, meta):
     for m, lab in enumerate(labels):
         for i in range(n):
             s = summarize(series[lab][i], series[lab][i].joint_names_all, series[lab][i].torque_limit)
+            knee = max(s["mirror_rms"]["hl~hr"]) if s["mirror_rms"] else float("nan")
             rows.append((lab, str(series[lab][i].command), s["err_vel_xy_mean"], s["height_std"],
-                         s["lateral_asymmetry_cm"][1], max(s["mirror_rms"]["hl~hr"])))
+                         s["lateral_asymmetry_cm"][1], knee))
     ax2.axis("off")
     tbl = ax2.table(
         cellText=[[r[0], r[1], f"{r[2]:.4f}", f"{r[3]:.4f}", f"{r[4]:+.2f}", f"{r[5]:.3f}"] for r in rows],
@@ -1080,6 +1324,188 @@ def _metric_of(ep: EpisodeData, key: str) -> float:
     return float(s[key])
 
 
+# ───────────────── ⑪ 分地形统计（多地形任务）─────────────────
+def terrs_sorted(table: dict) -> list:
+    """地形名的稳定排序（按"样本量"降序，方便一眼看出哪类地形测得最多）。"""
+    def n_env(t):
+        for lab in table[t].values():
+            if "n_env" in lab:
+                return -int(np.mean(lab["n_env"]))
+        return 0
+
+    return sorted(table.keys(), key=n_env)
+
+
+def per_terrain_table(series: dict) -> dict:
+    """把逐 env 指标按"落在哪种地形上"分组求均值 → ``{地形名: {指标: 值}}``。"""
+    out: dict = {}
+    for lab, eps in series.items():
+        for ep in eps:
+            if ep.per_env is None or ep.env_terrain is None:
+                continue
+            names = np.array(ep.env_terrain)
+            for tname in sorted(set(names.tolist())):
+                sel = names == tname
+                if not sel.any():
+                    continue
+                d = out.setdefault(tname, {}).setdefault(lab, {})
+                for key in ("err_xy", "err_yaw", "height_std", "tau_rms_max", "done"):
+                    v = np.asarray(ep.per_env[key], dtype=float)[sel]
+                    d.setdefault(key, []).append(float(np.mean(v)))
+                d.setdefault("duty_min", []).append(float(np.asarray(ep.per_env["duty"])[sel].min()))
+                d.setdefault("n_env", []).append(int(sel.sum()))
+                cmd_key = f"cmd{tuple(round(c, 2) for c in ep.command)}"
+                d.setdefault(cmd_key, []).append(float(np.mean(np.asarray(ep.per_env["err_xy"])[sel])))
+    return out
+
+
+def fig11_per_terrain(series, out_dir, dpi, meta):
+    """分地形对比：不同子地形上的误差 / 抖动 / 力矩 / 摔倒 / 占空比。"""
+    table = per_terrain_table(series)
+    if not table:
+        return None
+    terrs = list(table.keys())
+    labels = list(series.keys())
+    cmds = sorted({k for t in table.values() for lab in t.values() for k in lab if k.startswith("cmd")})
+    fig, axes = plt.subplots(2, 3, figsize=(15, 7.5), squeeze=False)
+    metrics = [("err_xy", "线速度误差 (m/s)"), ("err_yaw", "角速度误差 (rad/s)"),
+               ("height_std", "机身高度抖动 std (m)")]
+    x = np.arange(len(terrs))
+    w = 0.8 / max(len(cmds), 1)
+    for ax, (key, title) in zip(axes[0], metrics):
+        for j, ck in enumerate(cmds):
+            vals = [np.mean(table[t].get(labels[0], {}).get(ck, [np.nan]))
+                    for t in terrs]
+            ax.bar(x + j * w, vals, w, label=ck.replace("cmd", "cmd="))
+        ax.set_xticks(x + w * (len(cmds) - 1) / 2)
+        ax.set_xticklabels(terrs, fontsize=8, rotation=15)
+        ax.set_title(f"{title}（按地形）")
+        ax.grid(alpha=0.3, axis="y")
+        ax.legend(fontsize=7)
+    for j, ck in enumerate(cmds):
+        vals = [np.mean(table[t].get(labels[0], {}).get("done", [np.nan]))
+                for t in terrs]
+        axes[1][0].bar(x + j * w, vals, w, label=ck.replace("cmd", "cmd="))
+    axes[1][0].set_xticks(x + w * (len(cmds) - 1) / 2)
+    axes[1][0].set_xticklabels(terrs, fontsize=8, rotation=15)
+    axes[1][0].set_title("每 env 平均终止次数（按地形）")
+    axes[1][0].grid(alpha=0.3, axis="y")
+    for j, ck in enumerate(cmds):
+        vals = [np.mean(table[t].get(labels[0], {}).get("duty_min", [np.nan]))
+                for t in terrs]
+        axes[1][1].bar(x + j * w, vals, w, label=ck.replace("cmd", "cmd="))
+    axes[1][1].set_xticks(x + w * (len(cmds) - 1) / 2)
+    axes[1][1].set_xticklabels(terrs, fontsize=8, rotation=15)
+    axes[1][1].set_title("最差那条腿的触地占比（按地形）")
+    axes[1][1].set_ylim(0, 1.05)
+    axes[1][1].grid(alpha=0.3, axis="y")
+    n_env = [int(np.mean(table[t].get(labels[0], {}).get("n_env", [0]))) for t in terrs]
+    axes[1][2].bar(x, n_env, 0.6)
+    axes[1][2].set_xticks(x)
+    axes[1][2].set_xticklabels(terrs, fontsize=8, rotation=15)
+    axes[1][2].set_title("每种地形分到多少个 env（样本量）")
+    axes[1][2].grid(alpha=0.3, axis="y")
+    fig.suptitle(f"⑪ 分地形（{meta['task']}）")
+    return _save(fig, out_dir, "fig11_per_terrain", dpi)
+
+
+# ───────────────── ⑫ 指令切换（变换能力）─────────────────
+def transition_metrics(ep: EpisodeData, tol_frac: float = 0.25, hold_s: float = 0.30) -> list[dict]:
+    """每个切换点之后：峰值误差 / 稳定时间 / 稳态误差（速度与高度各一份）。"""
+    if not ep.schedule:
+        return []
+    dt = float(ep.t[1] - ep.t[0]) if ep.t.size > 1 else 0.02
+    err_xy = ep.err_xy
+    err_h = np.abs(ep.height - ep.body_cmd[:, 0]) if ep.body_cmd is not None else None
+    out = []
+    for k, (t0, t1, vel, body) in enumerate(ep.schedule):
+        i0, i1 = int(t0 / dt), min(int(t1 / dt), ep.t.size)
+        if i1 - i0 < 5:
+            continue
+        # 稳态：该段最后 40%
+        s0 = i0 + int(0.6 * (i1 - i0))
+        ss_xy = float(np.mean(err_xy[s0:i1])) if i1 > s0 else float("nan")
+        thr = max(ss_xy * (1 + tol_frac), 0.03)
+        hold_n = max(int(hold_s / dt), 1)
+        settle = None
+        for j in range(i0, i1 - hold_n):
+            if np.all(err_xy[j:j + hold_n] < thr):
+                settle = float(ep.t[j] - t0)
+                break
+        win = slice(i0, min(i0 + int(0.5 / dt), i1))
+        row = {
+            "seg": k,
+            "t0": round(float(t0), 2),
+            "vel_cmd": [round(float(v), 2) for v in vel],
+            "body_cmd": [round(float(b), 3) for b in body] if body is not None else None,
+            "peak_err_xy_0p5s": float(np.max(err_xy[win])) if err_xy[win].size else float("nan"),
+            "steady_err_xy": ss_xy,
+            "settle_s": settle,
+            "steady_err_height": (
+                float(np.mean(err_h[s0:i1])) if err_h is not None and i1 > s0 else float("nan")
+            ),
+        }
+        out.append(row)
+    return out
+
+
+def fig12_switch(series, out_dir, dpi, meta):
+    """指令切换测试：速度/姿态指令跳变后的跟踪与稳定过程。"""
+    labels = [lab for lab in series if series[lab][0].schedule]
+    if not labels:
+        return None
+    eps = {lab: series[lab][0] for lab in labels}
+    ep0 = eps[labels[0]]
+    fig, axes = plt.subplots(2, 2, figsize=(14, 7.5))
+    for lab in labels:
+        ep = eps[lab]
+        c = COLORS[labels.index(lab) % len(COLORS)]
+        axes[0][0].plot(ep.t, ep.cmd[:, 0], "k--", lw=1.0, label="vx cmd" if lab == labels[0] else None)
+        axes[0][0].plot(ep.t, ep.vel_b[:, 0], color=c, lw=1.1, label=f"{lab} vx actual")
+        axes[0][1].plot(ep.t, ep.err_xy, color=c, lw=1.0, label=lab)
+        if ep.body_cmd is not None:
+            axes[1][0].plot(ep.t, ep.body_cmd[:, 0], "k--", lw=1.0,
+                            label="height cmd" if lab == labels[0] else None)
+            axes[1][0].plot(ep.t, ep.height, color=c, lw=1.1, label=f"{lab} height")
+            axes[1][1].plot(ep.t, np.degrees(ep.body_cmd[:, 1]), "k--", lw=1.0, label="pitch cmd")
+            axes[1][1].plot(ep.t, np.degrees(ep.pitch), color=c, lw=1.1, label=f"{lab} pitch")
+            axes[1][1].plot(ep.t, np.degrees(ep.body_cmd[:, 2]), "k:", lw=1.0, label="roll cmd")
+            axes[1][1].plot(ep.t, np.degrees(ep.roll), color=c, lw=1.0, ls=":", label=f"{lab} roll")
+    for ax in axes.ravel():
+        for k, (t0, t1, _v, _b) in enumerate(ep0.schedule):
+            ax.axvline(t0, color="0.6", lw=0.8, ls="-")
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=6, ncol=2)
+    axes[0][0].set_title("vx：指令 vs 实际（竖线 = 切换时刻）")
+    axes[0][1].set_ylabel("|v_cmd - v| (m/s)"); axes[0][1].set_title("线速度误差")
+    axes[1][0].set_title("机身高度：指令 vs 实际")
+    axes[1][1].set_ylabel("deg")
+    axes[1][1].set_title("俯仰/侧倾：指令 vs 实际")
+    for ax in axes.ravel():
+        ax.set_xlabel("t (s)")
+    fig.suptitle(f"⑫ 指令切换（{meta['task']}，每段 {meta.get('switch_s')} s）")
+    paths = [_save(fig, out_dir, "fig12_switch", dpi)]
+    # 数字表
+    rows = []
+    for lab in labels:
+        for r in transition_metrics(eps[lab]):
+            rows.append((lab, r["seg"], str(r["vel_cmd"]), str(r["body_cmd"]),
+                         f"{r['peak_err_xy_0p5s']:.3f}", f"{r['steady_err_xy']:.3f}",
+                         "-" if r["settle_s"] is None else f"{r['settle_s']:.2f}",
+                         f"{r['steady_err_height']:.3f}"))
+    fig2, ax2 = plt.subplots(figsize=(11, 0.4 + 0.32 * max(len(rows), 3)))
+    ax2.axis("off")
+    tbl = ax2.table(
+        cellText=[list(r) for r in rows],
+        colLabels=["策略", "段", "速度指令", "姿态指令", "切换后 0.5s 峰值误差",
+                   "稳态误差", "稳定时间(s)", "高度稳态误差"],
+        loc="center", cellLoc="center",
+    )
+    tbl.auto_set_font_size(False); tbl.set_fontsize(8); tbl.scale(1, 1.3)
+    paths.append(_save(fig2, out_dir, "fig12_switch_table", dpi))
+    return paths
+
+
 # ──────────────────────────── 报告 ────────────────────────────
 def write_report(out_dir: str, series: dict, meta: dict, figures: list[str]) -> dict:
     """落地 report.md / summary.json / data.npz，并返回 summary（给 stdout 用）。"""
@@ -1094,12 +1520,37 @@ def write_report(out_dir: str, series: dict, meta: dict, figures: list[str]) -> 
     npz: dict[str, np.ndarray] = {}
     for lab in labels:
         for i, ep in enumerate(series[lab]):
-            for field_name in ("t", "cmd", "vel_b", "yaw_rate", "root_z", "height", "pitch", "roll",
-                               "joint_pos", "joint_vel", "torque", "contact", "foot_xy_b", "foot_z_w"):
+            for field_name in ("t", "cmd", "vel_b", "yaw_rate", "root_xy", "root_z", "height",
+                               "pitch", "roll", "joint_pos", "joint_vel", "torque", "contact",
+                               "foot_xy_b", "foot_z_w"):
                 npz[f"{lab}|{i}|{field_name}"] = np.asarray(getattr(ep, field_name))
+            for opt in ("body_cmd", "ee_cmd_pos_b", "ee_pos_b", "ee_ori_err",
+                        "scan_min", "scan_max", "scan_mean", "env_terrain_level"):
+                v = getattr(ep, opt, None)
+                if v is not None:
+                    npz[f"{lab}|{i}|{opt}"] = np.asarray(v)
             if ep.terrain_pts_w is not None:
                 npz[f"{lab}|{i}|terrain_pts_w"] = np.asarray(ep.terrain_pts_w)
+            if ep.per_env is not None:
+                for k, v in ep.per_env.items():
+                    npz[f"{lab}|{i}|pe|{k}"] = np.asarray(v)
+            if ep.env_terrain is not None:
+                npz[f"{lab}|{i}|env_terrain"] = np.asarray(ep.env_terrain, dtype=object).astype("U32")
+            npz[f"{lab}|{i}|meta"] = np.array([
+                json.dumps({
+                    "label": ep.label,
+                    "command": list(ep.command),
+                    "joint_names_all": ep.joint_names_all,
+                    "schedule": [list(s) for s in (ep.schedule or [])],
+                    "term_counts": ep.term_counts,
+                    "n_done": int(ep.n_done),
+                }, ensure_ascii=False)
+            ])
+            if ep.torque_limit is not None:
+                npz[f"{lab}|{i}|torque_limit"] = np.asarray(ep.torque_limit)
     np.savez_compressed(os.path.join(out_dir, "data.npz"), **npz)
+    with open(os.path.join(out_dir, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
 
     lines = [
         f"# 低层策略体检报告 —— {meta['task']}",
@@ -1133,7 +1584,10 @@ def write_report(out_dir: str, series: dict, meta: dict, figures: list[str]) -> 
               "|---|---|---|---|---|---|"]
     for lab in labels:
         for s in summary[lab]:
-            cells = ["/".join(f"{v:.3f}" for v in s["mirror_rms"][p]) for p in ("fl~hr", "fr~hl", "fl~fr", "hl~hr")]
+            if not s["mirror_rms"]:
+                continue
+            cells = ["/".join(f"{v:.3f}" for v in s["mirror_rms"][p])
+                     for p in ("fl~hr", "fr~hl", "fl~fr", "hl~hr")]
             lines.append(f"| {lab} | {tuple(s['command'])} | " + " | ".join(cells) + " |")
 
     lines += ["", "## 3. 执行器与能耗（每档命令）", "",
@@ -1156,7 +1610,40 @@ def write_report(out_dir: str, series: dict, meta: dict, figures: list[str]) -> 
                 f"| {crest_max:.2f} | {s['power_mean_abs']:.2f} W | {s['path_length_m']:.2f} m |"
             )
 
-    lines += ["", "## 4. 图（每张一个角度）", ""]
+    terr = per_terrain_table(series)
+    if terr:
+        lines += ["", "## 4. 分地形（逐 env 指标按『落在哪种地形上』分组）", "",
+                  "| 地形 | 命令 | err_vel_xy | err_vel_yaw | 高度std | 力矩RMS最大 | 平均终止次数 | 最差腿触地占比 | env 数 |",
+                  "|---|---|---|---|---|---|---|---|---|"]
+        for tname in terrs_sorted(terr):
+            for lab in terr[tname]:
+                d = terr[tname][lab]
+                for ck in sorted(k for k in d if k.startswith("cmd")):
+                    lines.append(
+                        f"| {tname} | {ck.replace('cmd', '')} | {d[ck][0]:.4f} "
+                        f"| {np.mean(d['err_yaw']):.4f} | {np.mean(d['height_std']):.4f} "
+                        f"| {np.mean(d['tau_rms_max']):.1f} | {np.mean(d['done']):.2f} "
+                        f"| {np.mean(d['duty_min']):.3f} | {int(np.mean(d['n_env']))} |"
+                    )
+
+    switch_rows = []
+    for lab in labels:
+        for ep in series[lab]:
+            for r in transition_metrics(ep):
+                switch_rows.append((lab, r))
+    if switch_rows:
+        lines += ["", "## 5. 指令切换（变换能力：每段切换后的峰值误差/稳定时间/稳态误差）", "",
+                  "| 策略 | 段 | 速度指令 | 姿态指令 | 切换后 0.5 s 峰值误差 | 稳态误差 | 稳定时间 (s) | 高度稳态误差 |",
+                  "|---|---|---|---|---|---|---|---|"]
+        for lab, r in switch_rows:
+            st = "-" if r["settle_s"] is None else f"{r['settle_s']:.2f}"
+            lines.append(
+                f"| {lab} | {r['seg']} | {r['vel_cmd']} | {r['body_cmd']} "
+                f"| {r['peak_err_xy_0p5s']:.3f} | {r['steady_err_xy']:.3f} | {st} "
+                f"| {r['steady_err_height']:.3f} |"
+            )
+
+    lines += ["", "## 6. 图（每张一个角度）", ""]
     lines += [f"* `{os.path.basename(p)}`" for p in figures]
     lines += ["", "> 原始数据在 `data.npz`，标量指标在 `summary.json`。", ""]
     with open(os.path.join(out_dir, "report.md"), "w", encoding="utf-8") as f:
@@ -1165,8 +1652,111 @@ def write_report(out_dir: str, series: dict, meta: dict, figures: list[str]) -> 
 
 
 # ──────────────────────────── 主流程 ────────────────────────────
+def load_series_npz(npz_path: str) -> tuple[dict, dict]:
+    """把 `data.npz` 读回 `(series, meta)`（配合 `--from-npz` 做"云端采集 + 本机画图"）。"""
+    z = np.load(npz_path, allow_pickle=True)
+    meta_path = os.path.join(os.path.dirname(os.path.abspath(npz_path)), "meta.json")
+    meta = {}
+    if os.path.exists(meta_path):
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+    series: dict[str, list[EpisodeData]] = {}
+    seen: dict[str, set] = {}
+    for key in z.files:
+        parts = key.split("|")
+        if len(parts) < 3:
+            continue
+        lab, idx, field = parts[0], int(parts[1]), "|".join(parts[2:])
+        seen.setdefault(lab, set()).add(idx)
+    for lab, idxs in seen.items():
+        series[lab] = []
+        for i in sorted(idxs):
+            info = {}
+            if f"{lab}|{i}|meta" in z.files:
+                info = json.loads(str(z[f"{lab}|{i}|meta"][0]))
+            ep = EpisodeData(
+                label=info.get("label", lab),
+                command=tuple(info.get("command", (0.0, 0.0, 0.0))),
+            )
+            for field_name in ("t", "cmd", "vel_b", "yaw_rate", "root_xy", "root_z", "height",
+                               "pitch", "roll", "joint_pos", "joint_vel", "torque", "contact",
+                               "foot_xy_b", "foot_z_w"):
+                if f"{lab}|{i}|{field_name}" in z.files:
+                    setattr(ep, field_name, np.asarray(z[f"{lab}|{i}|{field_name}"]))
+            for opt in ("body_cmd", "ee_cmd_pos_b", "ee_pos_b", "ee_ori_err",
+                        "scan_min", "scan_max", "scan_mean", "env_terrain_level"):
+                if f"{lab}|{i}|{opt}" in z.files:
+                    setattr(ep, opt, np.asarray(z[f"{lab}|{i}|{opt}"]))
+            if f"{lab}|{i}|torque_limit" in z.files:
+                ep.torque_limit = np.asarray(z[f"{lab}|{i}|torque_limit"], dtype=float)
+            if f"{lab}|{i}|terrain_pts_w" in z.files:
+                ep.terrain_pts_w = np.asarray(z[f"{lab}|{i}|terrain_pts_w"])
+            if f"{lab}|{i}|env_terrain" in z.files:
+                ep.env_terrain = [str(x) for x in np.asarray(z[f"{lab}|{i}|env_terrain"])]
+            pe = {}
+            for k in z.files:
+                pref = f"{lab}|{i}|pe|"
+                if k.startswith(pref):
+                    pe[k[len(pref):]] = np.asarray(z[k])
+            ep.per_env = pe or None
+            ep.joint_names_all = list(info.get("joint_names_all", []))
+            if not ep.joint_names_all and ep.joint_pos.ndim == 2 and ep.joint_pos.shape[1] >= 16:
+                # 老版本 npz 没存列名 ⇒ 按本脚本的固定列序重建（12 腿 + 4 轮 [+ 臂/夹爪]）
+                names = [f"{leg}_{jt}_joint" for leg in LEGS for jt in JOINT_TYPES]
+                names += [f"{leg}_wheel_joint" for leg in LEGS]
+                extra = ep.joint_pos.shape[1] - len(names)
+                names += [f"extra_joint{i}" for i in range(extra)]
+                ep.joint_names_all = names
+            ep.col = {n: j for j, n in enumerate(ep.joint_names_all)}
+            ep.schedule = [tuple(x) for x in info.get("schedule", [])] or None
+            ep.term_counts = info.get("term_counts", {})
+            ep.n_done = int(info.get("n_done", 0))
+            if ep.joint_pos.size and ep.joint_names_all:
+                ep.mirror_rms = mirror_rms(ep.joint_pos, ep.joint_names_all)
+            series[lab].append(ep)
+    print(f"[report] 从 {npz_path} 读回 {sum(len(v) for v in series.values())} 段数据"
+          f"（labels={list(series)}）")
+    return series, meta
+
+
+def render_all(series: dict, meta: dict, out_dir: str, dpi: int) -> dict:
+    """把 series 渲染成"每角度一张图 + report.md + summary.json + data.npz"。"""
+    os.makedirs(out_dir, exist_ok=True)
+    figures: list[str] = []
+    for fn in (fig01_tracking, fig02_tracking_summary, fig03_posture, fig04_gait, fig05_joints,
+               fig06_actuation, fig07_symmetry, fig08_arm, fig09_terrain, fig10_compare,
+               fig11_per_terrain, fig12_switch):
+        if fn is fig10_compare and len(series) < 2:
+            continue
+        try:
+            out = fn(series, out_dir, dpi, meta)
+        except Exception as exc:  # noqa: BLE001 - 一张图失败不该毁掉整份报告
+            print(f"[report][WARN] {fn.__name__} 画图失败：{type(exc).__name__}: {exc}")
+            continue
+        if out is None:
+            continue
+        figures += out if isinstance(out, list) else [out]
+    summary = write_report(out_dir, series, meta, figures)
+    print("\n[report] === 汇总（逐档命令）===")
+    print(f"{'策略':<28}{'命令':<18}{'err_xy':>9}{'err_yaw':>9}{'高度std':>9}{'后不对称cm':>12}{'膝RMS(hl~hr)':>14}")
+    for lab in summary:
+        for s in summary[lab]:
+            knee = max(s["mirror_rms"]["hl~hr"]) if s["mirror_rms"] else float("nan")
+            print(f"{lab[:27]:<28}{str(tuple(s['command'])):<18}"
+                  f"{s['err_vel_xy_mean']:>9.4f}{s['err_vel_yaw_mean']:>9.4f}{s['height_std']:>9.4f}"
+                  f"{s['lateral_asymmetry_cm'][1]:>12.2f}{knee:>14.3f}")
+    print(f"\n[report] 输出目录：{os.path.abspath(out_dir)}"
+          f"（report.md / summary.json / data.npz / {len(figures)} 张 PNG）")
+    return summary
+
+
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
+    # ── 只画图模式：从 data.npz 读回数据渲染（不建环境、不装 checkpoint）──
+    if args_cli.from_npz:
+        series, meta = load_series_npz(args_cli.from_npz)
+        render_all(series, meta, args_cli.out_dir, args_cli.dpi)
+        return
     task_name = args_cli.task.split(":")[-1]
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -1204,11 +1794,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
                 mesh_prim_paths=["/World/ground"],
             )
             print(f"[report] 临时加诊断用 height_scanner（prim={base}）⇒ 才能画 fig09_terrain")
-        if args_cli.num_envs <= 16:
+        _shrink = args_cli.terrain_grid == "5x5" or (
+            args_cli.terrain_grid == "auto" and args_cli.num_envs <= 16
+        )
+        if _shrink:
             env_cfg.scene.terrain.terrain_generator.num_rows = 5
             env_cfg.scene.terrain.terrain_generator.num_cols = 5
             env_cfg.scene.terrain.terrain_generator.curriculum = False
-            print("[report] 地形网格 → 5×5（num_envs ≤ 16）")
+            print("[report] 地形网格 → 5×5（注意：5 列会丢掉部分子地形，"
+                  "分地形统计请用 --terrain-grid keep）")
 
     env = gym.make(args_cli.task, cfg=env_cfg)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
@@ -1230,13 +1824,36 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
 
     harness = Harness(env, unwrapped, label_a, args_cli.env_id)
     series: dict[str, list[EpisodeData]] = {}
+    segments = None
+    if args_cli.switch > 0:
+        seg_s = float(args_cli.switch)
+        bp = getattr(env_cfg.commands, "body_pose", None)
+        hr = tuple(getattr(bp, "height_range", (0.513, 0.513)))
+        pr = tuple(getattr(bp, "pitch_range", (0.0, 0.0)))
+        rr = tuple(getattr(bp, "roll_range", (0.0, 0.0)))
+        h_mid, h_lo, h_hi = 0.5 * (hr[0] + hr[1]), hr[0], hr[1]
+        segments = [(seg_s, c, (h_mid, 0.0, 0.0)) for c in commands]
+        segments += [
+            (seg_s, (0.0, 0.0, 0.0), (h_hi, 0.0, 0.0)),   # 抬升机身
+            (seg_s, (0.0, 0.0, 0.0), (h_lo, 0.0, 0.0)),   # 压低机身
+            (seg_s, (0.0, 0.0, 0.0), (h_mid, pr[1], 0.0)),  # 抬头
+            (seg_s, (0.0, 0.0, 0.0), (h_mid, 0.0, rr[1])),  # 侧倾
+        ]
+        harness.disable_body_resample()
+        print(f"[report] 指令切换模式：{len(segments)} 段 × {seg_s}s "
+              f"= {len(segments) * seg_s:.1f}s（速度 {len(commands)} 段 + 姿态 4 段）")
     for label, ckpt in jobs:
         harness.label = label
         runner = OnPolicyRunnerHis(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
         runner.load(ckpt)
         policy = runner.get_inference_policy(device=unwrapped.device)
         print(f"[report] 滚动 `{label}` ← {ckpt}")
-        series[label] = harness.collect(commands, args_cli.steps, args_cli.warmup, policy, term_names)
+        if segments is not None:
+            series[label] = [harness.collect_schedule(segments, policy, term_names)]
+        else:
+            series[label] = harness.collect(
+                commands, args_cli.steps, args_cli.warmup, policy, term_names
+            )
 
     meta = {
         "task": task_name,
@@ -1249,32 +1866,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
         "commands": args_cli.commands,
         "no_push": bool(args_cli.no_push),
         "env_id": int(args_cli.env_id),
+        "switch_s": float(args_cli.switch),
+        "terrain_grid": args_cli.terrain_grid,
     }
 
-    figures: list[str] = []
-    for fn in (fig01_tracking, fig02_tracking_summary, fig03_posture, fig04_gait, fig05_joints,
-               fig06_actuation, fig07_symmetry, fig08_arm, fig09_terrain, fig10_compare):
-        if fn is fig10_compare and len(series) < 2:
-            continue
-        try:
-            out = fn(series, args_cli.out_dir, args_cli.dpi, meta)
-        except Exception as exc:  # noqa: BLE001 - 一张图失败不该毁掉整份报告
-            print(f"[report][WARN] {fn.__name__} 画图失败：{type(exc).__name__}: {exc}")
-            continue
-        if out is None:
-            continue
-        figures += out if isinstance(out, list) else [out]
-
-    summary = write_report(args_cli.out_dir, series, meta, figures)
-    print("\n[report] === 汇总（逐档命令）===")
-    print(f"{'策略':<28}{'命令':<18}{'err_xy':>9}{'err_yaw':>9}{'高度std':>9}{'后不对称cm':>12}{'膝RMS(hl~hr)':>14}")
-    for lab in summary:
-        for s in summary[lab]:
-            print(f"{lab[:27]:<28}{str(tuple(s['command'])):<18}"
-                  f"{s['err_vel_xy_mean']:>9.4f}{s['err_vel_yaw_mean']:>9.4f}{s['height_std']:>9.4f}"
-                  f"{s['lateral_asymmetry_cm'][1]:>12.2f}{max(s['mirror_rms']['hl~hr']):>14.3f}")
-    print(f"\n[report] 输出目录：{os.path.abspath(args_cli.out_dir)}"
-          f"（report.md / summary.json / data.npz / {len(figures)} 张 PNG）")
+    render_all(series, meta, args_cli.out_dir, args_cli.dpi)
 
 
 if __name__ == "__main__":
