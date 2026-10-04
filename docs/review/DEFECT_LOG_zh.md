@@ -34,6 +34,10 @@
 
 > ⚠️ **DEF-042（2026-10-03，见下一节）是对本文的增补**：加了分地形统计、指令切换测试、
 > root_z 图重画、时长放宽到 10 s、以及 `--from-npz` 只画图模式。
+>
+> ⚠️ **DEF-043（2026-10-04）**：修掉 DEF-042 里三个会直接崩的 bug + 支持云端中文字体，
+> 并按用户建议把两份报告**搬到云端跑**（平地 A/B@10 s **已完成并拉回**，多地形分地形那份
+> 在跑，实例 SSH 中途失联）。
 
 | 项 | 内容 |
 |---|---|
@@ -97,6 +101,32 @@
   这正好解释了 DEF-040 §2 里"地形等级后 1/3 回落"的现象。
 
 # 记录（新→旧）
+
+### DEF-043 `2026-10-04` `policy_report.py` 第三轮：修 3 个崩溃 bug + 云端字体 + 云端跑通平地 A/B
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 缺陷修复 / 云端落地（按用户"可以云端跑"） |
+| 状态 | 平地 A/B（10 s/档）**云端跑完并拉回**（`logs/smoke/report_flatAB_cloud/`，10 图）；多地形分地形那份在云端跑、实例 SSH 中途失联（结果留在 `/root/report_terrain256`） |
+
+**1. 三个会直接崩的 bug（DEF-042 引入）**
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| ① | `NameError: name 'cmd_t' is not defined`（**本机那份 A/B 报告因此一直没产出**） | 新加的"逐 env 累加"块引用了 `cmd_t`，而这个变量只存在于 `eval_fixed_command.py` 风格代码里 | 每档命令开头显式建 `cmd_t = torch.tensor(cmd).expand(N, 3)` |
+| ② | `RuntimeError: size of tensor a (256) != b (187)` | 多地形任务上 `root_pos_w` 长度与 `num_envs` 不一致，逐 env 累加广播失败 | 逐信号按自身长度截断累加（`m = min(acc.numel(), t.shape[0])`） |
+| ③ | 地形名映射拿不到（`fig11` 被跳过） | 运行时 `scene.terrain.terrain_generator` 已是 `None` | 优先用 main 传进来的 `env_cfg.scene.terrain.terrain_generator`，并按 `env_id % num_patches % num_cols` 反推每 env 的地形 |
+
+**2. 云端中文字体**：新增 `POLICY_REPORT_FONT`（`font_manager.addfont` 后插到字体列表最前）。
+把本机 `simhei.ttf`（9.3 MB）传到实例后，报告中文不再变方块 ⇒ **"云端采集 + 云端画图 + 只拉 PNG"** 可用。
+
+**3. 云端跑通（实例 1237）**：平地 A/B（64 envs × 500 步 × 3 档 = 10 s/档）实测
+`(0,0,0)` `err_vel_xy` **0.1069 vs 0.1861**、`hl~hr` 膝镜像 RMS **0.340 vs 2.211**、
+`高度std` **0.0041 vs 0.0214**、静止终止 **1 vs 6** ⇒ 与 512 envs/1100 步的固定命令 eval 一致。
+图在 `logs/smoke/report_flatAB_cloud/`（14 文件 / 2.7 MB）。
+
+**4. 待办**：多地形分地形那份（256 envs / `--terrain-grid keep` / 10 s）在云端跑到一半实例 SSH 失联
+（banner exchange 超时）⇒ 结果应在 `/root/report_terrain256`；下次连上 `scp -r` 取回即可。
 
 ### DEF-042 `2026-10-03` `policy_report.py` 第二轮：分地形统计 / 指令切换 / root_z 澄清 / 10 s / 云端采集+本机画图
 

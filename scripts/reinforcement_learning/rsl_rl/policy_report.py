@@ -79,6 +79,18 @@ matplotlib.rcParams["font.sans-serif"] = _CJK_FONTS
 matplotlib.rcParams["font.family"] = "sans-serif"
 matplotlib.rcParams["axes.unicode_minus"] = False
 
+# 云端一般没有中文字体（图里中文会变方块）⇒ 允许用环境变量塞一个字体文件进来，
+# 例如把本机 C:\Windows\Fonts\simhei.ttf 传上去后：
+#   POLICY_REPORT_FONT=/root/fonts/simhei.ttf python .../policy_report.py ...
+_font_path = os.environ.get("POLICY_REPORT_FONT")
+if _font_path and os.path.exists(_font_path):
+    from matplotlib import font_manager  # noqa: PLC0415
+
+    font_manager.fontManager.addfont(_font_path)
+    _fam = font_manager.FontProperties(fname=_font_path).get_name()
+    matplotlib.rcParams["font.sans-serif"] = [_fam] + list(matplotlib.rcParams["font.sans-serif"])
+    print(f"[report] 使用中文字体：{_fam} ← {_font_path}")
+
 from isaaclab.app import AppLauncher
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -294,7 +306,8 @@ class EpisodeData:
 class Harness:
     """把"环境 + 策略 + 固定命令滚动 + 信号采集"包在一块，画图那边只管画。"""
 
-    def __init__(self, env, unwrapped, label: str, env_id: int, contact_threshold: float = 1.0):
+    def __init__(self, env, unwrapped, label: str, env_id: int, contact_threshold: float = 1.0,
+                 terrain_gen=None):
         self.env = env
         self.raw = unwrapped
         self.label = label
@@ -408,7 +421,10 @@ class Harness:
         self.env_terrain: list[str] | None = None
         self.env_terrain_level: np.ndarray | None = None
         terr = getattr(self.raw.scene, "terrain", None)
-        gen = getattr(terr, "terrain_generator", None) if terr is not None else None
+        # 地形生成器在运行时 importer 上常常是 None（生成完就丢了）⇒ 优先用调用方从 env_cfg 传进来的那份
+        gen = terrain_gen if terrain_gen is not None else (
+            getattr(terr, "terrain_generator", None) if terr is not None else None
+        )
         if gen is not None and getattr(gen, "sub_terrains", None):
             try:
                 props = np.array([c.proportion for c in gen.sub_terrains.values()], dtype=float)
@@ -419,7 +435,14 @@ class Harness:
                     names[int(np.min(np.where(c / gen.num_cols + 0.001 < cum)[0]))]
                     for c in range(gen.num_cols)
                 ]
-                types = np.asarray(terr.terrain_types.detach().cpu().numpy(), dtype=int).ravel()
+                # 每 env 的列号：优先用 importer 的 terrain_types；没有就按 IsaacLab 的
+                # `env_id % num_patches`（`_get_env_origins` 的分配方式）反推
+                types = None
+                if terr is not None and getattr(terr, "terrain_types", None) is not None:
+                    types = np.asarray(terr.terrain_types.detach().cpu().numpy(), dtype=int).ravel()
+                if types is None or types.size != self.n_envs:
+                    n_patch = int(getattr(gen, "num_rows", 1)) * int(gen.num_cols)
+                    types = (np.arange(self.n_envs) % n_patch) % int(gen.num_cols)
                 self.env_terrain = [col2name[min(int(t), len(col2name) - 1)] for t in types]
                 levels = getattr(terr, "terrain_levels", None)
                 if levels is not None:
@@ -504,6 +527,7 @@ class Harness:
             acc = {k: torch.zeros(_N, device=_dev) for k in
                    ("xy", "xy2", "yaw", "yaw2", "h", "h2", "z", "z2", "pitch2", "roll2", "tau", "done")}
             c_cnt = torch.zeros(_N, 4, device=_dev)
+            cmd_t = torch.tensor(cmd, device=_dev, dtype=torch.float32).expand(_N, 3)
             for _ in range(steps):
                 # 误差用"动作施加前"的状态算（与 eval_fixed_command 同口径）
                 v_b = self.robot.data.root_lin_vel_b[:, :2].clone()
@@ -556,19 +580,32 @@ class Harness:
                         term_counts[name] += int(self.raw.termination_manager.get_term(name)[done].sum())
                     n_done += int(done.sum())
                 # ---- 逐 env 累加 ----
-                e_xy = torch.norm(cmd_t[:, :2] - v_b, dim=-1)
-                acc["xy"] += e_xy
-                acc["xy2"] += e_xy ** 2
-                acc["yaw"] += torch.abs(cmd_t[:, 2] - w_z)
-                acc["h"] += h
-                acc["h2"] += h ** 2
-                acc["z"] += z
-                acc["z2"] += z ** 2
-                acc["pitch2"] += pitch ** 2
-                acc["roll2"] += roll ** 2
-                acc["tau"] = torch.maximum(acc["tau"], torch.sqrt((tau ** 2).mean(dim=-1)))
-                acc["done"] += done.float()
-                c_cnt += contact.float()
+                # 注意：某些信号的长度可能和 num_envs 不一致（地形任务上见过 root_pos_w 短一截），
+                # 所以每个信号都按"自己的长度"截断累加，缺的部分保持 0（NaN 不做数）以免整份报告挂掉。
+                def _acc(key: str, t: torch.Tensor | None) -> None:
+                    if t is None:
+                        return
+                    m = min(acc[key].numel(), t.shape[0])
+                    acc[key][:m] += t[:m]
+                    if f"{key}2" in acc:
+                        acc[f"{key}2"][:m] += t[:m] ** 2
+
+                n_ok = min(cmd_t.shape[0], v_b.shape[0], h.shape[0])
+                _acc("xy", torch.norm(cmd_t[:n_ok, :2] - v_b[:n_ok], dim=-1))
+                _acc("yaw", torch.abs(cmd_t[:n_ok, 2] - w_z[:n_ok]))
+                _acc("h", h)
+                _acc("z", z)
+                m2 = min(acc["pitch2"].numel(), pitch.shape[0])
+                acc["pitch2"][:m2] += pitch[:m2] ** 2
+                m3 = min(acc["roll2"].numel(), roll.shape[0])
+                acc["roll2"][:m3] += roll[:m3] ** 2
+                t_rms = torch.sqrt((tau ** 2).mean(dim=-1))
+                m4 = min(acc["tau"].numel(), t_rms.shape[0])
+                acc["tau"][:m4] = torch.maximum(acc["tau"][:m4], t_rms[:m4])
+                m5 = min(acc["done"].numel(), done.shape[0])
+                acc["done"][:m5] += done[:m5].float()
+                if contact.shape[0] >= c_cnt.shape[0]:
+                    c_cnt += contact[: c_cnt.shape[0]].float()
 
             data = EpisodeData(label=self.label, command=cmd)
             data.t = np.array(rec["t"])
@@ -1822,7 +1859,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     print(f"[report] 命令 {commands}；每档 {args_cli.steps} 步（warmup {args_cli.warmup}）")
     print(f"[report] 终止项：{term_names}")
 
-    harness = Harness(env, unwrapped, label_a, args_cli.env_id)
+    harness = Harness(
+        env, unwrapped, label_a, args_cli.env_id,
+        terrain_gen=env_cfg.scene.terrain.terrain_generator,
+    )
     series: dict[str, list[EpisodeData]] = {}
     segments = None
     if args_cli.switch > 0:
