@@ -205,4 +205,39 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   * 本机 .git 只读；git 需要 `-c safe.directory=...` 且 escalate。
   * 文档是 CRLF（core.autocrlf=true）：用 apply_patch 改多行上下文时容易匹配失败，
     建议一条一条改、或先确认目标行的行尾。
+
+【2026-10-04 收尾：最新状态 + 下一步计划（照这个往下做）】
+
+* 最新提交：`3ce92f1`（DEF-043/044）。**所有 6 条云端长跑都已跑完并拉回本机**：
+  `cloud_soft20k`(20k) / `cloud_cap12_20k`(20k) / `cloud_roughslopes20k`(20k) /
+  `cloud_slowvx20k`(20k) / `abl_pushonly_10k` / `abl_rewardonly_10k` / `abl_legacyall_10k`(10k)。
+  云端只剩实例 `bbc64d91a6-99f1820e`（ssh 1237）**运行中且空闲**，其它实例在控制台里都是「已关机」。
+* **已定稿的结论（不要再重跑验证）**：
+  ① `max_noise_std` 默认 **1.2**（DEF-039）；
+  ② "右后腿撇"的根因是 **⑫**（`HeightInvariantEECommand.reset()`），不是镜像符号（DEF-040 §3④）；
+  ③ 静止漂移/步态/抗扰：`cap12_20k` 全面最好；固定命令 eval 三档 0.1014/0.1301/0.1594、摔倒率≈0；
+  ④ **SlowVx（v_x 课程台阶 ×2 + cap1.2）治住了地形等级回落**：末 1000 `terrain_levels`
+     3.706（斜率 −0.09/1k）→ **4.74（+0.095/1k，还在涨）**、`bad_orientation_2` −51%、回报 +33%（DEF-044）；
+  ⑤ 多地形分地形（256 envs）：粗糙 0.0717 ＜ 平地 0.0966；**下坡跟踪最差（1.0 档 0.2326）、上坡最易摔（0.10 次/env）**。
+* **下一步（按优先级）**：
+  1. **立刻可做、不需要训练**（都在本机或云端空闲实例上跑 `policy_report.py`）：
+     a. 把"尖刺"正式指标化：`spike_count / max_err / recovery_time`（现在只有图，见 DEF-043 §"尖刺分析"：
+        段首 0~0.3 s 的 `|v|` 很小 ⇒ 阶跃瞬态；中后段 `|v|` 1.3~1.8 m/s + `root_z` 掉 ⇒ push 冲击）；
+     b. `report.md` 的分地形表**按命令档拆开**（现在 `err_yaw/高度std/触地占比` 是对全部命令求的平均，三档同值）；
+     c. 删掉已被 `policy_report.py` 取代的 4 个老脚本（`gait_test/torque_test/tracking_test/test`，TODO P2 已记）。
+  2. **坡面短板专项（要训练，2~10k iter 即可）**：针对"下坡速度跟踪 + 上坡摔"，两个候选：
+     a. 用"只放坡面"的地形变体（照 `ROUGH_SLOPES_FLAT_TERRAINS_CFG` 把比例改成上下坡各 0.5）跑 10k，
+        看是不是偏航/坡面跟踪奖励不够；
+     b. 或把 `track_ang_vel_z_exp` / `track_lin_vel_xy_exp` 在坡面段的权重或 std 单独调（先用 a 定位）。
+  3. **把 SlowVx 配方落成默认**（等 2 有结论后一起做）：把 SlowVx 的四个 v_x 台阶（150k/200k/250k/300k）
+     写进 `RoughSlopesEnvWBCConfig.__post_init__` 默认值，并保留 `-play-` 变体。
+  4. **仍未定论的老账**（都在 TODO）：s3 臂摆动鲁棒性、执行器刚度课程、低层 known_issues ⑭⑮、
+     `mdp/__init__.py` 星号导入遮蔽（影响面小）。
+* **环境提醒（这两周反复踩）**：
+  * 本机（Windows + A4000）**只在 5×5 网格 / ≤16 envs 下能跑生成地形**；训练级网格（10×20）会卡在
+    env 创建阶段（DEF-031 家族，2026-10-03/04 各复现一次）⇒ 地形相关的测试/训练一律走云端。
+  * 云端画中文需要 `POLICY_REPORT_FONT=/root/fonts/simhei.ttf`（本机字体已传上去）；
+    或者只拉 `data.npz`+`meta.json` 回来用 `--from-npz` 本机画图。
+  * 云端 SSH 偶发 `banner exchange` 超时（实例被大环境数地形生成压住）——**不是关机**，
+    控制台 `private.autodl.com/console/instance` 看状态是「运行中」就等几分钟重连。
 ```

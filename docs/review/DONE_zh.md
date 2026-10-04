@@ -23,6 +23,7 @@
 | 2026-10-02 | 新增第十二节 **多地形 20k + 消融 2×2**：`cloud_roughslopes20k` 跑完（地形等级峰值 5.8 / 末段 3.6、末段 timeout 0.80）；消融显示**静止漂移的改善主要来自"加强扰动"**（只加强扰动 −37%），而"镜像符号修复"不是步态对称的唯一根因（DEF-040） | `codex/ll-train-detail-fix` |
 | 2026-10-02 | 新增第十三节 **P1-1'' 定稿**：`max_noise_std` 默认 0 → **1.2**（噪声平台 1.13、训练回报 35.92 vs 20.23、eval 三档速度误差全线最优且摔倒率≈0）（DEF-039） | `codex/ll-train-detail-fix` |
 | 2026-10-02 | 新增第十四节 **可视化脚本收敛成 `policy_report.py`**：4 个老 test 脚本（~96 KB、各自一份样板）→ 一次滚动出 10 个角度 + `report.md`/`summary.json`/`data.npz` + `--compare` A/B；并出"平地 cap12 vs 旧代码"与"多地形 20k"两份实测报告（DEF-041） | `codex/ll-train-detail-fix` |
+| 2026-10-03/04 | 新增第十五节 **可视化工具二三轮 + 云端跑通**：分地形（fig11）/指令切换（fig12）/root_z 澄清/10 s/`--from-npz`/云端中文字体；修 3 个崩溃 bug；云端出**平地 A/B@10 s**（10 图）与**多地形分地形（256 envs）**；结案"SlowVx 治住地形等级回落"（DEF-042/043/044） | `codex/ll-train-detail-fix` |
 
 ---
 
@@ -441,6 +442,21 @@ DEF-034 §2）—— `main + ⑫` 就是四格最好（`(0,0,0)` **0.1543 → 0.
 
 > 两个"坑"也在这一批里解决：WBC 配置把 `height_scanner` 关了（脚本临时加一份**只用于诊断**的，
 > 不进观测），以及 `joint_effort_limits` 读出来是 **1e9 占位值**（改成画**峰值因子**）。
+
+---
+
+## 十五、可视化工具二三轮 + 云端跑通（2026-10-03/04，分支 `codex/ll-train-detail-fix`）
+
+来龙去脉见 `DEFECT_LOG_zh.md` **DEF-042 / DEF-043 / DEF-044**。
+
+| 项 | 内容 | 结果 |
+|---|---|---|
+| **加 4 个角度**（DEF-042） | 分地形统计 `fig11_per_terrain` / 指令切换（变换能力）`fig12_switch(+table)` / `root_z` 从"混合直方图"改成"vs 相对足端高度"散点 / 时长放到 10 s（`--steps 500`） | 切换测试已出图；`root_z` 语义已在图注写清 |
+| **`--from-npz` + 云端中文字体**（DEF-042/043） | `data.npz` 带 `per_env/env_terrain/schedule/关节列名` + `meta.json`；新增 `POLICY_REPORT_FONT` ⇒ **"云端采集 + 云端画图，只拉 PNG"** 或 **"云端采集 + 本机 `--from-npz`"** 两条路都通 | 传 `simhei.ttf` 后云端 PNG 中文正常 |
+| **修 3 个崩溃 bug**（DEF-043） | ① `cmd_t` 未定义（**这正是之前本机报告没产出的原因**，不是 Isaac 卡死）；② 多地形 `root_pos_w` 长度 ≠ 环境数（256 vs 187）⇒ 逐信号按自身长度截断累加；③ 地形名映射拿不到（运行时 generator 为 None）⇒ 从 `env_cfg` 取 + 按 `env_id % num_patches % num_cols` 反推 | 两份云端报告随后跑通 |
+| **云端平地 A/B@10 s**（DEF-043） | 64 envs × 500 步 × 3 档 | `(0,0,0)` err_xy **0.1069 vs 0.1861**、膝镜像 RMS **0.340 vs 2.211**、高度 std **0.0041 vs 0.0214**、静止终止 **1 vs 6**（与 512 envs/1100 步口径一致）；图在 `logs/smoke/report_flatAB_cloud/` |
+| **多地形分地形**（DEF-044） | 256 envs / `--terrain-grid keep` / 10 s | **粗糙 0.0717/0.1430/0.1850（103 env）＜ 平地 0.0966/0.1139/0.1902（25 env）**；**下坡最差**（1.0 档 0.2326、最差腿触地 0.361）、**上坡最易摔**（0.10 次/env）⇒ 短板在坡面；图在 `logs/smoke/report_terrain256/` |
+| **SlowVx 结案**（DEF-044） | `cloud_slowvx20k`（v_x 课程台阶 ×2 + cap1.2）vs 原多地形 20k | `terrain_levels` 末 1000 **3.706（斜率 −0.091/1k）→ 4.74（+0.095/1k，还在涨）**；`bad_orientation_2` **−51%**；`mean_reward` **+33%** ⇒ **"推后 v_x 课程"这条修法定稿** |
 
 ---
 
