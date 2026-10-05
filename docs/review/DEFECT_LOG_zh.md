@@ -120,6 +120,9 @@
 * **新增 `docs/model_zoo_zh.md`**：把"该用哪个 checkpoint / 怎么跑起来看 / 大概什么水平"整理成
   5 张表（低层平地 / 多地形 / 部署态 / 消融 / 盘点命令），带推荐度与实测指标，供后续只改一个文件即可维护。
   （`docs/review/` 按约定只放 TODO/DONE/DEFECT_LOG/NEXT_SESSION_PROMPT，所以放 `docs/` 下。）
+  **合并说明**：本次清盘时发现 `docs/review/MODEL_ZOO_zh.md`（同日早些时候建的同类文档）与它重复，
+  已把后者删除、只保留 `docs/model_zoo_zh.md` 一份（前者独有的"怎么分辨冒烟 run"已并入后者的
+  §5 盘点命令 + 本节判据）。
 
 ### DEF-043 `2026-10-04` `policy_report.py` 第三轮：修 3 个崩溃 bug + 云端字体 + 云端跑通平地 A/B
 
