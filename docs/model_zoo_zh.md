@@ -49,7 +49,32 @@ python scripts\reinforcement_learning\rsl_rl\policy_report.py --headless --task 
 
 ---
 
-## 二、多地形策略（`Rough-Slopes-*`：本机跑不了训练级网格 ⇒ 云端跑）
+## 二、多地形策略（`Rough-Slopes-*`）
+
+**本机能不能跑？——能看、能测，别用它做多环境训练。**（2026-10-05 更正）
+
+* `play.py` 会把地形**自动压成 5×5 并关掉地形课程**（见 `play.py:101-104`），所以**任何多地形任务**
+  在本机小环境数下都能跑，例如下面这条（本机实测可用）：
+
+  ```bat
+  python scripts\reinforcement_learning\rsl_rl\play.py --task=Rough-Slopes-SlowVx-History-Adaptation-Deeprobotics-M20-play-v0 --checkpoint=logs/rsl_rl/history_adaptation/2026-10-02_00-44-42_cloud_slowvx20k/model_19999.pt --num_envs=4
+  ```
+* 本机**会卡死**的只有一种组合：**训练任务 + 训练级网格（10 行 × 20 列 = 200 块） + 环境数 ≥48**
+  （在 env 创建阶段挂住，CPU 近 0）。用 `policy_report.py` 时加 `--terrain-grid auto`（≤16 envs 时自动压 5×5）
+  或 `--terrain-grid 5x5` 就能避掉；要做**多环境地形训练/大样本分地形统计**才去云端。
+
+**v_x 命令范围（`commands.base_velocity.ranges.lin_vel_x`）**
+
+| 场景 | 范围 | 什么时候到 ±5 |
+|---|---|---|
+| 平地 `History-Adaptation-*`（训练，`WBCCurriculumCfg`） | 台阶 **±2→±3→±4→±5** | 75k/100k/125k/**150k 环境步** ≈ **3125/4167/5208/6250 iter**（`num_steps_per_env=24`） |
+| 多地形 `Rough-Slopes-*`（训练） | 同上（`RoughEnvWBCConfig` 里本来是 None，RoughSlopes 重新打开） | 同上 |
+| 多地形 `Rough-Slopes-SlowVx-*`（训练） | 台阶**整体 ×2**：150k/200k/250k/**300k** | ±5 推到 **12500 iter**（终值仍是 ±5） |
+| 任意 `-play-v0` | **固定 (-1, 1)**（`lin_vel_x/y/z` 都设 -1~1，四个台阶全部置 None） | 不会扩 |
+
+> 所以：**训练时会跑到 ±5 m/s**（这也是 `error_vel_xy` 后期看着变大的原因之一，见 DEF-023）；
+> **`-play-v0` 下只会采到 ±1**。固定命令 eval / `policy_report.py` 是**直接写死命令缓冲并关重采样**的，
+> 与上面的范围无关。
 
 | 推荐度 | 模型 | 是什么 |
 |---|---|---|
@@ -85,7 +110,7 @@ python scripts\reinforcement_learning\rsl_rl\policy_report.py --headless --task 
 ⇒ **粗糙地形并不比平地差**；短板是**下坡的速度跟踪**（1.0 m/s 档 0.2326）与**上坡的稳定性**
 （每 env 0.10 次终止）。原始表格/图见 `logs/smoke/report_terrain256/`（`fig11_per_terrain.png` 等 10 张）。
 
-**在云端看它跑 / 出报告**
+**在云端看它跑 / 出报告**（想要 200 块训练网格、或 256 envs 分地形统计时才需要）
 
 ```bat
 :: 先 ssh 进实例（本机 cmd）：ssh -p 1237 root@10.60.144.11

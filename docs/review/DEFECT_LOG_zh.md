@@ -105,6 +105,44 @@
 
 # 记录（新→旧）
 
+### DEF-046 `2026-10-05` 两处澄清（用户质疑后复核）：v_x 课程范围 & "本机跑不了多地形"说过头了
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **文档更正 / 事实澄清**（代码为准） |
+| 关联 | `flat_env_wbc_cfg.py`（`WBCCurriculumCfg` / `RoughSlopes*`）；`scripts/reinforcement_learning/rsl_rl/play.py:101-104`；`docs/model_zoo_zh.md`；DEF-031 / DEF-042 / DEF-044 |
+
+**1. v_x 课程最终会扩展到多少？**
+
+| 场景 | 范围 | ±5 生效时间 |
+|---|---|---|
+| 平地 `History-Adaptation-*`（`WBCCurriculumCfg`，**训练时**） | 台阶 **±2 → ±3 → ±4 → ±5** | 75k/100k/125k/**150k 环境步** ≈ **3125/4167/5208/6250 iter**（`num_steps_per_env=24`） |
+| 多地形 `Rough-Slopes-*`（训练） | 同上（`RoughEnvWBCConfig` 里这四个台阶本来是 `None`，`RoughSlopesEnvWBCConfig` 重新打开） | 同上 |
+| `Rough-Slopes-SlowVx-*`（训练） | 台阶**整体 ×2**（150k/200k/250k/**300k**） | ±5 推到 **12500 iter**，**终值仍是 (-5,5)** |
+| 任意 **`-play-v0`** | **固定 (-1, 1)**（`lin_vel_x/y/z` 全设 -1~1，四个台阶置 `None`） | 不会扩 |
+
+⇒ **训练时确实会到 ±5 m/s**（`error_vel_xy` 后期变大的一部分原因，见 DEF-023 的口径坑）；
+**`-play-v0` 只会采到 ±1**。固定命令 eval / `policy_report.py` 直接写命令缓冲并关重采样 ⇒ 与范围无关。
+
+**2. "本机跑不了多地形"是过宽的说法 —— 更正**
+
+用户实测本机可以直接跑：
+
+```
+python scripts/reinforcement_learning/rsl_rl/play.py --task=Rough-Slopes-SlowVx-History-Adaptation-Deeprobotics-M20-play-v0 --checkpoint=logs/rsl_rl/history_adaptation/2026-10-02_00-44-42_cloud_slowvx20k/model_19999.pt --num_envs=4
+```
+
+**为什么能跑**：`play.py` 会对**任何**地形任务把 `terrain_generator` 压成 **5×5 + `curriculum=False`**
+（`play.py:101-104`）⇒ 地形生成量小、不会卡。我自己在本机也早跑通过 2 envs 的多地形报告（`fig09_terrain`）。
+
+**本机真正会卡死的组合**（2026-10-03/04 各复现一次）：**训练任务 + 训练级网格（10×20 = 200 块） + 环境数 ≥48**
+（挂在 env 创建阶段；`--num_envs 64` 的回归矩阵里 `Rough-Slopes-*-v0` 一直是 SKIP）。判定与规避：
+用 `--terrain-grid auto`（≤16 envs 自动压 5×5）或 `--terrain-grid 5x5`；要做**多环境地形训练**或
+**大样本（256 envs）分地形统计**才上云。
+
+⇒ 因此把 DEF-031 / DEF-042 / DEF-044 里"本机跑不了生成地形"的说法统一收窄为上面这一条；
+`docs/model_zoo_zh.md` 第二节已改成"能看能测（本机命令）+ 大网格/多环境才去云端"，并补了 v_x 范围表。
+
 ### DEF-045 `2026-10-05` logs 清盘 + 新建"模型清单"文档 `docs/model_zoo_zh.md`
 
 | 项 | 内容 |
