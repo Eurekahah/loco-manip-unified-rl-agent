@@ -120,7 +120,10 @@ def _check_curriculum_stages(env) -> None:
     for counter in (0, 12_000, 25_001):
         env.common_step_counter = counter
         env.curriculum_manager.compute(env_ids=all_ids)
-        if "randomize_push_robot" not in env.event_manager.active_terms:
+        # `active_terms` 是 {模式: [名]} 的 dict ⇒ 先摊平（2026-10-05 修的坑）
+        _at = env.event_manager.active_terms
+        _names = {n for v in _at.values() for n in v} if isinstance(_at, dict) else set(_at)
+        if "randomize_push_robot" not in _names:
             print(f"    counter={counter:>7}  （本探针把扰动事件关掉了，跳过）")
             continue
         push = env.event_manager.get_term_cfg("randomize_push_robot").params["velocity_range"]["x"]

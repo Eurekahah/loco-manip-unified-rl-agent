@@ -21,6 +21,22 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
+def _active_event_term_names(env: ManagerBasedRLEnv) -> set[str]:
+    """摊平 `EventManager.active_terms`（它是 ``{模式: [term 名]}`` 的 dict）。
+
+    历史坑（2026-10-05 发现）：直接 ``name in env.event_manager.active_terms`` 比的是
+    **模式名**（startup / reset / interval / prestartup），对任何事件名都返回 False ⇒
+    用它做"事件是否存在"的判断会静默失效（`disturbance_ramp` 因此一直是空操作）。
+    """
+    terms = getattr(env.event_manager, "active_terms", {})
+    if isinstance(terms, dict):
+        out: set[str] = set()
+        for names in terms.values():
+            out.update(names)
+        return out
+    return set(terms)
+
+
 def command_levels_vel(
     env: ManagerBasedRLEnv,
     env_ids: Sequence[int],
@@ -291,7 +307,12 @@ def apply_event_scale(
         term_name = item["term"]
         # 事件可能被某个 cfg/探针关掉（置 None）—— `get_term_cfg` 对不存在的项会抛
         # ValueError，所以先查 active_terms，缺了就跳过（不要因此让训练崩掉）。
-        if term_name not in env.event_manager.active_terms:
+        #
+        # ⚠️ 2026-10-05 修：`EventManager.active_terms` 返回的是
+        # **{模式: [term 名]} 的 dict**（isaaclab/managers/event_manager.py:109-114），
+        # 直接 `term_name not in active_terms` 永远成立（比的是模式名）⇒ 整个扰动课程
+        # 一直是**空操作**（push 从第 0 步就是全量）。这里先摊平成名字集合。
+        if term_name not in _active_event_term_names(env):
             continue
         term_cfg = env.event_manager.get_term_cfg(term_name)
         if term_cfg is None:

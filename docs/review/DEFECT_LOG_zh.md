@@ -30,8 +30,68 @@
 | 2026-10-03 | 新增 **DEF-042**：`policy_report.py` 第二轮 —— 分地形统计（fig11）/ 指令切换测试（fig12）/ root_z 图改成"vs 相对足端高度"散点 / 时长 10 s / `--from-npz`（云端采集+本机画图） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-04 | 新增 **DEF-043**：修 3 个崩溃 bug（`cmd_t` 未定义 / 逐 env 长度不一致 / 地形生成器取不到）+ `POLICY_REPORT_FONT`（云端中文字体）；**云端跑通平地 A/B@10 s**（10 图已拉回） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-04 | 新增 **DEF-044**：取回云端两份产物 —— **多地形分地形表**（粗糙并不比平地差；下坡跟踪最差 0.2326、上坡最易摔 0.10 次/env）+ **SlowVx 治住地形等级回落**（末 1000 `terrain_levels` 3.706(斜率−0.09) → **4.74(+0.095)**、摔倒率 −51%、回报 +33%） | 分支 `codex/ll-train-detail-fix` |
+| 2026-10-05 | 新增 **DEF-048**：`policy_report.py` 第四轮（schedule 驱动的多指令组合 / 抗扰扫描 fig13 / 每地形稠密高度图 / 图内英文 / npz 分组）+ **修掉扰动课程空操作的实质 bug**（`EventManager.active_terms` 是 dict，`in` 永远 False ⇒ `disturbance_ramp` 从未生效） | 分支 `codex/ll-train-detail-fix` |
 
 ---
+
+### DEF-048 `2026-10-05` policy_report 第四轮（多指令组合 / 抗扰扫描 / 每地形高度图）+ **修掉"扰动课程一直是空操作"的实质 bug**
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 工具重构（本机+云端实测） + **训练代码实质修复** |
+| 状态 | 报告工具已改完并跑通；`curriculums.py` 的修复已合入本分支（**只有之后新开的训练吃到**，旧 run 不受影响） |
+| 关联 | `scripts/reinforcement_learning/rsl_rl/policy_report.py`；`source/rl_training/rl_training/tasks/manager_based/locomotion/velocity/mdp/curriculums.py`；`scripts/.../probe_ee_curriculum.py` |
+
+**0. 顺手挖出的实质 bug：`disturbance_ramp`（扰动课程）从上线起就是空操作**
+
+`mdp/apply_event_scale` 里用 `if term_name not in env.event_manager.active_terms: continue`
+判断"事件是否被关掉了"，但 `EventManager.active_terms` 返回的是
+**`{模式: [term 名]}` 的 dict**（`isaaclab/managers/event_manager.py:109-114`）——
+`in` 比的是**模式名**（`startup` / `reset` / `interval` / `prestartup`），对任何事件名都返回 False
+⇒ 每个 spec 项都在第一行 `continue`，**push / 外力的"20%→100% 爬升"从来没生效过**，
+训练从一开始就是**全量扰动**（间隔 5~10 s、x ±2 / y ±1 / yaw ±0.52）。
+
+* 这解释了 DEF-038 §5 记录的"训练期 `root_height_below_minimum` 偏高"：早期没有缓冲，
+  底盘还没学会平衡就被 ±2 m/s 的冲击推。
+* 修法：新增 `_active_event_term_names(env)`（把 dict 摊平成名字集合），
+  `apply_event_scale` 改用它；顺手把 `probe_ee_curriculum.py` 里同一个判断一并修掉
+  （它的"扰动课程 30%→100%"自检因此一直是错的：以前只会打印"跳过"或读到未缩放的终值）。
+* 影响面：**行为只在"新开的训练"里变化**；已跑完的 run（`cloud_soft20k` / `cloud_cap12_20k` /
+  `cloud_slowvx20k` / 消融）都是"全量扰动从第 0 步起"，做对照时要记得这一点。
+
+**1. 用户 2026-10-05 提的 12 条，逐条落地**
+
+| # | 需求 | 做法 |
+|---|---|---|
+| 1 | 抗扰专项测试：push 比训练更频繁、力度外推，看泛化 | 新增 `--push-sweep "力度,频率;…"` + `fig13_push_robustness`：运行时改 `randomize_push_robot` 的 `interval_range_s`（÷频率）与 `velocity_range`（×力度，**幅度外推**），输出 `生还率（终止/环境/分钟）`、`尖刺频次`、`平均恢复时间`、`最大瞬时误差`，并把 1x1（训练口径）当基线 |
+| 2 | fig01 只测了 vx，vy/wz 一直保持 0 | fig01 改成 **schedule 驱动**：一条 10 s+ 连续轨迹里 vx/vy/wz 依次变化并来回切换，左列 command-vs-actual、右列逐轴误差，灰竖线 = 切换时刻 |
+| 3 | fig02 数据太单薄 | fig02 改成 **逐段稳态误差柱状**（vx/vy/wz 各一格）+ 三张 cmd-vs-actual 散点（带 y=x 理想线） |
+| 4 | fig03 要在 10 s 内切不同位姿；pitch/roll 不要挤在一张图 | schedule 追加 7 段姿态（抬升 / 压低 / 抬头 / 低头 / 左倾 / 右倾 / 回中），fig03 改成 **height / pitch / roll 各一行**（左列时程、右列逐段稳态误差） |
+| 5 | fig04 只看静止档（全程着地，什么都看不出） | `--commands` 默认扩到 9 档（含 `0,±0.4,0`、`0,0,±0.6`）；fig04 改成 **每档速度指令一列**画四足触地条带 + 底部占空比，一眼分出"滚动"与"迈步" |
+| 6 | fig05/06/07 看不出东西 | 三张图都改用 schedule 那条（指令组合丰富）；fig06 新增**膝盖/轮子力矩时程**，fig07 新增**不对称度 / 轮距的时程**（不再只按命令档编号取点） |
+| 7 | fig08 只切一次目标；平均误差要标出来；臂关节角没意义 | 臂测试拉长到 `3 s × (目标数+1)`（默认 5 个目标 ≈ 18 s），把 `ee_pose` 重采样间隔同步缩短；位置/姿态误差都画**均值虚线 + 数值文字**；关节角面板换成**臂关节力矩**（时程 + RMS） |
+| 8 | fig09 稀疏点云看不懂；地形高度随时间没意义；应每个地形都测 | fig09 改成 **每个子地形一张稠密高度热力图**（`tricontourf` 插值填充）+ 该 env 的真实轨迹（加粗 + 起终点标记），删掉"地形高度随时间波动"那张 |
+| 9 | fig11 指令组合太少 | `--commands` 扩充后自动生效（fig11 的每格就是按命令档分组的） |
+| 10 | 图里文字用纯英文 | 全部图内文字改英文；字体栈默认 `DejaVu Sans`（中文字体降级为兜底，云端不再需要 `POLICY_REPORT_FONT`） |
+| 11 | 删掉旧的坏图、重测多地形 | 旧报告目录删除并用新工具重跑（平地 + 多地形，见下） |
+| 12 | 太多就一个一个改 | 按上面 1→11 顺序改完并逐项实测 |
+
+**2. 顺带修掉的三个坑**
+
+* **fig08 从来没被生出来**：`find_one(robot, "body", "gripper_base")` 要求唯一匹配，
+  本资产匹配到多个 ⇒ 抛异常被 `except` 吞掉、`ee_cmd=None`、臂图静默消失。改成取第一个匹配
+  并打印实际 body 名（实测 `gripper_base (#24)`）。
+* **地形任务的 `per_env["root_z_mean"]` 存错**：`collect()` 里 `z = hits[:, 2]`（扫描点云局部变量）
+  覆盖了外层的 `z`（root 世界系高度）⇒ 累加进 `_acc("z", z)` 的其实是地形高度。已改名 `z_scan`。
+* **`--from-npz` 只能读一份数据**：npz 键改成 `组名~label|序号|字段`（组名 ∈ cmd/sched/arm/push），
+  老 npz（无 `~`）自动按 `cmd` 组读 ⇒ 老数据仍可重画。
+
+**3. 实测（本机 A4000 / 8~16 envs，num_steps 缩小版）**
+
+* 采集速度：**~3~6 步/秒**（8~16 envs）⇒ 全套默认报告（约 8.6k 步）本地要 ~25 min；
+  云端 3090 + 256 envs 快得多，**长测试一律放云端**，本机只做小规模抽查。
+* 全链路（schedule + 臂 + push 扫描 + npz + 画图）本机 `EXIT=0`；云端多地形报告见
+  `DONE_zh.md` 第八节的数字。
 
 ### DEF-041 `2026-10-02` 4 个老 test 可视化脚本 → 统一成 `policy_report.py`（10 个角度 + A/B）
 

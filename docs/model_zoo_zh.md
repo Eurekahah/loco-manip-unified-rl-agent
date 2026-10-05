@@ -35,17 +35,32 @@ python scripts\reinforcement_learning\rsl_rl\play.py --task=History-Adaptation-D
 python scripts\reinforcement_learning\rsl_rl\play.py --task=History-Adaptation-Deeprobotics-M20-play-v0 --checkpoint=logs/rsl_rl/history_adaptation/2026-09-30_19-36-00_cloud_cap12_20k/model_19999.pt --keyboard --real-time
 ```
 
-**一页式体检报告（10+ 个角度，含 A/B）**
+**一页式体检报告（13 个角度，含 A/B / 抗扰扫描 / 每地形高度图）**
 
 ```bat
-python scripts\reinforcement_learning\rsl_rl\policy_report.py --headless --task History-Adaptation-Deeprobotics-M20-play-v0 --checkpoint logs/rsl_rl/history_adaptation/2026-09-30_19-36-00_cloud_cap12_20k/model_19999.pt --compare logs/rsl_rl/history_adaptation/2026-09-20_00-50-31/model_19999.pt --label cap12_20k --label-b oldcode_20k --commands "0,0,0;0.5,0,0;1.0,0,0" --num_envs 32 --steps 500 --out-dir logs/smoke/report_cap12_vs_old
+python scripts\reinforcement_learning\rsl_rl\policy_report.py --headless --task History-Adaptation-Deeprobotics-M20-play-v0 --checkpoint logs/rsl_rl/history_adaptation/2026-09-30_19-36-00_cloud_cap12_20k/model_19999.pt --compare logs/rsl_rl/history_adaptation/2026-09-20_00-50-31/model_19999.pt --label cap12_20k --label-b oldcode_20k --num_envs 64 --steps 400 --push-sweep "1,1;2,2;3,3" --out-dir logs/smoke/report_cap12_vs_old
 ```
 
-**指令切换 / 变换能力（10.5 s：3 段速度 + 4 段姿态）**
+不用再手写"指令切换"那套：默认就会在**一条 16 s 连续轨迹**里把
+`vx/vy/wz`（13 段）与 `height/pitch/roll`（7 段）依次切换一遍
+（`--seg-s` 改每段秒数、`--schedule none` 关掉）。
 
-```bat
-python scripts\reinforcement_learning\rsl_rl\policy_report.py --headless --task History-Adaptation-Deeprobotics-M20-play-v0 --checkpoint logs/rsl_rl/history_adaptation/2026-09-30_19-36-00_cloud_cap12_20k/model_19999.pt --commands "0,0,0;0.5,0,0;1.0,0,0" --switch 1.5 --num_envs 32 --out-dir logs/smoke/report_switch
-```
+各图看什么（2026-10-05 第四轮改版后）：
+
+| 图 | 内容 |
+|---|---|
+| `fig01` | 切换轨迹上的 vx/vy/wz 指令 vs 实际 + 逐轴误差（灰竖线 = 切换时刻） |
+| `fig02` | 逐段稳态误差柱状（vx/vy/wz 各一格）+ 三张 cmd-vs-actual 散点 |
+| `fig03` | height / pitch / roll **各一行**：左列时程、右列逐段稳态误差 |
+| `fig04` | 每档速度指令一列的四足触地条带 + 占空比（分"滚动"与"迈步"） |
+| `fig05/06/07` | 关节轨迹 / 力矩（含膝盖+轮子时程）/ 对称性（含不对称度、轮距时程） |
+| `fig08` | 臂：EE 位置/姿态误差（均值虚线+数值）、**臂关节力矩** |
+| `fig09` | 每个子地形一张**稠密高度热力图** + 该 env 真实轨迹 |
+| `fig10/11/12` | A/B 对比 / 分地形指标 / 指令切换数字表 |
+| `fig13` | **push 抗扰扫描**：力度×频率分档 ⇒ 生还率 / 尖刺频次 / 恢复时间（`--push-sweep` 才有） |
+
+> 图内文字 2026-10-05 起全部改英文；数据仍全在 `data.npz` / `summary.json`。
+> `--from-npz` 可以"云端采集 + 本机画图"（npz 分了 cmd/sched/arm/push 四组键）。
 
 ---
 
