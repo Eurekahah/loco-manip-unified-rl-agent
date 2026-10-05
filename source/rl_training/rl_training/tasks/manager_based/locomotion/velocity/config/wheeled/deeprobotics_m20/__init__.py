@@ -225,3 +225,14 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationPPORunnerCfg",
     },
 )
+
+# 同上的 PLAY 变体（2026-10-05 补）：`play.py --task=…-play-v0` 用完整难度、关课程。
+gym.register(
+    id="Rough-Slopes-SlowVx-History-Adaptation-Deeprobotics-M20-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:RoughSlopesSlowVxEnvWBCConfig_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationPPORunnerCfg",
+    },
+)

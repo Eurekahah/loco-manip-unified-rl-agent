@@ -1063,3 +1063,17 @@ class RoughSlopesSlowVxEnvWBCConfig(RoughSlopesEnvWBCConfig):
                 mp["num_steps"] = int(mp["num_steps"] * SLOW_VX_FACTOR)
         if self.__class__.__name__ == "RoughSlopesSlowVxEnvWBCConfig":
             self.disable_zero_weight_rewards()
+
+
+@configclass
+class RoughSlopesSlowVxEnvWBCConfig_PLAY(RoughSlopesEnvWBCConfig_PLAY):
+    """PLAY：完整难度（v_x 课程本来就全关，所以与 `RoughSlopesEnvWBCConfig_PLAY` 等价）。
+
+    单独建一个类只是为了 `--task=Rough-Slopes-SlowVx-…-play-v0` 这个名字好用
+    （`play.py` / `policy_report.py` 的 `-play-` 变体习惯）。
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.__class__.__name__ == "RoughSlopesSlowVxEnvWBCConfig_PLAY":
+            self.disable_zero_weight_rewards()
