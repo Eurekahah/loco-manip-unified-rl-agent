@@ -883,6 +883,39 @@ def summarize(ep: EpisodeData, joint_names: list[str], torque_limit: np.ndarray 
     fa, ha = lateral_asymmetry(ep.foot_xy_b) if has_feet else (float("nan"), float("nan"))
     swf, swh = stance_width(ep.foot_xy_b) if has_feet else (float("nan"), float("nan"))
     pw = ep.torque * ep.joint_vel if has_joints else np.zeros(0)
+    # ── 尖刺指标（DEF-043 的分析：段首阶跃 vs push 冲击）────────────────────
+    # 尖刺定义：|err_xy| > max(均值+3σ, 0.35 m/s)；再按"是否落在每段前 0.3 s"分成两类。
+    err_xy = ep.err_xy
+    _sp_thr = max(float(err_xy.mean() + 3 * err_xy.std()), 0.35)
+    _sp = err_xy > _sp_thr
+    _sp_n = int(_sp.sum())
+    spike = {
+        "spike_threshold": _sp_thr,
+        "spike_count": _sp_n,
+        "spike_rate": float(_sp.mean()),
+        "spike_max_err": float(err_xy.max()),
+        "spike_max_speed": float(np.linalg.norm(ep.vel_b, axis=1).max()),
+        "spike_segments": 0,
+        "spike_recovery_s": float("nan"),
+    }
+    # 连续段 + 恢复时间（回到阈值以下所需时间）
+    j = 0
+    recover = []
+    while j < _sp.size:
+        if _sp[j]:
+            k = j
+            while k + 1 < _sp.size and _sp[k + 1]:
+                k += 1
+            spike["spike_segments"] += 1
+            m = k + 1
+            while m < _sp.size and err_xy[m] > _sp_thr * 0.5:
+                m += 1
+            recover.append((m - j) * float(ep.t[1] - ep.t[0]) if ep.t.size > 1 else float("nan"))
+            j = k + 1
+        else:
+            j += 1
+    if recover:
+        spike["spike_recovery_s"] = float(np.mean(recover))
     out = {
         "label": ep.label,
         "command": list(ep.command),
@@ -922,6 +955,7 @@ def summarize(ep: EpisodeData, joint_names: list[str], torque_limit: np.ndarray 
         "lateral_asymmetry_cm": [fa * 100.0, ha * 100.0],
         "stance_width": [swf, swh],
         "path_length_m": float(np.linalg.norm(np.diff(ep.root_xy, axis=0), axis=1).sum()),
+        **spike,
     }
     if torque_limit is not None and has_joints:
         out["torque_limit_usage"] = [

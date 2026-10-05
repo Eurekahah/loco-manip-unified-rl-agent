@@ -108,6 +108,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # remove random pushing
     env_cfg.events.randomize_apply_external_force_torque = None
     env_cfg.events.push_robot = None
+    # ⚠️ 本仓库把推挤事件**改名**成了 `randomize_push_robot`（DEF-028 加强扰动那批），
+    #    上面两行是 IsaacLab 官方的旧名字 ⇒ 光靠它们**关不掉我们的推挤**。
+    #    play 的意图是"干净地看策略"，所以这里也把新名字一起关掉；
+    #    要看抗扰能力请显式打开（policy_report.py 默认保留 push，等价于"抗扰模式"）。
+    if hasattr(env_cfg.events, "randomize_push_robot"):
+        env_cfg.events.randomize_push_robot = None
     if env_cfg.curriculum is not None:
         env_cfg.curriculum.command_levels = None
 

@@ -105,6 +105,43 @@
 
 # 记录（新→旧）
 
+### DEF-047 `2026-10-05` `play.py` 漏关本仓库的 push 事件 + 报告新增"尖刺指标"（跟踪 vs 抗扰两套口径）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 缺陷修复 + 指标补充（用户指出） |
+| 关联 | `scripts/reinforcement_learning/rsl_rl/play.py`、`policy_report.py`；DEF-028（扰动加强）、DEF-043（尖刺分析） |
+
+**1. 现象/根因**：`play.py` 里"关随机扰动"只写了官方旧名字
+
+```python
+env_cfg.events.randomize_apply_external_force_torque = None
+env_cfg.events.push_robot = None            # ← 官方旧名
+```
+
+而本仓库在 DEF-028 把这套推挤事件**改名**成了 **`randomize_push_robot`**（±2/±1 m/s、yaw ±0.52、5~10 s 一次），
+所以 **play / 报告里推挤一直在生效**。这也解释了 DEF-043 里"尖刺"的 B 类：中后段 `|v|` 突然 1.3~1.8 m/s、
+`root_z` 掉 0.1~0.2、俯仰 ±18°，频率正好是每 10 s 一两次。
+
+**修法**：`play.py` 补 `env_cfg.events.randomize_push_robot = None`（用 `hasattr` 保护，其它机型/未来改名都不会炸）。
+**行为变化**：`play.py` 现在是"干净的策略演示"（无推挤）；要看抗扰请用下面第二种口径。
+
+**2. 新增两套测试口径（用户建议）**
+
+| 口径 | 怎么跑 | 看什么 |
+|---|---|---|
+| **跟踪性能**（干净） | `policy_report.py --no-push`（或 `play.py`，现已默认关推挤） | `err_vel_xy/err_yaw`、高度/俯仰跟踪、镜像对称、步态图 |
+| **抗扰能力** | `policy_report.py`（**默认保留 push**） | `终止次数`（bad_orientation_2 / root_height）、**尖刺指标**：`spike_count / spike_rate / spike_max_err / spike_max_speed / spike_segments / spike_recovery_s` |
+
+`summarize()` 现在会把上表 6 个尖刺量写进 `summary.json` / `report.md` 的来源数据（阈值 =
+`max(mean+3σ, 0.35 m/s)`，并把"回到半阈值"的时间作为恢复时间）。
+
+**3. 另外两条口径提醒**（写进 `docs/model_zoo_zh.md`）
+
+* 多地形任务**关掉了 `root_height_below_minimum`**（反斜坡有低于 0 m 的部分）⇒ 地形上的"摔倒"只看 `bad_orientation_2`。
+* `policy_report.py` 在多地形上默认把 env 铺在**全难度谱（0~9 行）**上 ⇒ 报出来的摔倒率是"整条难度谱的平均"，
+  要单看某一档难度得先固定 terrain level（下一步可做）。
+
 ### DEF-046 `2026-10-05` 两处澄清（用户质疑后复核）：v_x 课程范围 & "本机跑不了多地形"说过头了
 
 | 项 | 内容 |
