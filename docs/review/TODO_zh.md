@@ -31,6 +31,7 @@
 | 2026-10-02 | **两条新长跑已上云**：① `cloud_slowvx20k`（多地形 + v_x 课程台阶 ×2，验证地形等级能否不回退）② `abl_legacyall_10k`（第四根消融轴，**已跑完并拉回**，见上）；新增任务 `Rough-Slopes-SlowVx-History-Adaptation-Deeprobotics-M20-v0` / `History-Ablation-LegacyAll-Deeprobotics-M20-v0` | `codex/ll-train-detail-fix` |
 | 2026-10-02 | **可视化脚本收敛（DEF-041）**：`gait_test`/`torque_test`/`tracking_test`/`test` 4 个老脚本 → 统一 `policy_report.py`（10 个角度 + `--compare` A/B + `report.md`/`summary.json`/`data.npz`）；出平地（cap12 vs 旧代码）与多地形 20k 两份实测报告；旧脚本加"已被取代"说明（保留待删） | `codex/ll-train-detail-fix` |
 | 2026-10-03/04 | **可视化工具二三轮 + 云端跑通（DEF-042/043/044）**：分地形统计（fig11）、指令切换/变换能力（fig12）、root_z 图改散点、时长 10 s、`--from-npz`、`POLICY_REPORT_FONT`；修 3 个崩溃 bug；**云端跑通平地 A/B@10 s** 与**多地形分地形（256 envs）**；顺带结案"SlowVx 治住地形等级回落" | `codex/ll-train-detail-fix` |
+| 2026-10-05 | **DEF-048**：`policy_report.py` 第四轮（schedule 驱动的多指令组合 / `--push-sweep` 抗扰扫描 / 每地形稠密高度图 / 图内英文 / npz 分组）+ **修掉"扰动课程一直是空操作"的实质 bug**（`EventManager.active_terms` 是 dict）；删掉 4 个已被取代的老可视化脚本；旧报告目录清空后用新工具重跑平地 A/B + 多地形 | `codex/ll-train-detail-fix` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -244,9 +245,10 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
     建议改成"本地权重优先，缺失再联网"。
 
 - [ ] **工程性清理**（原 `known_issues.md` 二、1-8）
-  - [ ] 删掉已被 `policy_report.py` 取代的 4 个老脚本（`gait_test.py` / `torque_test.py` /
-    `tracking_test.py` / `test.py`）—— 2026-10-02 已给它们加"已被取代"说明（DEF-041），
-    保留只为对照旧口径；确认不再需要后一条 `git rm` 即可（历史里可查回）。
+  - [x] 删掉已被 `policy_report.py` 取代的 4 个老脚本（`gait_test.py` / `torque_test.py` /
+    `tracking_test.py` / `test.py`）→ **2026-10-05 已 `git rm`**（DEF-048）：新报告已经覆盖
+    它们全部角度（且第 4 轮把"只测一档命令/PCD 稀疏/无臂力矩"等问题都修了），旧命令行语义
+    也不再需要对照；历史里可查回。
   - [x] `mdp/__init__.py` 星号导入造成同名遮蔽 → **2026-09-30 核实并收口（DEF-037）**：
     逐名前查（ast 集合交集）后，`randomize_rigid_body_inertia` / `randomize_com_positions`
     **不是**遮蔽（官方没有这两个名字，是本仓库新增）；7 个奖励函数 + highlevel 的

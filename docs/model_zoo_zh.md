@@ -62,6 +62,19 @@ python scripts\reinforcement_learning\rsl_rl\policy_report.py --headless --task 
 > 图内文字 2026-10-05 起全部改英文；数据仍全在 `data.npz` / `summary.json`。
 > `--from-npz` 可以"云端采集 + 本机画图"（npz 分了 cmd/sched/arm/push 四组键）。
 
+**抗扰能力（push 扫描，2026-10-05 云端实测；`logs/smoke/report_flatAB_new/`）**
+
+`--push-sweep "力度倍数,频率倍数"`：1x1 = 训练口径（间隔 5~10 s、±2/±1/yaw±0.52），
+>1 是**训练分布之外**的外推。64 envs × 16 s/档。
+
+| 档位 | cap12_20k 终止 / env / 分钟 | cap12 最大瞬时误差 | oldcode_20k 终止 / env / 分钟 | oldcode 最大瞬时误差 |
+|---|---|---|---|---|
+| 1x1（训练口径） | **0.06**（恢复 0.31 s） | **1.83 m/s** | 0.12（恢复 0.54 s） | 1.84 m/s |
+| 2x2 | **0.41** | 3.93 | 2.11 | 3.80 |
+| 3x3（外推） | **3.23** | **4.98** | 7.10 | 6.40 |
+
+⇒ `cap12_20k` 在外推区间里摔倒率只有旧代码的 **45%**、恢复时间 57% ⇒ 抗扰训练有效。
+
 ---
 
 ## 二、多地形策略（`Rough-Slopes-*`）
@@ -123,9 +136,13 @@ python scripts\reinforcement_learning\rsl_rl\policy_report.py --headless --task 
 | `flat` 平地（25） | 0.0966 / 0.1139 / 0.1902 | 0.0130 | 42.5 | 0.03 | 0.291 |
 
 ⇒ **粗糙地形并不比平地差**；短板是**下坡的速度跟踪**（1.0 m/s 档 0.2326）与**上坡的稳定性**
-（每 env 0.10 次终止）。原始表格/图见 `logs/smoke/report_terrain256/`（`fig11_per_terrain.png` 等 10 张）。
+（每 env 0.10 次终止）。
 
-**SlowVx 的同口径数字（256 envs / 10 s/档，`logs/smoke/report_slowvx/`）**
+> ⚠️ 这两张表来自**旧版报告（已随 2026-10-05 第四轮一起清掉）**——口径是"3 档纯 vx 命令"。
+> 新工具（第四轮）已把这些重跑成 9 档（含 vy/wz）+ push 扫描，产物在
+> `logs/smoke/report_terrain_new/`（数字见 `DONE_zh.md` 第十七节）。
+
+**SlowVx 的同口径数字（256 envs / 10 s/档；旧版报告，同上）**
 
 逐档：`(0,0,0)` err_xy **0.1016**、`(0.5)` **0.1438**、`(1.0)` **0.1760**；`bad_orientation_2` 各 9 / 9 / 10 次。
 

@@ -206,42 +206,65 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   * 文档是 CRLF（core.autocrlf=true）：用 apply_patch 改多行上下文时容易匹配失败，
     建议一条一条改、或先确认目标行的行尾。
 
-【2026-10-04 收尾：最新状态 + 下一步计划（照这个往下做）】
+【2026-10-05 收尾：最新状态 + 下一步计划（照这个往下做）】
 
-* 最新提交：`3ce92f1`（DEF-043/044）。**所有 6 条云端长跑都已跑完并拉回本机**：
+* 最新提交：**`17a2fe3`（DEF-048）**。**7 条云端长跑都已跑完并拉回本机**：
   `cloud_soft20k`(20k) / `cloud_cap12_20k`(20k) / `cloud_roughslopes20k`(20k) /
   `cloud_slowvx20k`(20k) / `abl_pushonly_10k` / `abl_rewardonly_10k` / `abl_legacyall_10k`(10k)。
-  云端只剩实例 `bbc64d91a6-99f1820e`（ssh 1237）**运行中且空闲**，其它实例在控制台里都是「已关机」。
+  云端只剩实例 `bbc64d91a6-99f1820e`（**ssh -p 1237 root@10.60.144.11**，密码问用户/看旧记录）
+  **运行中**，其它实例在控制台里都是「已关机」。
+* **本 session（DEF-048）做了什么**：
+  ① `policy_report.py` 第四轮（用户 2026-10-05 的 12 条）：schedule 驱动的一条 16 s 连续轨迹
+     （vx/vy/wz 13 段 + height/pitch/roll 7 段）喂 fig01/02/03/05/06/07；fig04 改成"每档速度指令一列"；
+     fig08 臂测试拉长到 3 s×(目标数+1) + 多目标 + **臂关节力矩**（替掉没意义的关节角）；fig09 改成
+     **每个子地形一张稠密高度热力图**（`tricontourf`）+ 裁剪后的轨迹；新增 **fig13 push 抗扰扫描**
+     （`--push-sweep "力度,频率;…"` ⇒ 生还率 / 尖刺频次 / 恢复时间，1x1 是训练口径）；**图内文字全英文**；
+     npz 分 `cmd/sched/arm/push` 四组键（`--from-npz` 兼容老 npz）。
+  ② **挖出并修掉一个实质 bug**：`apply_event_scale` 用 `EventManager.active_terms` 判"事件是否存在"，
+     而它是 `{模式: [名]}` 的 **dict** ⇒ `in` 永远 False ⇒ **扰动课程从上线起一直是空操作**
+     （push 从第 0 步就是全量 ±2/±1/yaw±0.52）。已新增 `_active_event_term_names()` 摊平
+     （`curriculums.py` + `probe_ee_curriculum.py`）。**已跑完的 run 都不吃这个修复**，
+     做对照时要记住它们是"全量扰动从第 0 步起"。
+  ③ `git rm` 掉 4 个老 test 脚本；旧报告目录全部清空（`report_terrain256/` 等已被新报告取代）。
+  ④ 云端用新工具重跑了**平地 A/B（cap12 vs 旧代码）+ push 扫描**和**多地形（SlowVx，256 envs，
+     `--terrain-grid keep`）+ push 扫描**，产物路径与数字见 `DONE_zh.md` 第十七节。
 * **已定稿的结论（不要再重跑验证）**：
   ① `max_noise_std` 默认 **1.2**（DEF-039）；
   ② "右后腿撇"的根因是 **⑫**（`HeightInvariantEECommand.reset()`），不是镜像符号（DEF-040 §3④）；
   ③ 静止漂移/步态/抗扰：`cap12_20k` 全面最好；固定命令 eval 三档 0.1014/0.1301/0.1594、摔倒率≈0；
   ④ **SlowVx（v_x 课程台阶 ×2 + cap1.2）治住了地形等级回落**：末 1000 `terrain_levels`
      3.706（斜率 −0.09/1k）→ **4.74（+0.095/1k，还在涨）**、`bad_orientation_2` −51%、回报 +33%（DEF-044）；
-  ⑤ 多地形分地形（256 envs）：粗糙 0.0717 ＜ 平地 0.0966；**下坡跟踪最差（1.0 档 0.2326）、上坡最易摔（0.10 次/env）**。
+  ⑤ 多地形分地形：粗糙 0.0717 ＜ 平地 0.0966；**下坡跟踪最差、上坡最易摔**。
+     ⚠️ 但 3/5 m/s 的高档命令结果是**被复位污染**的（`err_vel_xy` ≈ 命令值本身 = 实际速度≈0，
+     因为一摔就复位）——引用±5 数字时必须带这个说明，或者只看 `terrain_levels` 曲线。
 * **下一步（按优先级）**：
-  1. **立刻可做、不需要训练**（都在本机或云端空闲实例上跑 `policy_report.py`）：
-     a. 把"尖刺"正式指标化：`spike_count / max_err / recovery_time`（现在只有图，见 DEF-043 §"尖刺分析"：
-        段首 0~0.3 s 的 `|v|` 很小 ⇒ 阶跃瞬态；中后段 `|v|` 1.3~1.8 m/s + `root_z` 掉 ⇒ push 冲击）；
-     b. `report.md` 的分地形表**按命令档拆开**（现在 `err_yaw/高度std/触地占比` 是对全部命令求的平均，三档同值）；
-     c. 删掉已被 `policy_report.py` 取代的 4 个老脚本（`gait_test/torque_test/tracking_test/test`，TODO P2 已记）。
-  2. **坡面短板专项（要训练，2~10k iter 即可）**：针对"下坡速度跟踪 + 上坡摔"，两个候选：
-     a. 用"只放坡面"的地形变体（照 `ROUGH_SLOPES_FLAT_TERRAINS_CFG` 把比例改成上下坡各 0.5）跑 10k，
-        看是不是偏航/坡面跟踪奖励不够；
+  1. **【最高优先】用修好的扰动课程重跑一条 20k**（`Rough-Slopes-SlowVx-*` 或平地主线），
+     验证"前 50k 步 0.2×→1.0× 的 push 爬升"是否真的降低了早期 `root_height_below_minimum`、
+     并看最终抗扰是否更强。判据：训练期 `Episode_Termination/root_height_below_minimum` 的
+     前 2000 iter 均值 vs `cloud_slowvx20k`（后者没有爬升）。
+  2. **坡面短板专项（要训练，2~10k iter 即可）**：针对"下坡速度跟踪 + 上坡摔"——
+     a. 用"只放坡面"的地形变体（照 `ROUGH_SLOPES_FLAT_TERRAINS_CFG` 把比例改成上下坡各 0.5）跑 10k；
      b. 或把 `track_ang_vel_z_exp` / `track_lin_vel_xy_exp` 在坡面段的权重或 std 单独调（先用 a 定位）。
-  3. **把 SlowVx 配方落成默认**（等 2 有结论后一起做）：把 SlowVx 的四个 v_x 台阶（150k/200k/250k/300k）
-     写进 `RoughSlopesEnvWBCConfig.__post_init__` 默认值，并保留 `-play-` 变体。
-  4. **仍未定论的老账**（都在 TODO）：s3 臂摆动鲁棒性、执行器刚度课程、低层 known_issues ⑭⑮、
+  3. **把 SlowVx 配方落成默认**：四个 v_x 台阶（150k/200k/250k/300k 环境步）写进
+     `RoughSlopesEnvWBCConfig.__post_init__` 默认值，保留 `-play-` 变体。
+  4. **抗扰扫描的进一步用法**（工具已就绪，不需要改代码）：给候选 checkpoint 跑
+     `--push-sweep "1,1;2,2;3,3;4,4"`，比"生还率不掉、尖刺恢复时间不变长"的那个；
+     想更极端可以把频率单独拉高（如 `"1,4"`）看高频轻推下的表现。
+  5. **仍未定论的老账**（都在 TODO）：s3 臂摆动鲁棒性、执行器刚度课程、低层 known_issues ⑭⑮、
      `mdp/__init__.py` 星号导入遮蔽（影响面小）。
-* **环境提醒（这两周反复踩）**：
+* **环境提醒（反复踩）**：
   * 本机（Windows + A4000）**看/测多地形没问题**（`play.py` 会把地形自动压成 5×5 + 关课程，
     见 `play.py:101-104`；`policy_report.py` 用 `--terrain-grid auto/5x5` 同理）。**会卡死的只有一种组合**：
-    训练任务 + 训练级网格（10×20）+ 环境数 ≥48（env 创建阶段挂住，2026-10-03/04 各复现一次）
-    ⇒ 只有"多环境地形训练 / 256 envs 大样本分地形统计"才必须上云（DEF-046 更正了原先过宽的说法）。
-  * **v_x 命令范围**：训练时四个台阶 ±2→±3→±4→±5，在 75k/100k/125k/150k 环境步（≈3125/4167/5208/6250 iter）
-    生效；SlowVx 把这套时间表 ×2（终值仍 ±5）；**`-play-v0` 固定 (-1,1)**（DEF-046）。
-  * 云端画中文需要 `POLICY_REPORT_FONT=/root/fonts/simhei.ttf`（本机字体已传上去）；
-    或者只拉 `data.npz`+`meta.json` 回来用 `--from-npz` 本机画图。
+    训练任务 + 训练级网格（10×20）+ 环境数 ≥48（env 创建阶段挂住）⇒ 只有"多环境地形训练 /
+    256 envs 大样本分地形统计"才必须上云（DEF-046 更正了原先过宽的说法）。
+  * **本机采集速度只有 ~3~6 步/秒**（8~16 envs）⇒ 全套默认报告（≈8.6k 步）本地要 ~25 min；
+    长测试一律放云端 3090（本机只做小规模抽查，`--steps 20 --warmup 10 --schedule none` 这种）。
+  * 云端脚本要加 `python -u`（或 `PYTHONUNBUFFERED=1`），否则 `[report]` 的进度行会被块缓冲、
+    看起来像"卡住"（本次踩过）。
+  * **v_x 命令范围**：训练四个台阶 ±2→±3→±4→±5（75k/100k/125k/150k 环境步 ≈3125/4167/5208/6250 iter）；
+    SlowVx 时间表 ×2（终值仍 ±5）；**`-play-v0` 固定 (-1,1)**（DEF-046）。
+  * 图已全英文 ⇒ **云端不再需要 `POLICY_REPORT_FONT`**；要"云端采集 + 本机画图"仍可只拉
+    `data.npz`+`meta.json` 用 `--from-npz`。
   * 云端 SSH 偶发 `banner exchange` 超时（实例被大环境数地形生成压住）——**不是关机**，
     控制台 `private.autodl.com/console/instance` 看状态是「运行中」就等几分钟重连。
 ```

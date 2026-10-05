@@ -1237,14 +1237,6 @@ def _save(fig, out_dir: str, name: str, dpi: int) -> str:
     return path
 
 
-def _iter_pairs(series: dict[str, list[EpisodeData]]):
-    """按命令档逐个 index 对齐多个 label。"""
-    labels = list(series.keys())
-    n = min(len(v) for v in series.values())
-    for i in range(n):
-        yield labels, {lab: series[lab][i] for lab in labels}
-
-
 def fig01_tracking(series, out_dir, dpi, meta):
     """一条**连续切换**轨迹上的速度 / 角速度跟踪（command vs actual + 逐轴误差）。
 
