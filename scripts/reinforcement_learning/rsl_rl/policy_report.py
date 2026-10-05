@@ -1202,9 +1202,18 @@ def _dense_heightmap(ax, pts: np.ndarray, traj: np.ndarray | None, name: str, cm
     if traj is not None and np.size(traj):
         tr = np.asarray(traj, dtype=float).reshape(-1, 2)
         if tr.shape[0] > 1:
-            ax.plot(tr[:, 0] - x0, tr[:, 1] - y0, color="k", lw=2.2, solid_capstyle="round")
-            ax.plot(tr[:1, 0] - x0, tr[:1, 1] - y0, "wo", ms=6, mec="k", mew=1.2)
-            ax.plot(tr[-1:, 0] - x0, tr[-1:, 1] - y0, "k^", ms=7)
+            # 轨迹可能比扫描格长得多（8 s × 1.5 m/s = 12 m vs 1.6 m 的格子）⇒ 裁到
+            # 扫描范围附近再画，否则 `aspect="equal"` 会把热力图压成一个点。
+            padx = 0.15 * max(float(x.max() - x.min()), 1e-3)
+            pady = 0.15 * max(float(y.max() - y.min()), 1e-3)
+            tx, ty = tr[:, 0] - x0, tr[:, 1] - y0
+            inside = ((tx >= x.min() - padx) & (tx <= x.max() + padx)
+                      & (ty >= y.min() - pady) & (ty <= y.max() + pady))
+            ax.plot(np.where(inside, tx, np.nan), np.where(inside, ty, np.nan),
+                    color="k", lw=2.2, solid_capstyle="round")
+            ax.plot(tr[:1, 0] - x0, tr[:1, 1] - y0, "wo", ms=6, mec="k", mew=1.2,
+                    label="start")
+            ax.plot(tr[-1:, 0] - x0, tr[-1:, 1] - y0, "k^", ms=7, label="end")
     ax.set_title(f"terrain: {name}", fontsize=9)
     ax.set_xlabel("x - x0 (m)", fontsize=8)
     ax.set_ylabel("y - y0 (m)", fontsize=8)
@@ -1696,7 +1705,13 @@ def fig09_terrain(series, out_dir, dpi, meta):
         labels = [lab for lab in series if series[lab][0].terrain_pts_w is not None]
         if not labels:
             return None
-    ep0 = series[labels[0]][0]
+    # 取"走得最远"的那一档命令 ⇒ 轨迹信息量最大（静止档的轨迹就是一个点）
+    def _path_len(e) -> float:
+        if e.terrain_maps is None or np.size(e.root_xy) == 0:
+            return -1.0
+        return float(np.linalg.norm(np.diff(np.asarray(e.root_xy, dtype=float), axis=0), axis=1).sum())
+
+    ep0 = max(series[labels[0]], key=_path_len)
     maps = dict(ep0.terrain_maps or {})
     trajs = dict(ep0.terrain_traj or {})
     if not maps and ep0.terrain_pts_w is not None:
