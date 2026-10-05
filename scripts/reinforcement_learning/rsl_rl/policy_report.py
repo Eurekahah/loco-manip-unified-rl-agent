@@ -1792,42 +1792,52 @@ def terrs_sorted(table: dict) -> list:
     """地形名的稳定排序（按"样本量"降序，方便一眼看出哪类地形测得最多）。"""
     def n_env(t):
         for lab in table[t].values():
-            if "n_env" in lab:
-                return -int(np.mean(lab["n_env"]))
+            for d in lab.values():
+                if "n_env" in d:
+                    return -int(d["n_env"])
         return 0
 
     return sorted(table.keys(), key=n_env)
 
 
 def per_terrain_table(series: dict) -> dict:
-    """把逐 env 指标按"落在哪种地形上"分组求均值 → ``{地形名: {指标: 值}}``。"""
+    """把逐 env 指标按"地形 × 命令档"分组求均值。
+
+    结构：``{地形名: {label: {cmd_key: {指标: 值}}}}`` —— **每个命令档一份**，
+    否则 `err_yaw / height_std / 触地占比` 会退化成"对全部命令的平均"（三档同值，
+    看不出命令依赖；fig11 的三个面板也会变成同一份数据）。
+    """
     out: dict = {}
     for lab, eps in series.items():
         for ep in eps:
             if ep.per_env is None or ep.env_terrain is None:
                 continue
             names = np.array(ep.env_terrain)
+            c = tuple(round(float(x), 2) for x in ep.command)
+            cmd_key = f"cmd{c}"
             for tname in sorted(set(names.tolist())):
                 sel = names == tname
                 if not sel.any():
                     continue
-                d = out.setdefault(tname, {}).setdefault(lab, {})
+                d = out.setdefault(tname, {}).setdefault(lab, {}).setdefault(cmd_key, {})
                 for key in ("err_xy", "err_yaw", "height_std", "tau_rms_max", "done"):
                     v = np.asarray(ep.per_env[key], dtype=float)[sel]
-                    d.setdefault(key, []).append(float(np.mean(v)))
-                d.setdefault("duty_min", []).append(float(np.asarray(ep.per_env["duty"])[sel].min()))
-                d.setdefault("n_env", []).append(int(sel.sum()))
-                cmd_key = f"cmd{tuple(round(c, 2) for c in ep.command)}"
-                d.setdefault(cmd_key, []).append(float(np.mean(np.asarray(ep.per_env["err_xy"])[sel])))
+                    d[key] = float(np.mean(v))
+                d["duty_min"] = float(np.asarray(ep.per_env["duty"])[sel].min())
+                d["n_env"] = int(sel.sum())
     return out
 
 
 def fig11_per_terrain(series, out_dir, dpi, meta):
-    """分地形对比：不同子地形上的误差 / 抖动 / 力矩 / 摔倒 / 占空比。"""
+    """分地形对比：**每个地形 × 每个命令档**的误差 / 抖动 / 摔倒 / 占空比。
+
+    注意（2026-10-05 修）：旧版三个上方面板查的是**同一个键** ⇒ 三张图其实是同一份
+    `err_xy` 数据；非 `err_xy` 的指标还退化成了"对全部命令求平均"。现在按 (地形, 命令) 取值。
+    """
     table = per_terrain_table(series)
     if not table:
         return None
-    terrs = list(table.keys())
+    terrs = terrs_sorted(table)
     labels = list(series.keys())
     cmds = sorted({k for t in table.values() for lab in t.values() for k in lab if k.startswith("cmd")})
     fig, axes = plt.subplots(2, 3, figsize=(15, 7.5), squeeze=False)
@@ -1835,34 +1845,27 @@ def fig11_per_terrain(series, out_dir, dpi, meta):
                ("height_std", "base height jitter std (m)")]
     x = np.arange(len(terrs))
     w = 0.8 / max(len(cmds), 1)
-    for ax, (key, title) in zip(axes[0], metrics):
+    def _val(t: str, ck: str, key: str) -> float:
+        return float(table[t].get(labels[0], {}).get(ck, {}).get(key, np.nan))
+
+    panels = [
+        (axes[0][0], "err_xy", metrics[0][1]),
+        (axes[0][1], "err_yaw", metrics[1][1]),
+        (axes[0][2], "height_std", metrics[2][1]),
+        (axes[1][0], "done", "terminations per env"),
+        (axes[1][1], "duty_min", "worst-leg duty factor"),
+    ]
+    for ax, key, title in panels:
         for j, ck in enumerate(cmds):
-            vals = [np.mean(table[t].get(labels[0], {}).get(ck, [np.nan]))
-                    for t in terrs]
-            ax.bar(x + j * w, vals, w, label=ck.replace("cmd", "cmd="))
+            ax.bar(x + j * w, [_val(t, ck, key) for t in terrs], w,
+                   label=ck.replace("cmd", "cmd="))
         ax.set_xticks(x + w * (len(cmds) - 1) / 2)
         ax.set_xticklabels(terrs, fontsize=8, rotation=15)
-        ax.set_title(f"{title} -- by terrain")
+        ax.set_title(f"{title} -- by terrain x command")
         ax.grid(alpha=0.3, axis="y")
-        ax.legend(fontsize=7)
-    for j, ck in enumerate(cmds):
-        vals = [np.mean(table[t].get(labels[0], {}).get("done", [np.nan]))
-                for t in terrs]
-        axes[1][0].bar(x + j * w, vals, w, label=ck.replace("cmd", "cmd="))
-    axes[1][0].set_xticks(x + w * (len(cmds) - 1) / 2)
-    axes[1][0].set_xticklabels(terrs, fontsize=8, rotation=15)
-    axes[1][0].set_title("terminations per env (by terrain)")
-    axes[1][0].grid(alpha=0.3, axis="y")
-    for j, ck in enumerate(cmds):
-        vals = [np.mean(table[t].get(labels[0], {}).get("duty_min", [np.nan]))
-                for t in terrs]
-        axes[1][1].bar(x + j * w, vals, w, label=ck.replace("cmd", "cmd="))
-    axes[1][1].set_xticks(x + w * (len(cmds) - 1) / 2)
-    axes[1][1].set_xticklabels(terrs, fontsize=8, rotation=15)
-    axes[1][1].set_title("worst-leg duty factor (by terrain)")
+        ax.legend(fontsize=6, ncol=2)
     axes[1][1].set_ylim(0, 1.05)
-    axes[1][1].grid(alpha=0.3, axis="y")
-    n_env = [int(np.mean(table[t].get(labels[0], {}).get("n_env", [0]))) for t in terrs]
+    n_env = [int(table[t][labels[0]][cmds[0]].get("n_env", 0)) for t in terrs]
     axes[1][2].bar(x, n_env, 0.6)
     axes[1][2].set_xticks(x)
     axes[1][2].set_xticklabels(terrs, fontsize=8, rotation=15)
@@ -2204,13 +2207,13 @@ def write_report(out_dir: str, groups: dict, meta: dict, figures: list[str]) -> 
                   "|---|---|---|---|---|---|---|---|---|"]
         for tname in terrs_sorted(terr):
             for lab in terr[tname]:
-                d = terr[tname][lab]
-                for ck in sorted(k for k in d if k.startswith("cmd")):
+                for ck in sorted(terr[tname][lab]):
+                    d = terr[tname][lab][ck]
                     lines.append(
-                        f"| {tname} | {ck.replace('cmd', '')} | {d[ck][0]:.4f} "
-                        f"| {np.mean(d['err_yaw']):.4f} | {np.mean(d['height_std']):.4f} "
-                        f"| {np.mean(d['tau_rms_max']):.1f} | {np.mean(d['done']):.2f} "
-                        f"| {np.mean(d['duty_min']):.3f} | {int(np.mean(d['n_env']))} |"
+                        f"| {tname} | {ck.replace('cmd', '')} | {d['err_xy']:.4f} "
+                        f"| {d['err_yaw']:.4f} | {d['height_std']:.4f} "
+                        f"| {d['tau_rms_max']:.1f} | {d['done']:.2f} "
+                        f"| {d['duty_min']:.3f} | {d['n_env']} |"
                     )
         sec_no += 1
 

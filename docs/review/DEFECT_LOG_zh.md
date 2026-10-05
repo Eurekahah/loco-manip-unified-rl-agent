@@ -85,6 +85,15 @@
   覆盖了外层的 `z`（root 世界系高度）⇒ 累加进 `_acc("z", z)` 的其实是地形高度。已改名 `z_scan`。
 * **`--from-npz` 只能读一份数据**：npz 键改成 `组名~label|序号|字段`（组名 ∈ cmd/sched/arm/push），
   老 npz（无 `~`）自动按 `cmd` 组读 ⇒ 老数据仍可重画。
+* **fig11 的三个上方面板画的是同一份数据**：`per_terrain_table` 只把 `err_xy` 按命令档存，
+  另外三个指标（`err_yaw`/`height_std`/`duty_min`）是对**全部命令档**求平均 ⇒ fig11 的
+  "yaw rate error"、"height jitter" 两个面板其实在画 `err_xy`，`report.md` 的分地形表也
+  出现"同一地形下不同命令三行数值完全相同"。改成 `{地形: {label: {命令档: {指标}}}}`
+  的嵌套结构（`fig11` 与 `report.md` §4 同步改）；
+**4. 说明修正**：本文件下面 DEF-041/042/043/044 里提到的
+  `logs/smoke/report_flatAB_cloud/` / `report_terrain256/` / `report_slowvx/` / `report_slowvx_fast/`
+  **已在 2026-10-05 第四轮里删掉**（旧口径的图），替代品是 `logs/smoke/report_flatAB_new/`
+  与 `report_terrain_new/`；表里的数字仍在 `DONE_zh.md` 与 `docs/model_zoo_zh.md`。
 
 **3. 实测（本机 A4000 / 8~16 envs，num_steps 缩小版）**
 
