@@ -208,7 +208,8 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
 
 【2026-10-06 收尾：最新状态 + **未处理清单**（照这个往下做）】
 
-* 最新提交：**`c50bd86`（DEF-049）**，分支 `codex/ll-train-detail-fix`。
+* 最新提交：**`7a52b9c`**（`c50bd86` = DEF-049 的功能修复；`da1c228`/`7a52b9c` 是
+  臂表口径修正 + 文档），分支 `codex/ll-train-detail-fix`。
   **7 条云端长跑都已跑完并拉回本机**：`cloud_soft20k`(20k) / `cloud_cap12_20k`(20k) /
   `cloud_roughslopes20k`(20k) / `cloud_slowvx20k`(20k) / `abl_pushonly_10k` /
   `abl_rewardonly_10k` / `abl_legacyall_10k`(10k)。
@@ -225,7 +226,7 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   与实际俯仰差一个负号（实测 corr = **−0.843**）；已统一改成
   `math_utils.euler_xyz_from_quat(root_quat_w)`（与 `body_pitch/roll_tracking` 奖励同口径）。
   重采后 corr = **+0.843**、pitch 稳态误差 cap12 **1.68°** vs 旧代码 5.54°。
-  **注意**：老 npz 里存的还是旧符号，只能重plot不出来，要用就重新采集。
+  **注意**：老 npz 里存的还是旧符号，**光重画救不回来**（要用就得重新采集）。
 * [x] **A2 fig03 右列"空一截"**（同日已修）：前 13 段是纯速度段（没有姿态指令），
   旧 `seg_metrics` 只在"该段有姿态指令"时才算误差 ⇒ NaN。现在一律对着**该段真正生效的
   `body_cmd`** 算（速度段 = 重置时采样的站姿），20 段都有数据。
@@ -315,7 +316,7 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
 ━━━ E. 云端仓库当前状态（2026-10-06 收尾时）━━━
 
 * 实例 `bbc64d91a6-99f1820e`（1237）里仓库在 `c50bd86`；**`git pull` 当时连不上 GitHub
-  （`GnuTLS recv error (-110)` / `port 443 timeout`）**，所以 `da1c228` 的
+  （`GnuTLS recv error (-110)` / `port 443 timeout`）**，所以 `da1c228` 之后的
   `policy_report.py` 是**直接 scp 覆盖**过去的（md5 `efff749ad841bb2047ed4f1b3ae16432`，
   与本机一致），但 git 状态显示为 `M`（未提交）。⇒ **下次开机先 `git pull` 重试**
   （通了就 `git checkout -- scripts/.../policy_report.py` 再 pull，或 `git stash` 掉这一份），
