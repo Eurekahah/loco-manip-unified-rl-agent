@@ -155,6 +155,17 @@ DEFAULT_ARM_TARGETS = 5
 #: 力度倍数 > 1 就是**外推**（训练分布之外），用来看泛化边界（用户需求 1）。
 DEFAULT_PUSH_GRID = ((1.0, 1.0), (2.0, 2.0), (3.0, 3.0))
 
+#: 臂关节限位的名字匹配（与 `arm_joint_stats` 一致）
+ARM_JOINT_PREFIXES = ("arm_joint", "gripper_joint")
+
+#: 臂负载的**全 env 汇总**字段（`EpisodeData.arm_pop`，长度都等于臂关节数）：
+#: tau_mean/tau_max = |tau| 的均值/峰值，sat_frac = 力矩饱和时间占比，
+#: q_min/q_max = 关节角范围，at_limit_frac = 顶在位置限位上的时间占比，
+#: qd_mean/qd_p99 = |qd| 均值/p99，over_vel_frac = 超速度限幅的时间占比。
+#: 另外带 `n_env` / `n_steps` / `qd_subsample` 三个标量说明口径。
+ARM_POP_KEYS = ("tau_mean", "tau_max", "sat_frac", "q_min", "q_max", "at_limit_frac",
+                "qd_mean", "qd_p99", "over_vel_frac")
+
 
 # ─────────────────────────────── 命令行 ─────────────────────────────────
 def build_parser() -> argparse.ArgumentParser:
@@ -174,6 +185,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--steps", type=int, default=400, help="每档命令记录的步数")
     p.add_argument("--warmup", type=int, default=100, help="每档命令开始前丢弃的步数")
+    p.add_argument("--reset-grace", type=int, default=25,
+                   help="复位后前 N 步不计入稳态统计（0 = 关闭）。"
+                        "高速命令下机器人会跑出地形/摔倒→复位→速度≈0，"
+                        "不剔除就会把 err_vel_xy 拉到接近命令值（A7）")
     p.add_argument("--commands", type=str, default=DEFAULT_COMMANDS,
                    help='分号分隔的 "vx,vy,wz"（逐档固定滚动：步态 / 分地形 / 汇总表用）')
     p.add_argument("--schedule", choices=("full", "none"), default="full",
@@ -348,8 +363,15 @@ class EpisodeData:
     env_terrain_level: np.ndarray | None = None
     #: 逐 env 的汇总（用于"分地形"统计，避免存 (T,N) 大数组）
     per_env: dict | None = None
+    #: 臂关节负载的**全 env 汇总**（`collect_schedule` 逐环境累加；键见 `ARM_POP_KEYS`）。
+    #: 以前这些比例只从 `env_id=0` 那一条轨迹算 ⇒ 随机 EE 目标让两次采集差好几倍（A5）。
+    arm_pop: dict | None = None
     #: 指令切换模式：[(t0, t1, vel_cmd, body_cmd), ...]
     schedule: list | None = None
+    #: 稳态掩码（长度 = 时间）：复位后前 `reset_grace` 步为 False ⇒ 不参与均值统计（A7）。
+    #: 时序图仍然画全量（复位瞬态是"看得见"的），只有均值/汇总用它。
+    steady: np.ndarray | None = None
+    reset_grace: int = 0
 
     @property
     def err_xy(self) -> np.ndarray:
@@ -359,17 +381,31 @@ class EpisodeData:
     def err_yaw(self) -> np.ndarray:
         return np.abs(self.cmd[:, 2] - self.yaw_rate)
 
+    @property
+    def steady_mask(self) -> np.ndarray:
+        """稳态掩码（复位后前 `reset_grace` 步为 False；A7）。
+
+        没有该信息（老 npz）、长度对不上、或整段都被剔掉时退回"全 True"，
+        免得老数据画不出图 / 表里全是 nan。
+        """
+        s = self.steady
+        if s is None or np.size(s) != np.size(self.t) or not np.asarray(s).any():
+            return np.ones(int(np.size(self.t)), dtype=bool)
+        return np.asarray(s, dtype=bool)
+
 
 # ──────────────────────────── 采集器 ────────────────────────────
 class Harness:
     """把"环境 + 策略 + 固定命令滚动 + 信号采集"包在一块，画图那边只管画。"""
 
     def __init__(self, env, unwrapped, label: str, env_id: int, contact_threshold: float = 1.0,
-                 terrain_gen=None):
+                 terrain_gen=None, reset_grace: int = 25):
         self.env = env
         self.raw = unwrapped
         self.label = label
         self.env_id = env_id
+        # 复位后前 N 步不计入稳态统计（A7：高速档摔倒→复位会把速度误差拉向命令值）
+        self.reset_grace = max(int(reset_grace), 0)
         self.device = unwrapped.device
         self.n_envs = unwrapped.num_envs
         self.robot = unwrapped.scene["robot"]
@@ -407,6 +443,10 @@ class Harness:
         except Exception:  # noqa: BLE001 - 有些资产没有臂，直接跳过
             pass
         self.n_joints = self.joint_sel.numel()
+        # 臂关节在 `joint_sel` 里的列号（A5：负载统计要覆盖**所有 env**，不再只看 env 0）
+        self.arm_idx = [i for i, n in enumerate(self.joint_names)
+                        if str(n).startswith(ARM_JOINT_PREFIXES)]
+        self.arm_names = [str(self.joint_names[i]) for i in self.arm_idx]
 
         # ── 位置/力矩/速度限幅：USD 与 data 张量里常常是 0 或 1e9 占位值，
         #    真正生效的值在 actuator 实例上（见 _resolve_actuator_limits）。
@@ -653,9 +693,14 @@ class Harness:
             # 逐 env 累加（"分地形"统计用；不存 (T,N) 大数组）
             _N, _dev = self.n_envs, self.device
             acc = {k: torch.zeros(_N, device=_dev) for k in
-                   ("xy", "xy2", "yaw", "yaw2", "h", "h2", "z", "z2", "pitch2", "roll2", "tau", "done")}
+                   ("xy", "xy2", "yaw", "yaw2", "h", "h2", "z", "z2", "pitch2", "roll2", "tau", "done",
+                    "valid")}
             c_cnt = torch.zeros(_N, 4, device=_dev)
             cmd_t = torch.tensor(cmd, device=_dev, dtype=torch.float32).expand(_N, 3)
+            # A7：复位后前 `reset_grace` 步的样本是"复位瞬态"（机器人被摆回原点、速度≈0），
+            # 不剔除就会让高速档的 err_vel_xy 被拉向命令值（3 m/s → 0.239、5 m/s → 6.20）。
+            since_reset = torch.zeros(_N, device=_dev, dtype=torch.long)
+            rec["steady"] = []
             for _ in range(steps):
                 # 误差用"动作施加前"的状态算（与 eval_fixed_command 同口径）
                 v_b = self.robot.data.root_lin_vel_b[:, :2].clone()
@@ -675,13 +720,20 @@ class Harness:
                 foot_xy_b, _ = _foot_xy_body(self.robot, self.foot_sel)
                 foot_z = self.robot.data.body_pos_w[:, self.foot_sel, 2].clone()
                 contact = self._contact_mask()
+                # 本步的"稳态"掩码（复位后已过 grace 步才算）—— 记录 env 与全 env 累加共用
+                steady = (since_reset > self.reset_grace) if self.reset_grace > 0 \
+                    else torch.ones_like(since_reset, dtype=torch.bool)
+                w_steady = steady.float()
 
                 self._write_cmd(cmd)
                 with torch.inference_mode():
                     obs, _, dones, _ = self.env.step(self.policy(obs))
+                since_reset = torch.where(dones.bool(), torch.zeros_like(since_reset),
+                                          since_reset + 1)
 
                 i = self.env_id
                 rec["t"].append(len(rec["t"]) * self.dt)
+                rec["steady"].append(bool(steady[i]))
                 rec["cmd"].append(np.array(self.term.vel_command_b[i].tolist(), dtype=float)[:3])
                 rec["vel_b"].append(v_b[i].cpu().numpy())
                 rec["yaw"].append(float(w_z[i]))
@@ -724,26 +776,29 @@ class Harness:
                     if t is None:
                         return
                     m = min(acc[key].numel(), t.shape[0])
-                    acc[key][:m] += t[:m]
+                    acc[key][:m] += t[:m] * w_steady[:m]
                     if f"{key}2" in acc:
-                        acc[f"{key}2"][:m] += t[:m] ** 2
+                        acc[f"{key}2"][:m] += (t[:m] ** 2) * w_steady[:m]
 
                 n_ok = min(cmd_t.shape[0], v_b.shape[0], h.shape[0])
+                # 稳态样本数（分母）：复位瞬态不计入任何均值统计
+                m0 = min(acc["valid"].numel(), w_steady.shape[0])
+                acc["valid"][:m0] += w_steady[:m0]
                 _acc("xy", torch.norm(cmd_t[:n_ok, :2] - v_b[:n_ok], dim=-1))
                 _acc("yaw", torch.abs(cmd_t[:n_ok, 2] - w_z[:n_ok]))
                 _acc("h", h)
                 _acc("z", z)
                 m2 = min(acc["pitch2"].numel(), pitch.shape[0])
-                acc["pitch2"][:m2] += pitch[:m2] ** 2
+                acc["pitch2"][:m2] += (pitch[:m2] ** 2) * w_steady[:m2]
                 m3 = min(acc["roll2"].numel(), roll.shape[0])
-                acc["roll2"][:m3] += roll[:m3] ** 2
+                acc["roll2"][:m3] += (roll[:m3] ** 2) * w_steady[:m3]
                 t_rms = torch.sqrt((tau ** 2).mean(dim=-1))
                 m4 = min(acc["tau"].numel(), t_rms.shape[0])
                 acc["tau"][:m4] = torch.maximum(acc["tau"][:m4], t_rms[:m4])
                 m5 = min(acc["done"].numel(), done.shape[0])
                 acc["done"][:m5] += done[:m5].float()
                 if contact.shape[0] >= c_cnt.shape[0]:
-                    c_cnt += contact[: c_cnt.shape[0]].float()
+                    c_cnt += contact[: c_cnt.shape[0]].float() * w_steady[: c_cnt.shape[0]].unsqueeze(-1)
 
             data = EpisodeData(label=self.label, command=cmd)
             data.t = np.array(rec["t"])
@@ -785,33 +840,43 @@ class Harness:
             data.vel_limit = self.vel_limit
             data.mirror_rms = mirror_rms(data.joint_pos, self.joint_names)
             _n = float(max(steps, 1))
+            # A7：均值项的分母换成"稳态样本数"（复位瞬态被掩掉）；`done`/`tau_rms_max` 仍是
+            # 原始口径（次数 / 峰值不该被剔除，否则越摔越"好看"）。分母为 0（grace 比整段
+            # 还长）时退化成 raw 分母，免得整张表变 nan。
+            _nv = torch.clamp(acc["valid"], min=1.0)
             data.per_env = {
-                "err_xy": (acc["xy"] / _n).cpu().numpy(),
-                "err_yaw": (acc["yaw"] / _n).cpu().numpy(),
-                "height_mean": (acc["h"] / _n).cpu().numpy(),
+                "err_xy": (acc["xy"] / _nv).cpu().numpy(),
+                "err_yaw": (acc["yaw"] / _nv).cpu().numpy(),
+                "height_mean": (acc["h"] / _nv).cpu().numpy(),
                 "height_std": torch.sqrt(
-                    torch.clamp(acc["h2"] / _n - (acc["h"] / _n) ** 2, min=0)
+                    torch.clamp(acc["h2"] / _nv - (acc["h"] / _nv) ** 2, min=0)
                 ).cpu().numpy(),
-                "root_z_mean": (acc["z"] / _n).cpu().numpy(),
+                "root_z_mean": (acc["z"] / _nv).cpu().numpy(),
                 "pitch_std_deg": np.degrees(
-                    torch.sqrt(torch.clamp(acc["pitch2"] / _n, min=0)).cpu().numpy()
+                    torch.sqrt(torch.clamp(acc["pitch2"] / _nv, min=0)).cpu().numpy()
                 ),
                 "roll_std_deg": np.degrees(
-                    torch.sqrt(torch.clamp(acc["roll2"] / _n, min=0)).cpu().numpy()
+                    torch.sqrt(torch.clamp(acc["roll2"] / _nv, min=0)).cpu().numpy()
                 ),
                 "tau_rms_max": acc["tau"].cpu().numpy(),
-                "duty": (c_cnt / _n).cpu().numpy(),
+                "duty": (c_cnt / _nv.unsqueeze(-1)).cpu().numpy(),
                 "done": acc["done"].cpu().numpy(),
+                # 稳态样本占比 ⇒ 报告里能看到"这一档有多少时间是在正常跑"（A7）
+                "valid_frac": (acc["valid"] / _n).cpu().numpy(),
             }
             data.env_terrain = self.env_terrain
             data.env_terrain_level = self.env_terrain_level
+            data.steady = np.asarray(rec["steady"], dtype=bool)
+            data.reset_grace = int(self.reset_grace)
             if want_terrain and self.height_sensor is not None:
                 hits = self.height_sensor.data.ray_hits_w[self.env_id].detach().cpu().numpy()
                 data.terrain_pts_w = np.asarray(hits, dtype=float).reshape(-1, 3)
             out.append(data)
+            _drop = 100.0 * (1.0 - float(np.mean(rec["steady"]))) if rec["steady"] else 0.0
             print(f"[report]   档 {ci + 1}/{len(commands)} cmd={cmd} 完成"
                   f"（{steps} 步 / {time.perf_counter() - t_wall:.1f} s"
-                  f" = {steps / max(time.perf_counter() - t_wall, 1e-6):.1f} 步/秒）")
+                  f" = {steps / max(time.perf_counter() - t_wall, 1e-6):.1f} 步/秒"
+                  f"；复位瞬态剔除 {_drop:.1f}%）")
         return out
 
     # ---------------- 指令切换（考察指令间的变换能力）----------------
@@ -833,6 +898,42 @@ class Harness:
         term_counts = {n: 0 for n in term_names}
         n_done = 0
         t = 0.0
+
+        # ── A5：臂负载改成**全 env** 口径 ──
+        # 以前只统计 `env_id=0` 那一条轨迹，而臂的目标是随机采样的 ⇒ 同一次采集里
+        # "饱和/顶限位时间占比"在两次之间能差 3 倍（joint5 见过 25% vs 91%）。
+        # 这里逐环境累加（内存 O(N·J)，不存 (T,N,J) 大数组）：
+        #   * 均值/峰值/范围/占比 → 直接可累加；
+        #   * |qd| 的 p99 需要分布 ⇒ 均匀抽 ≤600 个时刻入池（全体 env 混在一起算）。
+        arm_tau_lim, arm_pos_lim, arm_vel_lim = self._arm_limits()
+        n_arm = len(self.arm_idx)
+        arm_pop_ready = n_arm > 0
+        planned_steps = sum(int(round(d / self.dt)) for d, _v, _b in segments)
+        if arm_pop_ready:
+            arm_idx_t = torch.tensor(self.arm_idx, device=self.device, dtype=torch.long)
+            a_tau_sum = torch.zeros((self.n_envs, n_arm), device=self.device)
+            a_tau_max = torch.zeros((self.n_envs, n_arm), device=self.device)
+            a_sat_cnt = torch.zeros((self.n_envs, n_arm), device=self.device)
+            a_atlim_cnt = torch.zeros((self.n_envs, n_arm), device=self.device)
+            a_over_cnt = torch.zeros((self.n_envs, n_arm), device=self.device)
+            a_qd_sum = torch.zeros((self.n_envs, n_arm), device=self.device)
+            a_q_min = torch.full((self.n_envs, n_arm), float("inf"), device=self.device)
+            a_q_max = torch.full((self.n_envs, n_arm), -float("inf"), device=self.device)
+            arm_qd_pool: list[np.ndarray] = []
+            qd_stride = max(1, int(np.ceil(max(planned_steps, 1) / 600.0)))
+            # 限幅缺失（NaN）⇒ 该比较恒为 False；力矩限幅还要排除 <0 的占位值
+            def _cmp(arr, positive: bool):
+                if arr is None:
+                    return None
+                v = np.asarray(arr, dtype=float)
+                if positive:
+                    v = np.where(np.isfinite(v) & (v > 0), v, np.inf)
+                return torch.tensor(v, device=self.device, dtype=torch.float32)
+
+            tau_cmp = _cmp(arm_tau_lim, True)
+            pos_cmp = _cmp(arm_pos_lim, False)
+            vel_cmp = _cmp(arm_vel_lim, True)
+        step_i = 0
         obs = self._force_reset(segments[0][1], obs)
         for dur_s, vel, body in segments:
             n_steps = int(round(dur_s / self.dt))
@@ -852,11 +953,32 @@ class Harness:
                 foot_xy, _ = _foot_xy_body(self.robot, self.foot_sel)
                 foot_z = self.robot.data.body_pos_w[:, self.foot_sel, 2].clone()
                 contact = self._contact_mask()
+                if arm_pop_ready:
+                    _m = min(self.n_envs, tau.shape[0], qpos.shape[0], qvel.shape[0])
+                    a_tau = tau[:_m][:, arm_idx_t].abs()
+                    a_q = qpos[:_m][:, arm_idx_t]
+                    a_qd = qvel[:_m][:, arm_idx_t].abs()
+                    a_tau_sum[:_m] += a_tau
+                    a_tau_max[:_m] = torch.maximum(a_tau_max[:_m], a_tau)
+                    a_q_min[:_m] = torch.minimum(a_q_min[:_m], a_q)
+                    a_q_max[:_m] = torch.maximum(a_q_max[:_m], a_q)
+                    a_qd_sum[:_m] += a_qd
+                    if tau_cmp is not None:
+                        a_sat_cnt[:_m] += (a_tau >= 0.99 * tau_cmp).float()
+                    if pos_cmp is not None:
+                        _near = torch.minimum((a_q - pos_cmp[:, 0]).abs(),
+                                              (a_q - pos_cmp[:, 1]).abs())
+                        a_atlim_cnt[:_m] += (_near < 0.02).float()
+                    if vel_cmp is not None:
+                        a_over_cnt[:_m] += (a_qd > vel_cmp).float()
+                    if step_i % qd_stride == 0:
+                        arm_qd_pool.append(a_qd.detach().to("cpu").numpy().astype(np.float32))
                 self._write_cmd(vel)
                 self._write_body_cmd(body)
                 bcmd = self._read_body_cmd()
                 with torch.inference_mode():
                     obs, _, dones, _ = self.env.step(self.policy(obs))
+                step_i += 1
                 i = self.env_id
                 rec["t"].append(t); t += self.dt
                 rec["cmd"].append(np.asarray(vel, dtype=float))
@@ -887,6 +1009,35 @@ class Harness:
             print(f"[report]   seg {len(schedule)}/{len(segments)} vel={tuple(vel)}"
                   f" body={None if body is None else tuple(round(b, 3) for b in body)}"
                   f"（{n_steps} 步 / {time.perf_counter() - t_wall:.1f} s）")
+        arm_pop = None
+        if arm_pop_ready:
+            _n = float(max(planned_steps, 1))  # 每个 env 的步数都一样 ⇒ 直接当分母
+            tau_lim_np = np.asarray(arm_tau_lim, dtype=float) if arm_tau_lim is not None \
+                else np.full(n_arm, np.nan)
+            vel_lim_np = np.asarray(arm_vel_lim, dtype=float) if arm_vel_lim is not None \
+                else np.full(n_arm, np.nan)
+            has_pos = arm_pos_lim is not None
+            pool = (np.concatenate(arm_qd_pool, axis=0).reshape(-1, n_arm)
+                    if arm_qd_pool else np.zeros((0, n_arm), dtype=np.float32))
+            arm_pop = {
+                "tau_mean": (a_tau_sum / _n).mean(dim=0).cpu().numpy(),
+                "tau_max": a_tau_max.max(dim=0).values.cpu().numpy(),
+                "sat_frac": np.where(np.isfinite(tau_lim_np) & (tau_lim_np > 0),
+                                     (a_sat_cnt / _n).mean(dim=0).cpu().numpy(), np.nan),
+                "q_min": a_q_min.min(dim=0).values.cpu().numpy(),
+                "q_max": a_q_max.max(dim=0).values.cpu().numpy(),
+                "at_limit_frac": (np.where(np.isfinite(arm_pos_lim).all(axis=1),
+                                           (a_atlim_cnt / _n).mean(dim=0).cpu().numpy(), np.nan)
+                                  if has_pos else np.full(n_arm, np.nan)),
+                "qd_mean": (a_qd_sum / _n).mean(dim=0).cpu().numpy(),
+                "qd_p99": (np.percentile(pool, 99, axis=0) if pool.size
+                           else np.full(n_arm, np.nan)),
+                "over_vel_frac": np.where(np.isfinite(vel_lim_np) & (vel_lim_np > 0),
+                                          (a_over_cnt / _n).mean(dim=0).cpu().numpy(), np.nan),
+                "n_env": np.array([float(self.n_envs)]),
+                "n_steps": np.array([float(planned_steps)]),
+                "qd_subsample": np.array([float(qd_stride)]),
+            }
         data = EpisodeData(label=self.label, command=(0.0, 0.0, 0.0))
         data.t = np.array(rec["t"]); data.cmd = np.array(rec["cmd"])
         data.vel_b = np.array(rec["vel_b"]); data.yaw_rate = np.array(rec["yaw"])
@@ -909,6 +1060,7 @@ class Harness:
         data.vel_limit = self.vel_limit
         data.mirror_rms = mirror_rms(data.joint_pos, self.joint_names)
         data.per_env = None
+        data.arm_pop = arm_pop
         data.env_terrain = self.env_terrain
         data.env_terrain_level = self.env_terrain_level
         return data
@@ -918,6 +1070,25 @@ class Harness:
             return torch.zeros(self.n_envs, 4, dtype=torch.bool, device=self.device)
         f = self.raw.scene["contact_forces"].data.net_forces_w[:, self.contact_ids, :]
         return f.norm(dim=-1) > self.contact_threshold
+
+    def _arm_limits(self) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+        """臂关节的力矩/位置/速度限幅（按 `self.arm_idx` 切片；缺失处保持 NaN）。
+
+        臂是 IK 直驱的，"力矩打满 / 顶在关节限位上"就是唯一的可观测判据（DEF-049）。
+        返回的数组**不做替换**，由调用方决定"缺失值算不算触发"。
+        """
+        if not self.arm_idx:
+            return None, None, None
+
+        def _take(arr) -> np.ndarray | None:
+            if arr is None:
+                return None
+            v = np.asarray(arr, dtype=float)
+            if v.shape[0] <= max(self.arm_idx):
+                return None
+            return v[self.arm_idx]
+
+        return _take(self.torque_limit), _take(self.pos_limit), _take(self.vel_limit)
 
     def _ee_row(self, i: int) -> np.ndarray:
         """[cmd_ee_pos_b(3), actual_ee_pos_b(3), ori_err(rad)]，仅用于画臂的跟踪。"""
@@ -1152,35 +1323,40 @@ def summarize(ep: EpisodeData, joint_names: list[str], torque_limit: np.ndarray 
             j += 1
     if recover:
         spike["spike_recovery_s"] = float(np.mean(recover))
+    # A7：稳态统计（均值类）一律剔除"复位后前 N 步"；尖刺检测仍看全量（瞬态本来就是它）
+    _m = ep.steady_mask
+    _err_xy = ep.err_xy[_m] if _m.any() else ep.err_xy
     out = {
         "label": ep.label,
         "command": list(ep.command),
         "steps": int(ep.t.size),
+        "reset_grace": int(ep.reset_grace),
+        "steady_frac": float(_m.mean()),
         "duration_s": float(ep.t[-1] - ep.t[0]) if ep.t.size else 0.0,
         "n_done": int(ep.n_done),
         "terminations": dict(ep.term_counts),
-        "err_vel_xy_mean": float(ep.err_xy.mean()),
-        "err_vel_xy_p95": _pct(ep.err_xy, 95),
-        "err_vel_yaw_mean": float(ep.err_yaw.mean()),
-        "vel_bias": [float(ep.cmd[:, i].mean() - ep.vel_b[:, i].mean()) for i in range(2)],
-        "vel_std": [float(ep.vel_b[:, i].std()) for i in range(2)],
-        "yaw_bias": float(ep.cmd[:, 2].mean() - ep.yaw_rate.mean()),
-        "height_mean": float(ep.height.mean()),
-        "height_std": float(ep.height.std()),
-        "pitch_mean_deg": float(np.degrees(ep.pitch.mean())),
-        "roll_mean_deg": float(np.degrees(ep.roll.mean())),
-        "pitch_std_deg": float(np.degrees(ep.pitch.std())),
-        "roll_std_deg": float(np.degrees(ep.roll.std())),
-        "joint_pos_std": ([float(ep.joint_pos[:, i].std()) for i in range(len(joint_names))]
+        "err_vel_xy_mean": float(_err_xy.mean()),
+        "err_vel_xy_p95": float(np.percentile(_err_xy, 95)) if _err_xy.size else float("nan"),
+        "err_vel_yaw_mean": float(ep.err_yaw[_m].mean()),
+        "vel_bias": [float(ep.cmd[_m, i].mean() - ep.vel_b[_m, i].mean()) for i in range(2)],
+        "vel_std": [float(ep.vel_b[_m, i].std()) for i in range(2)],
+        "yaw_bias": float(ep.cmd[_m, 2].mean() - ep.yaw_rate[_m].mean()),
+        "height_mean": float(ep.height[_m].mean()),
+        "height_std": float(ep.height[_m].std()),
+        "pitch_mean_deg": float(np.degrees(ep.pitch[_m].mean())),
+        "roll_mean_deg": float(np.degrees(ep.roll[_m].mean())),
+        "pitch_std_deg": float(np.degrees(ep.pitch[_m].std())),
+        "roll_std_deg": float(np.degrees(ep.roll[_m].std())),
+        "joint_pos_std": ([float(ep.joint_pos[_m, i].std()) for i in range(len(joint_names))]
                           if has_joints else []),
-        "torque_rms": ([float(np.sqrt(np.mean(ep.torque[:, i] ** 2))) for i in range(len(joint_names))]
+        "torque_rms": ([float(np.sqrt(np.mean(ep.torque[_m, i] ** 2))) for i in range(len(joint_names))]
                        if has_joints else []),
-        "torque_absmax": ([float(np.abs(ep.torque[:, i]).max()) for i in range(len(joint_names))]
+        "torque_absmax": ([float(np.abs(ep.torque[_m, i]).max()) for i in range(len(joint_names))]
                           if has_joints else []),
-        "power_mean_abs": float(np.abs(pw).mean()) if pw.size else float("nan"),
+        "power_mean_abs": float(np.abs(pw[_m]).mean()) if pw.size else float("nan"),
         "duty_factor": [float(x) for x in duty_factor(ep.contact)] if has_contact else [],
         "wheel_omega_mean": (
-            [float(ep.joint_vel[:, joint_names.index(f"{leg}_wheel_joint")].mean()) for leg in LEGS]
+            [float(ep.joint_vel[_m, joint_names.index(f"{leg}_wheel_joint")].mean()) for leg in LEGS]
             if has_joints else []
         ),
         "step_freq_hz": (
@@ -1213,43 +1389,79 @@ def arm_joint_stats(ep: EpisodeData, joint_names: list[str],
     为什么要单列：这台机器的臂是 **IK 直接驱动**（`ee_ik` 的 action_dim = 0，不在策略
     动作里），所以"力矩打满"通常不是策略在硬顶，而是 **IK 解出的关节目标超出可达范围 /
     超出限幅**，PD 只能贴着上限推。这几个比例就是判据（DEF-049）。
+
+    口径（A5，2026-10-06）：只要 episode 带 `arm_pop`（`collect_schedule` 采的都有），
+    就用**全 env 的 t×N 样本**；否则退回旧口径（只统计 `env_id=0` 那一条轨迹，
+    单 env 的随机 EE 目标会让比例在两次采集之间差好几倍）。
     """
     if np.size(ep.torque) == 0 or not joint_names:
         return []
+    names = [str(n) for n in joint_names if str(n).startswith(ARM_JOINT_PREFIXES)]
+    if not names:
+        return []
     L, pos, vel = ep.torque_limit, ep.pos_limit, ep.vel_limit
+    jcol = {str(n): i for i, n in enumerate(joint_names)}
+    pop = _arm_population(ep)
     rows: list[dict] = []
-    for i, name in enumerate(joint_names):
-        if not str(name).startswith(("arm_joint", "gripper_joint")):
-            continue
-        a = np.abs(np.asarray(ep.torque[:, i], dtype=float))
+    for jj, name in enumerate(names):
+        i = jcol[name]
         lim = float(L[i]) if L is not None and np.isfinite(L[i]) else float("nan")
-        sat = float((a >= 0.99 * lim).mean()) if np.isfinite(lim) and lim > 0 else float("nan")
-        q = np.asarray(ep.joint_pos[:, i], dtype=float)
         if pos is not None and np.isfinite(pos[i]).all():
             lo, hi = float(pos[i, 0]), float(pos[i, 1])
-            near = np.minimum(np.abs(q - lo), np.abs(q - hi))
-            at_limit = float((near < 0.02).mean())
         else:
             lo = hi = at_limit = float("nan")
-        qd = np.abs(np.asarray(ep.joint_vel[:, i], dtype=float))
         vlim = float(vel[i]) if vel is not None and np.isfinite(vel[i]) else float("nan")
+        if pop is not None:
+            tau_mean = float(pop["tau_mean"][jj])
+            tau_max = float(pop["tau_max"][jj])
+            sat = float(pop["sat_frac"][jj]) if np.isfinite(lim) and lim > 0 else float("nan")
+            q_min = float(pop["q_min"][jj])
+            q_max = float(pop["q_max"][jj])
+            at_limit = float(pop["at_limit_frac"][jj]) if np.isfinite(lo) else float("nan")
+            qd_mean = float(pop["qd_mean"][jj])
+            qd_p99 = float(pop["qd_p99"][jj])
+            over_vel = float(pop["over_vel_frac"][jj])
+        else:
+            a = np.abs(np.asarray(ep.torque[:, i], dtype=float))
+            tau_mean, tau_max = float(a.mean()), float(a.max())
+            sat = float((a >= 0.99 * lim).mean()) if np.isfinite(lim) and lim > 0 else float("nan")
+            q = np.asarray(ep.joint_pos[:, i], dtype=float)
+            q_min, q_max = float(q.min()), float(q.max())
+            if np.isfinite(lo):
+                near = np.minimum(np.abs(q - lo), np.abs(q - hi))
+                at_limit = float((near < 0.02).mean())
+            qd = np.abs(np.asarray(ep.joint_vel[:, i], dtype=float))
+            qd_mean = float(qd.mean())
+            qd_p99 = float(np.percentile(qd, 99))
+            over_vel = float((qd > vlim).mean()) if np.isfinite(vlim) else float("nan")
         rows.append({
-            "joint": str(name),
-            "tau_mean": float(a.mean()),
-            "tau_max": float(a.max()),
+            "joint": name,
+            "tau_mean": tau_mean,
+            "tau_max": tau_max,
             "tau_limit": lim,
             "sat_frac": sat,
-            "q_min": float(q.min()),
-            "q_max": float(q.max()),
+            "q_min": q_min,
+            "q_max": q_max,
             "q_lo": lo,
             "q_hi": hi,
             "at_limit_frac": at_limit,
-            "qd_mean": float(qd.mean()),
-            "qd_p99": float(np.percentile(qd, 99)),
+            "qd_mean": qd_mean,
+            "qd_p99": qd_p99,
             "vel_limit": vlim,
-            "over_vel_frac": (float((qd > vlim).mean()) if np.isfinite(vlim) else float("nan")),
+            "over_vel_frac": over_vel,
         })
     return rows
+
+
+def _arm_population(ep: EpisodeData) -> dict | None:
+    """返回可用的**全 env** 臂负载汇总（长度对不上/老 npz 则返回 None ⇒ 走旧口径）。"""
+    pop = getattr(ep, "arm_pop", None)
+    if not pop or "tau_mean" not in pop:
+        return None
+    names = [str(n) for n in (ep.joint_names_all or []) if str(n).startswith(ARM_JOINT_PREFIXES)]
+    if not names or len(np.atleast_1d(pop["tau_mean"])) != len(names):
+        return None
+    return pop
 
 
 # ──────────────────────────── 绘图 ────────────────────────────
@@ -1532,46 +1744,60 @@ def fig04_gait(series, out_dir, dpi, meta):
     用户需求 5：轮腿在纯 vx 下"轮子转就行、不需要迈步"⇒ 旧版只画第一档
     （静止）当然全程着地、什么都看不出来。现在把 --commands 里每一档（含 vy/wz）
     各画一列，一眼就能分出"滚动"和"迈步/跳跃"。
+
+    A/B（`--compare`）：以前只画第一个 label（A8）⇒ 现在**每个 label 占一组 4 行**
+    （4 行 × label 数），行标写成 `label:leg`；只有 1 个 label 时与旧版布局一致。
     """
     labels = list(series.keys())
-    eps = series[labels[0]]
-    if np.size(eps[0].contact) == 0:
+    eps_a = series[labels[0]]
+    if np.size(eps_a[0].contact) == 0:
         return None  # 没有接触传感器的任务，直接跳过
-    n = len(eps)
-    fig = plt.figure(figsize=(max(9.5, 2.7 * n), 10.5))
-    gs = fig.add_gridspec(5, n, height_ratios=[1, 1, 1, 1, 1.7], hspace=0.34, wspace=0.16)
-    for j, ep in enumerate(eps):
-        c = ep.command
-        for k, leg in enumerate(LEGS):
-            ax = fig.add_subplot(gs[k, j])
-            ax.fill_between(ep.t, 0.0, 1.0, where=ep.contact[:, k], step="mid",
-                            color=COLORS[j % len(COLORS)], alpha=0.85)
-            ax.set_ylim(0, 1)
-            ax.set_yticks([])
-            ax.grid(alpha=0.2, axis="x")
-            if k == 0:
-                ax.set_title(f"cmd=({c[0]:g},{c[1]:g},{c[2]:g})", fontsize=8)
-            if j == 0:
-                ax.set_ylabel(leg, rotation=0, ha="right", va="center")
-            if k == 3:
-                ax.set_xlabel("t (s)", fontsize=8)
-    ax = fig.add_subplot(gs[4, :])
+    n = len(eps_a)
+    n_lab = len(labels)
+    n_row = 4 * n_lab
+    fig = plt.figure(figsize=(max(9.5, 2.7 * n), 2.1 * n_row + 2.2))
+    gs = fig.add_gridspec(n_row + 1, n, height_ratios=[1] * n_row + [1.7],
+                          hspace=0.34, wspace=0.16)
+    for m, lab in enumerate(labels):
+        eps = series[lab]
+        for j, ep in enumerate(eps[:n]):
+            c = ep.command
+            for k, leg in enumerate(LEGS):
+                ax = fig.add_subplot(gs[m * 4 + k, j])
+                ax.fill_between(ep.t, 0.0, 1.0, where=ep.contact[:, k], step="mid",
+                                color=COLORS[j % len(COLORS)], alpha=0.85)
+                ax.set_ylim(0, 1)
+                ax.set_yticks([])
+                ax.grid(alpha=0.2, axis="x")
+                if m * 4 + k == 0:
+                    ax.set_title(f"cmd=({c[0]:g},{c[1]:g},{c[2]:g})", fontsize=8)
+                if j == 0:
+                    ax.set_ylabel(f"{lab}:{leg}" if n_lab > 1 else leg,
+                                  rotation=0, ha="right", va="center", fontsize=7)
+                if m * 4 + k == n_row - 1:
+                    ax.set_xlabel("t (s)", fontsize=8)
+    ax = fig.add_subplot(gs[n_row, :])
     xx = np.arange(len(LEGS))
-    ww = 0.8 / max(n, 1)
-    for j, ep in enumerate(eps):
-        c = ep.command
-        ax.bar(xx + j * ww, duty_factor(ep.contact), ww, color=COLORS[j % len(COLORS)],
-               label=f"({c[0]:g},{c[1]:g},{c[2]:g})")
+    ww = 0.8 / max(n * n_lab, 1)
+    for m, lab in enumerate(labels):
+        for j, ep in enumerate(series[lab][:n]):
+            c = ep.command
+            ax.bar(xx + (m * n + j) * ww, duty_factor(ep.contact), ww,
+                   color=COLORS[j % len(COLORS)], alpha=0.9 if m == 0 else 0.55,
+                   hatch=None if m == 0 else "//",
+                   label=(f"{lab} ({c[0]:g},{c[1]:g},{c[2]:g})" if n_lab > 1
+                          else f"({c[0]:g},{c[1]:g},{c[2]:g})"))
     ax.axhline(1.0, color="k", lw=0.9, ls="--")
-    ax.set_xticks(xx + ww * (n - 1) / 2)
+    ax.set_xticks(xx + ww * (n * n_lab - 1) / 2)
     ax.set_xticklabels(LEGS)
     ax.set_ylabel("duty factor\n(contact fraction)")
     ax.set_ylim(0, 1.15)
     ax.set_title("duty factor per leg  --  ~1.0 = wheels just rolling,  <1.0 = stepping",
                  fontsize=9)
-    ax.legend(fontsize=7, ncol=min(n, 5))
+    ax.legend(fontsize=7, ncol=min(n * n_lab, 5))
     ax.grid(alpha=0.3, axis="y")
-    fig.suptitle(f"(4) Gait diagram per velocity command -- {meta['task']}")
+    fig.suptitle(f"(4) Gait diagram per velocity command -- {meta['task']}"
+                 + (f"  [A/B: {' vs '.join(labels)}]" if n_lab > 1 else ""))
     return _save(fig, out_dir, "fig04_gait_diagram", dpi)
 
 
@@ -2007,9 +2233,12 @@ def fig11_per_terrain(series, out_dir, dpi, meta):
     metrics = [("err_xy", "linear velocity error (m/s)"), ("err_yaw", "yaw rate error (rad/s)"),
                ("height_std", "base height jitter std (m)")]
     x = np.arange(len(terrs))
-    w = 0.8 / max(len(cmds), 1)
-    def _val(t: str, ck: str, key: str) -> float:
-        return float(table[t].get(labels[0], {}).get(ck, {}).get(key, np.nan))
+    # A8：以前只画第一个 label ⇒ 现在每个 (label, 命令) 各一根柱；柱宽按总根数收缩。
+    n_bar = max(len(cmds) * len(labels), 1)
+    w = 0.8 / n_bar
+
+    def _val(t: str, ck: str, key: str, lab: str) -> float:
+        return float(table[t].get(lab, {}).get(ck, {}).get(key, np.nan))
 
     panels = [
         (axes[0][0], "err_xy", metrics[0][1]),
@@ -2019,22 +2248,27 @@ def fig11_per_terrain(series, out_dir, dpi, meta):
         (axes[1][1], "duty_min", "worst-leg duty factor"),
     ]
     for ax, key, title in panels:
-        for j, ck in enumerate(cmds):
-            ax.bar(x + j * w, [_val(t, ck, key) for t in terrs], w,
-                   label=ck.replace("cmd", "cmd="))
-        ax.set_xticks(x + w * (len(cmds) - 1) / 2)
+        for m, lab in enumerate(labels):
+            for j, ck in enumerate(cmds):
+                ax.bar(x + (m * len(cmds) + j) * w, [_val(t, ck, key, lab) for t in terrs], w,
+                       color=COLORS[j % len(COLORS)],
+                       alpha=0.9 if m == 0 else 0.55, hatch=None if m == 0 else "//",
+                       label=(f"{lab} {ck.replace('cmd', 'cmd=')}" if len(labels) > 1
+                              else ck.replace("cmd", "cmd=")))
+        ax.set_xticks(x + w * (n_bar - 1) / 2)
         ax.set_xticklabels(terrs, fontsize=8, rotation=15)
         ax.set_title(f"{title} -- by terrain x command")
         ax.grid(alpha=0.3, axis="y")
-        ax.legend(fontsize=6, ncol=2)
+        ax.legend(fontsize=6, ncol=2 if len(labels) > 1 else 2)
     axes[1][1].set_ylim(0, 1.05)
     n_env = [int(table[t][labels[0]][cmds[0]].get("n_env", 0)) for t in terrs]
     axes[1][2].bar(x, n_env, 0.6)
     axes[1][2].set_xticks(x)
     axes[1][2].set_xticklabels(terrs, fontsize=8, rotation=15)
-    axes[1][2].set_title("number of envs per terrain (sample size)")
+    axes[1][2].set_title(f"number of envs per terrain (sample size, label = {labels[0]})")
     axes[1][2].grid(alpha=0.3, axis="y")
-    fig.suptitle(f"(11) Per-terrain metrics -- {meta['task']}")
+    fig.suptitle(f"(11) Per-terrain metrics -- {meta['task']}"
+                 + (f"  [A/B: {' vs '.join(labels)}]" if len(labels) > 1 else ""))
     return _save(fig, out_dir, "fig11_per_terrain", dpi)
 
 
@@ -2248,7 +2482,8 @@ def fig13_push_robustness(series, out_dir, dpi, meta):
 _EP_FIELDS = ("t", "cmd", "vel_b", "yaw_rate", "root_xy", "root_z", "height", "pitch", "roll",
               "joint_pos", "joint_vel", "torque", "contact", "foot_xy_b", "foot_z_w")
 _EP_OPT = ("body_cmd", "ee_cmd_pos_b", "ee_pos_b", "ee_ori_err", "scan_min", "scan_max",
-           "scan_mean", "env_terrain_level", "pos_limit", "vel_limit")
+           "scan_mean", "env_terrain_level", "pos_limit", "vel_limit",
+           "steady")  # steady = 稳态掩码（A7；bool 长度 T）
 
 
 def _dump_groups(path: str, groups: dict) -> None:
@@ -2273,6 +2508,9 @@ def _dump_groups(path: str, groups: dict) -> None:
                 if ep.per_env is not None:
                     for k, v in ep.per_env.items():
                         npz[pre + f"pe|{k}"] = np.asarray(v)
+                if ep.arm_pop is not None:
+                    for k, v in ep.arm_pop.items():
+                        npz[pre + f"ap|{k}"] = np.asarray(v)
                 if ep.env_terrain is not None:
                     npz[pre + "env_terrain"] = np.asarray(ep.env_terrain, dtype=object).astype("U32")
                 npz[pre + "meta"] = np.array([json.dumps({
@@ -2282,6 +2520,7 @@ def _dump_groups(path: str, groups: dict) -> None:
                     "schedule": [list(s) for s in (ep.schedule or [])],
                     "term_counts": ep.term_counts,
                     "n_done": int(ep.n_done),
+                    "reset_grace": int(ep.reset_grace),
                 }, ensure_ascii=False)])
                 if ep.torque_limit is not None:
                     npz[pre + "torque_limit"] = np.asarray(ep.torque_limit)
@@ -2314,11 +2553,17 @@ def write_report(out_dir: str, groups: dict, meta: dict, figures: list[str]) -> 
         f"* 环境：`num_envs={meta['num_envs']}` / 每档 `{meta['steps']}` 步（warmup {meta['warmup']}）"
         f" / seed `{meta['seed']}` / push `{'关' if meta['no_push'] else '开'}`",
         f"* 命令：`{meta['commands']}`",
+        (f"* 稳态口径（A7）：**复位后前 {meta['reset_grace']} 步不计入均值类指标**"
+         f"（高速档摔倒→复位→速度≈0 会污染 err_vel_xy；列里有 `稳态占比` 可看剔掉多少；"
+         f"`--reset-grace 0` 可关）。尖刺/终止/时序图仍按全程。"
+         if meta.get("reset_grace", 0) else
+         "* 稳态口径（A7）：已关闭（`--reset-grace 0`）⇒ 复位瞬态全部计入。"),
         "",
         "## 1. 关键指标（逐档命令）",
         "",
-        "| 策略 | 命令 | err_vel_xy | err_yaw | 高度均值 | 高度std | pitch均值 | 后不对称 | hl~hr 膝RMS | 终止 |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| 策略 | 命令 | err_vel_xy | err_yaw | 高度均值 | 高度std | pitch均值 | 后不对称 | hl~hr 膝RMS "
+        "| 稳态占比 | 终止 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for lab in labels:
         for s in summary[lab]:
@@ -2327,7 +2572,7 @@ def write_report(out_dir: str, groups: dict, meta: dict, figures: list[str]) -> 
                 f"| {lab} | {tuple(s['command'])} | {s['err_vel_xy_mean']:.4f} | {s['err_vel_yaw_mean']:.4f} "
                 f"| {s['height_mean']:.4f} | {s['height_std']:.4f} | {s['pitch_mean_deg']:+.2f}° "
                 f"| {s['lateral_asymmetry_cm'][1]:+.2f} cm | {max(s['mirror_rms']['hl~hr']):.3f} "
-                f"| {term or '-'} |"
+                f"| {100 * s.get('steady_frac', 1.0):.1f}% | {term or '-'} |"
             )
 
     lines += ["", "## 2. 镜像 RMS（rad，越小越对称）", "",
@@ -2390,6 +2635,18 @@ def write_report(out_dir: str, groups: dict, meta: dict, figures: list[str]) -> 
                 f"| [{r['q_lo']:+.3f}, {r['q_hi']:+.3f}] | {100 * r['at_limit_frac']:.1f}% "
                 f"| {r['qd_p99']:.2f} | {r['vel_limit']:.1f} | {100 * r['over_vel_frac']:.1f}% |"
             )
+        # A5：说明这些比例的样本量（全 env 的 t×N；|qd| p99 走 ≤600 时刻的均匀子采样）
+        _pop = next((ep.arm_pop for _eps in arm_series.values() for ep in _eps
+                     if ep.arm_pop is not None), None)
+        if _pop is not None:
+            _ne = int(np.atleast_1d(_pop.get("n_env", [0]))[0])
+            _ns = int(np.atleast_1d(_pop.get("n_steps", [0]))[0])
+            _st = int(np.atleast_1d(_pop.get("qd_subsample", [1]))[0])
+            lines.append("")
+            _qd_note = ("全样本" if _st <= 1
+                        else f"每 {_st} 步一采的均匀子采样（≤600 点/env）")
+            lines.append(f"> 口径：**全部 {_ne} 个 env × {_ns} 步**（A5；旧版只有 `env_id=0` "
+                         f"一条轨迹）。\\|qd\\| p99 走 {_qd_note}。")
         sec_no += 1
     terr = per_terrain_table(series)
     if terr:
@@ -2512,6 +2769,12 @@ def load_series_npz(npz_path: str) -> tuple[dict, dict]:
                 if key.startswith(pe_pre):
                     pe[key[len(pe_pre):]] = np.asarray(z[key])
             ep.per_env = pe or None
+            ap = {}
+            ap_pre = _k("ap|")
+            for key in z.files:
+                if key.startswith(ap_pre):
+                    ap[key[len(ap_pre):]] = np.asarray(z[key])
+            ep.arm_pop = ap or None
             ep.joint_names_all = list(info.get("joint_names_all", []))
             if not ep.joint_names_all and ep.joint_pos.ndim == 2 and ep.joint_pos.shape[1] >= 16:
                 # 老版本 npz 没存列名 ⇒ 按本脚本的固定列序重建（12 腿 + 4 轮 [+ 臂/夹爪]）
@@ -2524,6 +2787,7 @@ def load_series_npz(npz_path: str) -> tuple[dict, dict]:
             ep.schedule = [tuple(x) for x in info.get("schedule", [])] or None
             ep.term_counts = info.get("term_counts", {})
             ep.n_done = int(info.get("n_done", 0))
+            ep.reset_grace = int(info.get("reset_grace", 0))
             if ep.joint_pos.size and ep.joint_names_all:
                 ep.mirror_rms = mirror_rms(ep.joint_pos, ep.joint_names_all)
             bucket.append(ep)
@@ -2650,6 +2914,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     harness = Harness(
         env, unwrapped, label_a, args_cli.env_id,
         terrain_gen=env_cfg.scene.terrain.terrain_generator,
+        reset_grace=args_cli.reset_grace,
     )
     # ── 机身姿态命令区间（有 body_pose 才有）──────────────────────────────
     bp = getattr(env_cfg.commands, "body_pose", None)
@@ -2766,6 +3031,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
         "num_envs": int(unwrapped.num_envs),
         "steps": int(args_cli.steps),
         "warmup": int(args_cli.warmup),
+        "reset_grace": int(args_cli.reset_grace),
         "seed": int(args_cli.seed),
         "commands": args_cli.commands,
         "no_push": bool(args_cli.no_push),

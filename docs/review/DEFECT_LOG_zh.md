@@ -31,7 +31,195 @@
 | 2026-10-04 | 新增 **DEF-043**：修 3 个崩溃 bug（`cmd_t` 未定义 / 逐 env 长度不一致 / 地形生成器取不到）+ `POLICY_REPORT_FONT`（云端中文字体）；**云端跑通平地 A/B@10 s**（10 图已拉回） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-04 | 新增 **DEF-044**：取回云端两份产物 —— **多地形分地形表**（粗糙并不比平地差；下坡跟踪最差 0.2326、上坡最易摔 0.10 次/env）+ **SlowVx 治住地形等级回落**（末 1000 `terrain_levels` 3.706(斜率−0.09) → **4.74(+0.095)**、摔倒率 −51%、回报 +33%） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-05 | 新增 **DEF-048**：`policy_report.py` 第四轮（schedule 驱动的多指令组合 / 抗扰扫描 fig13 / 每地形稠密高度图 / 图内英文 / npz 分组）+ **修掉扰动课程空操作的实质 bug**（`EventManager.active_terms` 是 dict，`in` 永远 False ⇒ `disturbance_ramp` 从未生效） | 分支 `codex/ll-train-detail-fix` |
-| 2026-10-06 | 新增 **DEF-049**：fig03 的 pitch 画反（投影重力反解差负号，corr −0.843 → 修后 +0.843，cap12 俯仰误差 1.68° vs 旧代码 5.54°）+ "无姿态指令段误差留空"修成按生效 `body_cmd` 算；限幅改从 actuator 实例读；fig08/报告新增臂"饱和 vs 顶限位"诊断并归因（**臂是 IK 直接驱动、WBC 奖励表里没有臂跟踪项**，joint2/5/6 顶限位 26%/25%/55%、腕关节力矩饱和 41%/33%/61%）；**未处理的改进项已整理进 `NEXT_SESSION_PROMPT.md` 的 A/B 两节** | 分支 `codex/ll-train-detail-fix` |
+| 2026-10-06 | 新增 **DEF-050~053**（`NEXT_SESSION_PROMPT.md` **A 组 4 条全部做完**）：A5 臂负载表改**全 env 口径**（同一份 64 envs 数据里 env0 单独看 joint2 顶限位 0% vs 全 env 21.3%、joint4 饱和 81.2% vs 46.3%）、A6 删掉 IsaacLab 依赖里的 `[IK DEBUG]` 刷屏（15 行 → 0）、A7 新增 `--reset-grace`（默认 25 步）剔除复位瞬态污染、A8 fig04/fig11 支持 `--compare` 双 label | 分支 `codex/ll-train-detail-fix` |
+
+---
+
+### DEF-050 `2026-10-06` 臂负载表只统计 env 0 一条轨迹 ⇒ 同一模型两次采集差 3 倍（A5）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **报告工具缺陷**（统计口径）+ 修复 |
+| 状态 | 已修；本机 64 envs × 900 步重新采集验证 |
+| 关联 | `scripts/reinforcement_learning/rsl_rl/policy_report.py`（`Harness.collect_schedule` / `_arm_limits` / `arm_joint_stats` / `_arm_population` / `ARM_POP_KEYS` / `EpisodeData.arm_pop`）；`NEXT_SESSION_PROMPT.md` A5；DEF-049（臂 IK 归因） |
+
+**1. 现象**
+
+* 触发条件：跑 `policy_report.py` 的臂测试（`--arm-targets 5`，18 s、5 个末端目标）后看
+  `report.md` 第 4 节"机械臂负载与限幅"或 fig08 右下那张"饱和 vs 顶限位"。
+* 可观测证据：这些比例是**单 env（`--env_id 0`）一条轨迹**的抽样 ⇒ 同一模型两次采集，
+  joint5 顶限位占比可以是 **25% 或 91%**（EE 目标是随机采样的，单条轨迹赶上哪几个目标纯看运气）。
+* 影响面：DEF-049 里所有"逐关节 饱和/顶限位"结论（joint2 26%、joint5 25%、joint6 55% 等）
+  都只是在描述 **env 0 那一条轨迹**，不能当成策略的整体行为。
+
+**2. 根因**
+
+* `collect_schedule` 只把**单 env 时序**存进 `EpisodeData.time series`；逐环境累加 `acc`
+  当时只覆盖"分地形"用的 err/height/tau/duty，没有给臂关节留位置 ⇒
+  `arm_joint_stats(ep, ...)` 只能读 `env_id=0` 那一列。
+
+**3. 修正**
+
+* `Harness.__init__`：记 `arm_idx` / `arm_names`；新增 `_arm_limits()` 取臂关节的
+  力矩 / 位置 / 速度限幅（缺失处保持 NaN，由调用方决定"算不算触发"）。
+* `collect_schedule`：逐环境累加（内存 O(N·J)，**不存 (T,N,J) 大数组**）——
+  `|tau|` 之和 / 峰值、饱和计数、关节角 min/max、顶限位计数、`|qd|` 之和 / 超速计数；
+  `|qd|` 的 p99 需要分布 ⇒ 均匀抽 **≤600 个时刻/env** 入池（全体 env 混在一起算 p99）。
+* `EpisodeData.arm_pop` 存汇总（`ARM_POP_KEYS` + `n_env` / `n_steps` / `qd_subsample`）；
+  `arm_joint_stats` **优先**用它；长度对不上或老 npz（无 `ap|`）自动退回旧口径。
+  npz 用 `ap|*` 存取；`report.md` 的表下加一行口径脚注；fig08 右下角同一份数据。
+* 备选（否掉）：存完整 `(T,N,J)` 再统一算 —— 云端 256 envs × 3600 步 × 3 个张量
+  ≈ 100 MB+/label，为了一个 p99 不值。
+
+**4. 结果（验收）**
+
+* 本机 64 envs / 900 步（`--arm-targets 5`，cap12 `model_19999.pt`）：
+  `> 口径：**全部 64 个 env × 900 步**（旧版只有 env_id=0 一条轨迹）`；
+  逐关节 —— joint1 饱和 7.0%、joint2 **12.3%**（顶限位 **21.3%**）、joint4 **46.3%**、
+  joint5 **53.2%**（顶限位 65.0%）、joint6 39.5%、两个夹爪顶限位 **100%**、
+  joint4/5 的 `|qd|` p99 = 5.00（超速 84.0% / 35.7%）。
+* **同一次采集里"env0 单看" vs "全 env"的差别**（同一份 `data.npz` 复算）：
+
+  | 关节 | 饱和%（env0） | 饱和%（全 64） | 顶限位%（env0） | 顶限位%（全 64） | `\|qd\|` p99（env0） | （全 64） |
+  |---|---|---|---|---|---|---|
+  | arm_joint1 | 0.0 | **7.0** | 0.0 | **4.2** | 1.62 | **2.65** |
+  | arm_joint2 | 0.0 | **12.3** | 0.0 | **21.3** | 1.08 | **2.95** |
+  | arm_joint4 | **81.2** | **46.3** | 0.0 | 4.9 | 5.00 | 5.00 |
+  | arm_joint6 | 33.4 | **39.5** | 9.2 | **30.2** | 3.00 | 3.00 |
+
+  ⇒ 单条轨迹既会**漏**（joint2 顶限位 0% vs 21.3%）也会**放大**（joint4 饱和 81% vs 46%），
+  方向不确定 —— 这正是"必须全 env"的理由。
+* 回归：`--from-npz` 渲染整份报告通过（无 WARN）；老 npz（无 `ap|`）仍能出图（自动退回旧口径）；
+  `py_compile` 通过。
+* 遗留：`--arm-targets 0`（不采臂组）时 fig08 走 `sched` 组，该组也走 `collect_schedule`，
+  同样有全 env 口径；`collect()`（逐档命令）没做臂汇总（那里本来也不写臂表）。
+
+---
+
+### DEF-051 `2026-10-06` IsaacLab 依赖里 `[IK DEBUG]` 每次建环境刷 15 行（A6）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **依赖侧遗留调试打印**（不在本仓库 git 里的文件） |
+| 状态 | 已删 |
+| 关联 | `D:\nvidia-isaac-sim\IsaacLab-5.1.0\source\isaaclab\isaaclab\envs\mdp\actions\task_space_actions.py`（`CommandDrivenIKAction.__init__`）；`TODO_zh.md` P2 工程债"依赖被本地魔改"；`NEXT_SESSION_PROMPT.md` A6 |
+
+**1. 现象**
+
+* 每个建 IK 动作项的任务（含所有 WBC / IK 任务）启动时都打一段 `====` 分隔的 15 行
+  `[IK DEBUG] ...`（is_fixed_base / 全关节名 / 解析出的 arm joint_ids / body_idx /
+  jacobi 下标 / 越界校验 / 腿轮重叠校验）。
+* 影响面：日志噪声；`grep` 关键行时容易被淹；冒烟/回归日志里每次都出现（与本次改动无关）。
+
+**2. 根因**
+
+* 这是**本地魔改**（`TODO_zh.md` P2 记过：`[IK DEBUG] 打印 + 私有成员`），
+  目的是早期排查"关节索引错位"。文件属于 editable 安装的 IsaacLab 检出（不在本仓库）。
+
+**3. 修正**
+
+* 整块删除（含 `expected_jac_dof_dim` 越界校验与 `overlap_check` 重叠校验）；
+  其上方原有的 `logger.info("Resolved joint names ...")` 保留 ⇒ 回到上游语义，
+  真出问题还能从 info 日志看解析结果。
+* 备选（否掉）：① 降级成 `logger.debug` —— 依赖侧仍留魔改，以后 pull 上游还会冲突；
+  ② 只删 `print` 保留校验 —— 校验用的 `expected_jac_dof_dim` 要一起留，等于只省一半噪声。
+
+**4. 结果（验收）**
+
+* 同一条报告命令（`policy_report.py --headless ... --num_envs 64`）：
+  `grep -c "IK DEBUG"` **15 → 0**（改动前的日志 `logs/smoke/a5_check.log` 15 行、
+  改动后 `logs/smoke/a7_check.log` 0 行）。
+* `ast.parse` 语法检查通过（该文件在只读挂载区，`py_compile` 无法写 `__pycache__`）。
+* 遗留：这是**依赖侧**修改，重新 clone / 重装 IsaacLab 会丢；要长期保留得给上游提 issue
+  或在本仓库放一份 patch（尚未做，见 `TODO_zh.md` P2）。
+
+---
+
+### DEF-052 `2026-10-06` 高速命令的 `err_vel_xy` 被"复位瞬态"污染（A7）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **报告工具缺陷**（统计口径）+ 修复 |
+| 状态 | 已修（`--reset-grace`，默认 25 步） |
+| 关联 | `scripts/reinforcement_learning/rsl_rl/policy_report.py`（`--reset-grace` / `Harness.reset_grace` / `EpisodeData.steady` / `steady_mask` / `summarize`）；`NEXT_SESSION_PROMPT.md` A7 |
+
+**1. 现象**
+
+* 给 `--commands` 传高速档（3 / 5 m/s）时，机器人跑出地形或摔倒 → **复位**（摆回原点、
+  速度≈0）→ 误差瞬间变成"接近命令值"（3 m/s 档出现 0.239、5 m/s 档出现 6.20）。
+* 这些样本被算进 `err_vel_xy` 的均值 ⇒ 高速档的误差数字**主要反映"摔了几次"**，
+  而不是"跑得准不准"；跨模型比较时谁的摔倒率高谁的数字就难看（与跟踪能力脱钩）。
+
+**2. 根因**
+
+* `collect()` 的逐 env 累加与 `summarize()` 的均值都把**复位后的前若干步**当成稳态样本；
+  而复位是"把机器人瞬移回原点"的非物理事件。
+
+**3. 修正**
+
+* 新增 `--reset-grace N`（默认 **25**，0 = 关闭）：`collect()` 里维护 `since_reset`
+  （`dones` 即清零、否则 +1），采样时 `since_reset > N` 才算稳态；
+  均值类指标（err_xy / err_yaw / 高度 mean·std / pitch·roll std / 力矩 RMS / 功率 /
+  轮速 / 占空比）的分母改成**稳态样本数**，`done`（终止次数）与 `tau_rms_max`（峰值）
+  仍是原始口径（否则"越摔越好看"）。
+* 记录 `EpisodeData.steady`（+`reset_grace`）并落进 npz（`steady` 字段 / meta `reset_grace`）；
+  `summarize()` 的均值类字段走 `steady_mask`（老 npz 无该字段 ⇒ 自动全量，行为不变）。
+* 报告与日志可见：`report.md` 第 1 节新增 **`稳态占比`** 列 + 口径说明行；
+  采集时逐档打印"复位瞬态剔除 x%"。
+* 备选（否掉）：把复位后的样本直接丢弃整段 episode（会同时丢掉"摔倒"这一真实信号，
+  而摔倒率本身就是重要指标，所以改成"分口径"：均值剔除、终止次数保留）。
+
+**4. 结果（验收）**
+
+* `--num_envs 8 --steps 60 --warmup 20 --commands "0,0,0;1.0,0,0"`：
+  两档都打印"复位瞬态剔除 **43.3%**"（= 26/60，正是 grace 25 + 首次复位那一步），
+  `report.md` 第 1 节出现 `稳态占比 56.7%`；`summary.json` 里
+  `reset_grace=25` / `steady_frac=0.5667` / `err_vel_xy_mean=0.0724`（(0,0,0) 档，
+  0.5/1.0 档见 `logs/smoke/a7_check/`）。
+* `--num_envs 64 --steps 100` 的完整跑（`logs/smoke/a5_full/`）同样打印剔除 **26.0%**
+  （= 26/100）⇒ 剔除量只与 grace 和复位次数有关，符合预期。
+* 回归：`--from-npz` 渲染老 npz（无 `steady`）通过，均值与改动前一致（等价于 `--reset-grace 0`）。
+* 遗留：**`collect_schedule`（fig01/02/03/12 用的连续轨迹）没有加这个掩码** ——
+  那里的切换瞬态本身就是被测对象；若以后要在 sched 上也剔除复位瞬态，需要按段判断
+  （`transition_metrics` 只看段内，不受影响）。高速档的结论仍建议**同时看** `terrain_levels`
+  曲线或 `done`，别只引用 err。
+
+---
+
+### DEF-053 `2026-10-06` `--compare` 时 fig04（步态）/ fig11（分地形）只画 A（A8）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **报告工具缺陷**（A/B 对比不完整）+ 修复 |
+| 状态 | 已修 |
+| 关联 | `scripts/reinforcement_learning/rsl_rl/policy_report.py`（`fig04_gait` / `fig11_per_terrain`）；`NEXT_SESSION_PROMPT.md` A8 |
+
+**1. 现象**
+
+* `--compare` 出 A/B 报告时，fig04 与 fig11 内部写死 `labels[0]` ⇒ 两张图**只画 A**，
+  而图题/报告其它部分都在讲 A/B ⇒ 看图的人会以为"两者一样"。
+
+**2. 根因**
+
+* 这两张图的布局是"每档命令一列 / 每地形一组"，加第二个 label 时没有留位置，
+  实现时就直接取了第一个 label。
+
+**3. 修正**
+
+* fig04：**每个 label 占一组 4 行**（4 行 × label 数，行标 `label:leg`）；
+  占空比那栏按 `(label, 命令)` 分组画柱（B 用浅色 + 斜纹）；只有 1 个 label 时布局与旧版一致。
+* fig11：五个面板按 `(label, 命令)` 分组画柱（B 浅色 + 斜纹），柱宽按总根数收缩；
+  样本量面板标题注明用的是哪个 label；两张图的 suptitle 加 `[A/B: A vs B]`。
+* 备选（否掉）：只在图题写"仅画 A" —— 报告里 10 张图有 8 张是 A/B，缺两张会让
+  "步态/分地形到底有没有差别"这个最常问的问题没法直接看。
+
+**4. 结果（验收）**
+
+* 合成 npz（2 label × 2 命令 × 2 地形）`--from-npz` 渲染：fig04 **855×1710**（8 条触地带 +
+  占空比栏）、fig11 **1350×675**，`report.md`/`summary.json` 正常，无 WARN
+  （`logs/smoke/a8_check/`；`fig10_compare` 也一起出了）。
+* 单 label 回归：`logs/smoke/a7_check/`（真实采集、无 `--compare`）图数与布局不变。
+* 遗留：fig04 的 A/B 是"上下两组"，如果要"同一列叠画"需要另一套配色（当前够用）。
 
 ---
 

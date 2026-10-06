@@ -208,6 +208,10 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
 
 【2026-10-06 收尾：最新状态 + **未处理清单**（照这个往下做）】
 
+> **2026-10-06 晚更新**：**A 组 4 条已全部做完**（A5/A6/A7/A8 → DEF-050~053，见下面 A 节里
+> 每条的 `[x]` 与实测数字）——本机实测、**没有重训**。**B 组 5 条仍未动，
+> B1（用修好的扰动课程重跑 20k + `--push-sweep` 验收）最高优先。**
+
 * 最新提交：**`7a52b9c`**（`c50bd86` = DEF-049 的功能修复；`da1c228`/`7a52b9c` 是
   臂表口径修正 + 文档），分支 `codex/ll-train-detail-fix`。
   **7 条云端长跑都已跑完并拉回本机**：`cloud_soft20k`(20k) / `cloud_cap12_20k`(20k) /
@@ -236,18 +240,21 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
 * [x] **A4 fig08/报告新增臂诊断**（同日已做）：fig08 右下角 = "饱和时间占比 vs 顶限位时间占比"；
   `report.md` 新增《机械臂负载与限幅》表（逐关节 |tau| 均值/峰值、限幅、饱和%、位置范围/限位、
   顶限位%、|qd| p99、速度限幅、超速%）。
-* [ ] **A5（新增，5 分钟）臂负载表只统计 `env_id=0` 那一条轨迹**（`arm` 组、18 s）。
-  想让结论更稳：在 `per_env` 累加里加臂的 `|tau|`/`sat`/`at_limit` 统计，再改成"全 env 平均"
-  （现在单 env，随机采样的 EE 目标会让不同次采集的比例差很多：同一模型两次跑，
-  joint5 顶限位占比可以是 25% 或 91%）。
-* [ ] **A6（10 分钟）`[IK DEBUG]` 刷屏**：`CommandDrivenIKAction.__init__` 每次建环境都打印
-  全部 24 个关节名 + 解析结果（`[IK DEBUG] ...`）。建议降级成 `logger.debug` 或加开关。
-* [ ] **A7（30 分钟）高速命令的误差被"复位"污染**：`--commands` 里给 3/5 m/s 时，
-  机器人跑出地形/摔倒→复位→速度≈0，`err_vel_xy` 就被拉到接近命令值（旧版 3 m/s 0.239、
-  5 m/s 6.20 就是这么来的）。要么在统计里**剔除复位后 N 步**（推荐 N≈25），
-  要么这类问题只看 `terrain_levels` 曲线，别引用 err。
-* [ ] **A8（可选）fig04/fig11 只画 A 曲线**：`--compare` 时 fig04（步态）与 fig11（分地形）
-  只取第一个 label。要么加双 label 分组，要么在图题里写明。
+* [x] **A5 臂负载表改全 env 口径**（2026-10-06 完成，DEF-050）：`EpisodeData.arm_pop`
+  （`ARM_POP_KEYS`）逐环境累加，`|qd|` p99 走 ≤600 点/env 子采样；`arm_joint_stats` 优先用它、
+  老 npz 自动退回旧口径；报告表下加"全部 N env × M 步"脚注。本机 64 envs × 900 步实测：
+  joint2 顶限位 **21.3%**、joint4 饱和 46.3%、joint5 饱和 53.2%（顶限位 65.0%）；
+  **同一份数据里 env0 单看**是 joint2 顶限位 0%、joint4 饱和 81.2% ⇒ 单条轨迹会漏也会放大。
+  产物 `logs/smoke/a5_full/`。
+* [x] **A6 `[IK DEBUG]` 刷屏**（2026-10-06 完成，DEF-051）：整块删除
+  （`D:\nvidia-isaac-sim\IsaacLab-5.1.0\...\task_space_actions.py`，**依赖侧文件、不在本仓库**），
+  同一条报告命令 `grep -c "IK DEBUG"` **15 → 0**；保留上面的 `logger.info`。
+* [x] **A7 高速命令误差被"复位"污染**（2026-10-06 完成，DEF-052）：新增 `--reset-grace N`
+  （默认 **25**，0 = 关闭），均值类指标剔除复位后前 N 步，`done`/峰值保持原口径；
+  报告第 1 节新增 `稳态占比` 列 + 采集时打印剔除比例（60 步档 → 43.3%、100 步档 → 26.0%）。
+* [x] **A8 fig04/fig11 只画 A**（2026-10-06 完成，DEF-053）：fig04 每个 label 占一组 4 行、
+  fig11 按 (label, 命令) 分组画柱（B 浅色 + 斜纹）；`--from-npz` 合成 2 label npz 渲染通过
+  （fig04 855×1710、fig11 1350×675，无 WARN）。
 
 ━━━ B. 训练 / 物理侧（要改代码 + 重训）━━━
 

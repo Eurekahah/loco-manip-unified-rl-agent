@@ -27,6 +27,7 @@
 | 2026-10-05 | 新增第十六节 **logs 清盘 + 模型清单文档**：删掉 117 个"冒烟/测试/探针"run（释放 0.97 GB，剩 55 个正式 run）；新增 **`docs/model_zoo_zh.md`**（最佳模型 → play 命令 → 实测指标的可维护索引）（DEF-045） | `codex/ll-train-detail-fix` |
 | 2026-10-05 | 新增第十七节 **可视化第四轮 + 扰动课程实质 bug**：`policy_report.py` 第四轮（schedule 驱动的多指令组合 / `--push-sweep` 抗扰扫描 / 每地形稠密高度图 / 图内英文 / npz 分组）；修掉 `apply_event_scale` 因 `EventManager.active_terms` 是 dict 而**从未生效**的扰动课程；`git rm` 4 个老 test 脚本；旧报告目录清空后用新工具重跑（DEF-048） | `codex/ll-train-detail-fix` |
 | 2026-10-06 | **DEF-049 收尾**：fig03 的 pitch 符号 bug 已修并**云端重采验证**（corr −0.843 → **+0.843**，cap12 俯仰跟踪 1.68° vs 旧代码 5.54°）；"无姿态指令段误差留空"改成按生效 `body_cmd` 算；限幅/速度限幅改从 actuator 实例读；fig08 + `report.md` 新增**机械臂负载与限幅**诊断（结论：臂是 IK 直接驱动、WBC 奖励表无臂跟踪项，joint2/5/6 顶在限位上）。**未处理项清单在 `NEXT_SESSION_PROMPT.md` 的 A/B 两节** | `codex/ll-train-detail-fix` |
+| 2026-10-06 | 新增第十八节 **A 组（报告/工具侧）4 条收尾**：臂负载改全 env 口径（A5）、删依赖里的 `[IK DEBUG]`（A6）、`--reset-grace` 剔除复位瞬态（A7）、fig04/fig11 支持 A/B 双 label（A8）；全部本机实测，**未重训** | `codex/ll-train-detail-fix` |
 
 ---
 
@@ -554,6 +555,66 @@ cap12 的摔倒率 **3.23 vs 7.10 次 / env / 分钟（−55%）**、最大瞬�
 
 多地形 push 扫描（同一份报告）：`1x1` 0.15 → `2x2` 0.69 → `3x3` **4.88** 次/env/分钟，
 最大瞬时误差 1.85 → 4.50 → 5.89 m/s ⇒ 地形上的抗扰余量比平地小（平地 cap12 在 3x3 是 3.23）。
+
+---
+
+## 十八、A 组（报告/工具侧）4 条收尾（2026-10-06，分支 `codex/ll-train-detail-fix`）
+
+`NEXT_SESSION_PROMPT.md` 的 A 组清单（不需要训练、本机就能做）**全部做完**，
+每条都本机实测验收；**没有重训、没有改训练口径**（B 组训练侧 5 条仍未动）。
+
+**a) A5 臂负载表改成"全 env"口径**（DEF-050）
+
+* 以前 `report.md` 第 4 节 / fig08 右下角的比例只统计 `env_id=0` **一条轨迹**
+  ⇒ 同一模型两次采集 joint5 顶限位可以是 25% 或 91%。
+* 现在 `collect_schedule` 逐环境累加（O(N·J)，不存大数组），`|qd|` p99 用 ≤600 点/env 的
+  均匀子采样盘；报告表下写明"全部 N 个 env × M 步"。老 npz 自动退回旧口径。
+* 实测（本机 64 envs × 900 步，cap12 `model_19999.pt`，`logs/smoke/a5_full/`）：
+  joint1 饱和 7.0% / joint2 12.3%（顶限位 **21.3%**）/ joint4 46.3% / joint5 **53.2%**
+  （顶限位 65.0%）/ joint6 39.5% / 夹爪顶限位 100%；joint4、joint5 的 `|qd|` p99 = 5.00。
+  **同一份数据里 env0 单看 vs 全 env**：joint2 顶限位 0% → 21.3%（漏）、
+  joint4 饱和 81.2% → 46.3%（放大）⇒ 单条轨迹的方向不确定，必须全 env。
+
+**b) A6 删掉 IsaacLab 依赖里的 `[IK DEBUG]` 刷屏**（DEF-051）
+
+* `task_space_actions.py`（editable 安装的 IsaacLab-5.1.0，不在本仓库）里那段
+  `[IK DEBUG]` 调试块整块删除（15 行/次 → **0 行**），`logger.info` 的解析结果打印保留。
+* 验收：同一条报告命令，`grep -c "IK DEBUG"` 15 → 0；`ast.parse` 通过。
+
+**c) A7 `--reset-grace`（默认 25 步）剔除复位瞬态**（DEF-052）
+
+* 高速档摔倒→复位→速度≈0 会把 `err_vel_xy` 拉向命令值（旧数字：3 m/s → 0.239、
+  5 m/s → 6.20）。现在均值类指标剔除"复位后前 25 步"，`done`/峰值仍是原始口径，
+  报告第 1 节新增 **`稳态占比`** 列 + 采集时打印剔除比例。
+* 实测：`--steps 60` 打印剔除 **43.3%**（26/60）、`--steps 100` 打印 **26.0%**（26/100）；
+  老 npz（无 `steady`）渲染结果与改动前一致。
+
+**d) A8 fig04/fig11 支持 A/B 双 label**（DEF-053）
+
+* fig04：每个 label 一组 4 行（行标 `label:leg`）+ 占空比按 (label, 命令) 分组；
+  fig11：五个面板按 (label, 命令) 分组画柱，样本量面板标注用的是哪个 label。
+* 验收：合成 2 label npz 走 `--from-npz` 渲染出 fig04 **855×1710**、fig11 **1350×675**，
+  无 WARN；单 label 真实采集（`logs/smoke/a7_check/`）布局不变。
+
+**产物/复现**
+
+```
+# a) 全 env 臂负载（本机 ~11 min）
+python scripts/reinforcement_learning/rsl_rl/policy_report.py --headless \
+    --task History-Adaptation-Deeprobotics-M20-play-v0 \
+    --checkpoint logs/rsl_rl/history_adaptation/2026-09-30_19-36-00_cloud_cap12_20k/model_19999.pt \
+    --num_envs 64 --commands "0,0,0;1.0,0,0" --steps 100 --warmup 30 --seg-s 0.2 \
+    --arm-targets 5 --out-dir logs/smoke/a5_full
+# c) 复位瞬态（本机 ~1 min）
+python scripts/reinforcement_learning/rsl_rl/policy_report.py --headless ... --steps 60 \
+    --warmup 20 --commands "0,0,0;1.0,0,0" --out-dir logs/smoke/a7_check
+# d) 双 label 出图（不启动环境采集，只渲染）
+python scripts/reinforcement_learning/rsl_rl/policy_report.py --headless \
+    --from-npz logs/smoke/_a8_synth/data.npz --out-dir logs/smoke/a8_check
+```
+
+⇒ 报告侧口径现在与"训练/部署"口径一致（同一份数据、全 env、稳态窗口），
+下一步按 `NEXT_SESSION_PROMPT.md` 的 **B1** 起：用修好的扰动课程重跑全长 20k 并在云端出 A/B 报告。
 
 ---
 
