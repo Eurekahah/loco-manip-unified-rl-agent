@@ -26,6 +26,7 @@
 | 2026-10-03/04 | 新增第十五节 **可视化工具二三轮 + 云端跑通**：分地形（fig11）/指令切换（fig12）/root_z 澄清/10 s/`--from-npz`/云端中文字体；修 3 个崩溃 bug；云端出**平地 A/B@10 s**（10 图）与**多地形分地形（256 envs）**；结案"SlowVx 治住地形等级回落"（DEF-042/043/044） | `codex/ll-train-detail-fix` |
 | 2026-10-05 | 新增第十六节 **logs 清盘 + 模型清单文档**：删掉 117 个"冒烟/测试/探针"run（释放 0.97 GB，剩 55 个正式 run）；新增 **`docs/model_zoo_zh.md`**（最佳模型 → play 命令 → 实测指标的可维护索引）（DEF-045） | `codex/ll-train-detail-fix` |
 | 2026-10-05 | 新增第十七节 **可视化第四轮 + 扰动课程实质 bug**：`policy_report.py` 第四轮（schedule 驱动的多指令组合 / `--push-sweep` 抗扰扫描 / 每地形稠密高度图 / 图内英文 / npz 分组）；修掉 `apply_event_scale` 因 `EventManager.active_terms` 是 dict 而**从未生效**的扰动课程；`git rm` 4 个老 test 脚本；旧报告目录清空后用新工具重跑（DEF-048） | `codex/ll-train-detail-fix` |
+| 2026-10-06 | **DEF-049 收尾**：fig03 的 pitch 符号 bug 已修并**云端重采验证**（corr −0.843 → **+0.843**，cap12 俯仰跟踪 1.68° vs 旧代码 5.54°）；"无姿态指令段误差留空"改成按生效 `body_cmd` 算；限幅/速度限幅改从 actuator 实例读；fig08 + `report.md` 新增**机械臂负载与限幅**诊断（结论：臂是 IK 直接驱动、WBC 奖励表无臂跟踪项，joint2/5/6 顶在限位上）。**未处理项清单在 `NEXT_SESSION_PROMPT.md` 的 A/B 两节** | `codex/ll-train-detail-fix` |
 
 ---
 

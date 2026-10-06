@@ -206,53 +206,97 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
   * 文档是 CRLF（core.autocrlf=true）：用 apply_patch 改多行上下文时容易匹配失败，
     建议一条一条改、或先确认目标行的行尾。
 
-【2026-10-05 收尾：最新状态 + 下一步计划（照这个往下做）】
+【2026-10-06 收尾：最新状态 + **未处理清单**（照这个往下做）】
 
-* 最新提交：**`17a2fe3`（DEF-048）**。**7 条云端长跑都已跑完并拉回本机**：
-  `cloud_soft20k`(20k) / `cloud_cap12_20k`(20k) / `cloud_roughslopes20k`(20k) /
-  `cloud_slowvx20k`(20k) / `abl_pushonly_10k` / `abl_rewardonly_10k` / `abl_legacyall_10k`(10k)。
-  云端只剩实例 `bbc64d91a6-99f1820e`（**ssh -p 1237 root@10.60.144.11**，密码问用户/看旧记录）
-  **运行中**，其它实例在控制台里都是「已关机」。
-* **本 session（DEF-048）做了什么**：
-  ① `policy_report.py` 第四轮（用户 2026-10-05 的 12 条）：schedule 驱动的一条 16 s 连续轨迹
-     （vx/vy/wz 13 段 + height/pitch/roll 7 段）喂 fig01/02/03/05/06/07；fig04 改成"每档速度指令一列"；
-     fig08 臂测试拉长到 3 s×(目标数+1) + 多目标 + **臂关节力矩**（替掉没意义的关节角）；fig09 改成
-     **每个子地形一张稠密高度热力图**（`tricontourf`）+ 裁剪后的轨迹；新增 **fig13 push 抗扰扫描**
-     （`--push-sweep "力度,频率;…"` ⇒ 生还率 / 尖刺频次 / 恢复时间，1x1 是训练口径）；**图内文字全英文**；
-     npz 分 `cmd/sched/arm/push` 四组键（`--from-npz` 兼容老 npz）。
-  ② **挖出并修掉一个实质 bug**：`apply_event_scale` 用 `EventManager.active_terms` 判"事件是否存在"，
-     而它是 `{模式: [名]}` 的 **dict** ⇒ `in` 永远 False ⇒ **扰动课程从上线起一直是空操作**
-     （push 从第 0 步就是全量 ±2/±1/yaw±0.52）。已新增 `_active_event_term_names()` 摊平
-     （`curriculums.py` + `probe_ee_curriculum.py`）。**已跑完的 run 都不吃这个修复**，
-     做对照时要记住它们是"全量扰动从第 0 步起"。
-  ③ `git rm` 掉 4 个老 test 脚本；旧报告目录全部清空（`report_terrain256/` 等已被新报告取代）。
-  ④ 云端用新工具重跑了**平地 A/B（cap12 vs 旧代码）+ push 扫描**和**多地形（SlowVx，256 envs，
-     `--terrain-grid keep`）+ push 扫描**，产物路径与数字见 `DONE_zh.md` 第十七节。
-* **已定稿的结论（不要再重跑验证）**：
+* 最新提交：**`c50bd86`（DEF-049）**，分支 `codex/ll-train-detail-fix`。
+  **7 条云端长跑都已跑完并拉回本机**：`cloud_soft20k`(20k) / `cloud_cap12_20k`(20k) /
+  `cloud_roughslopes20k`(20k) / `cloud_slowvx20k`(20k) / `abl_pushonly_10k` /
+  `abl_rewardonly_10k` / `abl_legacyall_10k`(10k)。
+  云端实例 `bbc64d91a6-99f1820e`（**ssh -p 1237 root@10.60.144.11**，密码问用户/看旧记录）
+  **运行中且空闲**（已同步到 `c50bd86`），其它实例在控制台里都是「已关机」。
+* 两份**新报告**（第四轮工具 + DEF-049 修复，均已拉回本机）：
+  `logs/smoke/report_flatAB_new/`（平地 cap12 vs 旧代码 + push 扫描 + 臂负载）
+  `logs/smoke/report_terrain_new/`（多地形 SlowVx，256 envs / `--terrain-grid keep`）。
+  旧报告目录已删；**旧 npz 不要再用**（fig03 的 pitch 符号是错的，见下）。
+
+━━━ A. 报告/工具侧（**不需要训练**，本机就能做）━━━
+
+* [x] **A1 fig03 的 pitch 画反**（2026-10-06 已修）：采集时用投影重力反解，`asin(-g_b[0])`
+  与实际俯仰差一个负号（实测 corr = **−0.843**）；已统一改成
+  `math_utils.euler_xyz_from_quat(root_quat_w)`（与 `body_pitch/roll_tracking` 奖励同口径）。
+  重采后 corr = **+0.843**、pitch 稳态误差 cap12 **1.68°** vs 旧代码 5.54°。
+  **注意**：老 npz 里存的还是旧符号，只能重plot不出来，要用就重新采集。
+* [x] **A2 fig03 右列"空一截"**（同日已修）：前 13 段是纯速度段（没有姿态指令），
+  旧 `seg_metrics` 只在"该段有姿态指令"时才算误差 ⇒ NaN。现在一律对着**该段真正生效的
+  `body_cmd`** 算（速度段 = 重置时采样的站姿），20 段都有数据。
+* [x] **A3 限幅元数据"不可用"**（同日已修）：以前读 `robot.data.joint_effort_limits`（全是
+  1e9 占位值）；现在从 **actuator 实例**读 `effort_limit/velocity_limit` +
+  `robot.data.joint_pos_limits`（轮的 ±inf 逐关节置 NaN）。实测腿 76.4 / 轮 21.6 / 臂 100 / 夹爪 10 N·m。
+* [x] **A4 fig08/报告新增臂诊断**（同日已做）：fig08 右下角 = "饱和时间占比 vs 顶限位时间占比"；
+  `report.md` 新增《机械臂负载与限幅》表（逐关节 |tau| 均值/峰值、限幅、饱和%、位置范围/限位、
+  顶限位%、|qd| p99、速度限幅、超速%）。
+* [ ] **A5（新增，5 分钟）臂负载表只统计 `env_id=0` 那一条轨迹**（`arm` 组、18 s）。
+  想让结论更稳：在 `per_env` 累加里加臂的 `|tau|`/`sat`/`at_limit` 统计，再改成"全 env 平均"
+  （现在单 env，随机采样的 EE 目标会让不同次采集的比例差很多：同一模型两次跑，
+  joint5 顶限位占比可以是 25% 或 91%）。
+* [ ] **A6（10 分钟）`[IK DEBUG]` 刷屏**：`CommandDrivenIKAction.__init__` 每次建环境都打印
+  全部 24 个关节名 + 解析结果（`[IK DEBUG] ...`）。建议降级成 `logger.debug` 或加开关。
+* [ ] **A7（30 分钟）高速命令的误差被"复位"污染**：`--commands` 里给 3/5 m/s 时，
+  机器人跑出地形/摔倒→复位→速度≈0，`err_vel_xy` 就被拉到接近命令值（旧版 3 m/s 0.239、
+  5 m/s 6.20 就是这么来的）。要么在统计里**剔除复位后 N 步**（推荐 N≈25），
+  要么这类问题只看 `terrain_levels` 曲线，别引用 err。
+* [ ] **A8（可选）fig04/fig11 只画 A 曲线**：`--compare` 时 fig04（步态）与 fig11（分地形）
+  只取第一个 label。要么加双 label 分组，要么在图题里写明。
+
+━━━ B. 训练 / 物理侧（要改代码 + 重训）━━━
+
+* [ ] **B1【最高优先】用修好的扰动课程重跑一条 20k**：`apply_event_scale` 的
+  `EventManager.active_terms` 判断 bug 让 `disturbance_ramp` **从上线起就是空操作**
+  （push 第 0 步就全量 ±2/±1/yaw±0.52）。修复后要验证：
+  训练期 `Episode_Termination/root_height_below_minimum` **前 2000 iter 的均值**是否明显低于
+  `cloud_slowvx20k`（后者没有爬升），以及**末段 push 3x3 的生还率是否更好**（用
+  `policy_report.py --push-sweep "1,1;2,2;3,3"` 比）。命令照 `queue_reports2.sh` 的写法改 task/run_name。
+* [ ] **B2 机械臂 5 条改进**（DEF-049 的结论，按性价比排序）：
+  1. `_resample_ee_goal*` 加**可达性过滤**（IK 解一次 / 检查所需关节角是否在限位内）——
+     现在只查笛卡尔碰撞盒 + 地面高度，会采到关节超程的目标；
+  2. IK 输出加**关节限位 clamp**（`DifferentialIKController.compute` 返回的是
+     `joint_pos + delta`，下游只按 effort 裁剪）⇒ 让"到不了"表现为停在限位而不是硬顶 100 N·m；
+  3. 若确实要臂跟踪精度：把 `arm_ee_pos_tracking`/`arm_ee_ori_tracking` 加进 **WBC 奖励表**
+     （现在 `WBCRewardsCfg` 里**没有**这两项、`params/env.yaml` 可查），并把姿态 `std`
+     从 0.5 rad（≈29°）收紧——否则奖励早饱和、梯度≈0；
+  4. 夹爪 `stiffness=4000` 配 ±0.035 rad 行程 / 10 N·m 限幅 ⇒ 误差 >0.0025 rad 就顶满
+     （实测 100% 时间在行程端、饱和 95%+）；把刚度降到匹配量级；
+  5. sim2real：臂 `velocity_limit=3.0` 在 `DelayedPDActuator` 里**只参与力矩裁剪、不限速**
+     （实测腕关节 |qd| p99 到 5.0 rad/s，超速时间占比 72~97%）⇒ IK 层限速或加进保护逻辑。
+  * 现状数字（cap12 / 旧代码，18 s 臂测试）：joint2 顶上限 3.140 rad 占 **26% / 33%**、
+    joint5 顶下限占 **25% / 61%**、joint6 顶下限占 **55% / 60%**；
+    `|tau|≥99 N·m` 时间占比 joint4 **41%/55%**、joint5 33%/82%、joint6 61%/61%；
+    EE 稳态误差：位置可到 18 cm、姿态 55°~99°（且那几段腕关节 100% 在饱和）。
+* [ ] **B3 坡面短板专项（2~10k iter）**：下坡速度跟踪最差 + 上坡最易摔。候选：
+  a. "只放坡面"的地形变体（照 `ROUGH_SLOPES_FLAT_TERRAINS_CFG` 把比例改成上下坡各 0.5）跑 10k；
+  b. 或单独调 `track_lin_vel_xy_exp` / `track_ang_vel_z_exp` 在坡面段的权重/std（先用 a 定位）。
+* [ ] **B4 把 SlowVx 配方落成默认**：四个 v_x 台阶（150k/200k/250k/300k 环境步）写进
+  `RoughSlopesEnvWBCConfig.__post_init__`，保留 `-play-` 变体。
+* [ ] **B5 其他老账**（都在 TODO_zh.md）：s3 臂摆动鲁棒性、执行器刚度课程、
+  低层 known_issues ⑭⑮、`mdp/__init__.py` 星号导入遮蔽（影响面小）、
+  `vr_extented` 的"无超时线程"（已评估降级）。
+
+━━━ C. 已定稿、**不要再重跑验证**的结论 ━━━
+
   ① `max_noise_std` 默认 **1.2**（DEF-039）；
   ② "右后腿撇"的根因是 **⑫**（`HeightInvariantEECommand.reset()`），不是镜像符号（DEF-040 §3④）；
   ③ 静止漂移/步态/抗扰：`cap12_20k` 全面最好；固定命令 eval 三档 0.1014/0.1301/0.1594、摔倒率≈0；
+     新报告里九档命令（含 vy/wz）也是**全胜**旧代码，push 外推 3x3 摔倒率 **3.23 vs 7.10** 次/env/min；
   ④ **SlowVx（v_x 课程台阶 ×2 + cap1.2）治住了地形等级回落**：末 1000 `terrain_levels`
-     3.706（斜率 −0.09/1k）→ **4.74（+0.095/1k，还在涨）**、`bad_orientation_2` −51%、回报 +33%（DEF-044）；
-  ⑤ 多地形分地形：粗糙 0.0717 ＜ 平地 0.0966；**下坡跟踪最差、上坡最易摔**。
-     ⚠️ 但 3/5 m/s 的高档命令结果是**被复位污染**的（`err_vel_xy` ≈ 命令值本身 = 实际速度≈0，
-     因为一摔就复位）——引用±5 数字时必须带这个说明，或者只看 `terrain_levels` 曲线。
-* **下一步（按优先级）**：
-  1. **【最高优先】用修好的扰动课程重跑一条 20k**（`Rough-Slopes-SlowVx-*` 或平地主线），
-     验证"前 50k 步 0.2×→1.0× 的 push 爬升"是否真的降低了早期 `root_height_below_minimum`、
-     并看最终抗扰是否更强。判据：训练期 `Episode_Termination/root_height_below_minimum` 的
-     前 2000 iter 均值 vs `cloud_slowvx20k`（后者没有爬升）。
-  2. **坡面短板专项（要训练，2~10k iter 即可）**：针对"下坡速度跟踪 + 上坡摔"——
-     a. 用"只放坡面"的地形变体（照 `ROUGH_SLOPES_FLAT_TERRAINS_CFG` 把比例改成上下坡各 0.5）跑 10k；
-     b. 或把 `track_ang_vel_z_exp` / `track_lin_vel_xy_exp` 在坡面段的权重或 std 单独调（先用 a 定位）。
-  3. **把 SlowVx 配方落成默认**：四个 v_x 台阶（150k/200k/250k/300k 环境步）写进
-     `RoughSlopesEnvWBCConfig.__post_init__` 默认值，保留 `-play-` 变体。
-  4. **抗扰扫描的进一步用法**（工具已就绪，不需要改代码）：给候选 checkpoint 跑
-     `--push-sweep "1,1;2,2;3,3;4,4"`，比"生还率不掉、尖刺恢复时间不变长"的那个；
-     想更极端可以把频率单独拉高（如 `"1,4"`）看高频轻推下的表现。
-  5. **仍未定论的老账**（都在 TODO）：s3 臂摆动鲁棒性、执行器刚度课程、低层 known_issues ⑭⑮、
-     `mdp/__init__.py` 星号导入遮蔽（影响面小）。
-* **环境提醒（反复踩）**：
+     3.706（−0.09/1k）→ **4.74（+0.095/1k）**、`bad_orientation_2` −51%、回报 +33%（DEF-044）；
+  ⑤ 多地形分地形（新表按"地形 × 命令档"）：粗糙 0.0916 ＜ 下坡 0.1117 ≈ 平地 0.1128 ＜ 上坡 0.1228；
+     平均终止上坡 **0.17** ＞ 平地/粗糙 0.04 ＞ 下坡 0.00；最差腿触地占比 **平地 0.750 / 上坡 0.125 /
+     粗糙 0.100 / 下坡 0.043**；
+  ⑥ 臂是 **IK 直接驱动**（`ee_ik` 的 `action_dim = 0`、策略动作只有 16 维），
+     WBC 奖励表里**没有臂跟踪项** ⇒ 臂的残余误差不是"策略没学好"。
+
+━━━ D. 环境/流程提醒（反复踩）━━━
+
   * 本机（Windows + A4000）**看/测多地形没问题**（`play.py` 会把地形自动压成 5×5 + 关课程，
     见 `play.py:101-104`；`policy_report.py` 用 `--terrain-grid auto/5x5` 同理）。**会卡死的只有一种组合**：
     训练任务 + 训练级网格（10×20）+ 环境数 ≥48（env 创建阶段挂住）⇒ 只有"多环境地形训练 /

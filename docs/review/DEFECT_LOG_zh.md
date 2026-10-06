@@ -31,6 +31,7 @@
 | 2026-10-04 | 新增 **DEF-043**：修 3 个崩溃 bug（`cmd_t` 未定义 / 逐 env 长度不一致 / 地形生成器取不到）+ `POLICY_REPORT_FONT`（云端中文字体）；**云端跑通平地 A/B@10 s**（10 图已拉回） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-04 | 新增 **DEF-044**：取回云端两份产物 —— **多地形分地形表**（粗糙并不比平地差；下坡跟踪最差 0.2326、上坡最易摔 0.10 次/env）+ **SlowVx 治住地形等级回落**（末 1000 `terrain_levels` 3.706(斜率−0.09) → **4.74(+0.095)**、摔倒率 −51%、回报 +33%） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-05 | 新增 **DEF-048**：`policy_report.py` 第四轮（schedule 驱动的多指令组合 / 抗扰扫描 fig13 / 每地形稠密高度图 / 图内英文 / npz 分组）+ **修掉扰动课程空操作的实质 bug**（`EventManager.active_terms` 是 dict，`in` 永远 False ⇒ `disturbance_ramp` 从未生效） | 分支 `codex/ll-train-detail-fix` |
+| 2026-10-06 | 新增 **DEF-049**：fig03 的 pitch 画反（投影重力反解差负号，corr −0.843 → 修后 +0.843，cap12 俯仰误差 1.68° vs 旧代码 5.54°）+ "无姿态指令段误差留空"修成按生效 `body_cmd` 算；限幅改从 actuator 实例读；fig08/报告新增臂"饱和 vs 顶限位"诊断并归因（**臂是 IK 直接驱动、WBC 奖励表里没有臂跟踪项**，joint2/5/6 顶限位 26%/25%/55%、腕关节力矩饱和 41%/33%/61%）；**未处理的改进项已整理进 `NEXT_SESSION_PROMPT.md` 的 A/B 两节** | 分支 `codex/ll-train-detail-fix` |
 
 ---
 
@@ -59,6 +60,10 @@
 ⇒ 只有 pitch 差了符号（幅值是对的：cmd ±20.05° vs 实测 ±20.05°）。
 **修法**：两处采集（`collect` / `collect_schedule`）统一改用
 `math_utils.euler_xyz_from_quat(root_quat_w)`，与奖励**同口径**。
+**修完已重采验证**（`logs/smoke/report_flatAB_new/`，云端 64 envs）：
+pitch corr **+0.843**、pitch 稳态误差 cap12 **1.68°** vs 旧代码 **5.54°**；
+地形报告同口径 corr **+0.810**、误差 2.32°。⇒ cap12 的俯仰跟踪其实**比旧代码好 3.3 倍**，
+之前图上看反只是显示问题。
 
 **2. 用户提问一的第二半：fig03 右侧三幅有一截没有数据、左侧那截也没有指令切换？**
 
@@ -78,8 +83,8 @@
 |---|---|
 | 臂是 **IK 直接驱动**，不在策略动作里 | `actions` = 16 维（12 腿 + 4 轮）；`ee_ik` 是 `CommandDrivenIKAction`，`action_dim = 0`；`params/env.yaml` 的 rewards 表里**没有任何 `arm_ee_*` 项**（只有腿/轮 + body pose） |
 | IK 输出**不做关节限位裁剪** | `DifferentialIKController.compute` 返回 `joint_pos + delta_joint_pos`，没有 clamp；下游 `DelayedPDActuator` 只按 `effort_limit` 裁剪力矩 |
-| 关节被顶在机械限位上 | 18 s 里 `arm_joint2` 贴上限 3.140 rad 占 **26%**、`arm_joint5` 贴下限 −1.220 占 **25%**、`arm_joint6` 贴下限 −2.094 占 **55%** |
-| 同时力矩饱和 | `|tau| ≥ 99 N·m`：joint4 **71%**、joint5 67%、joint6 78%、joint2 29%（18 s 均值 70.6 / 67.3 / 78.1 / 29.1 N·m） |
+| 关节被顶在机械限位上 | 18 s 里 `arm_joint2` 贴上限 3.140 rad 占 **26.2%**、`arm_joint5` 贴下限 −1.220 占 **25.3%**、`arm_joint6` 贴下限 −2.094 占 **54.9%**（旧代码同口径：33% / 61% / 60%） |
+| 同时力矩饱和 | `\|tau\| ≥ 99 N·m` 的时间占比：joint4 **41%**、joint5 33%、joint6 **61%**、joint2 8%（旧代码：55% / 82% / 61% / 2%）；18 s 均值 70.6 / 67.3 / 78.1 / 29.1 N·m（限幅 100） |
 | 误差是**稳态**不是滞后 | 分段看：稳态位置误差可到 18.3 cm、姿态误差 55°~99°，**且腕关节那几段 100% 时间都在饱和** ⇒ 不是"来不及追"，是"到不了" |
 | 采样器不检查可达性 | `_resample_ee_goal*` 只做笛卡尔碰撞盒 + `underground_limit` 检查（`max_resample_attempts` 重采样），**没有 IK/关节限位可行性检查** ⇒ 偶尔会采到需要关节超程的目标 |
 | 夹爪是另一回事：增益/限幅不匹配 | `gripper` 的 `stiffness=4000`，行程只有 ±0.035 rad，`effort_limit=10 N·m` ⇒ 误差 > 0.0025 rad 就顶满；实测 100% 时间在行程边界附近、饱和占比 97% |
@@ -103,6 +108,11 @@
 `|qd|` p99、速度限幅、超速%）；限幅数据改成从 **actuator 实例**读
 （`act.effort_limit` / `act.velocity_limit` + `robot.data.joint_pos_limits`，轮的 ±inf 逐关节置 NaN）——
 以前读 `robot.data.joint_effort_limits` 全是 1e9 占位值，所以一直显示"限幅不可用"。
+（这张表只统计**专用的臂测试那一段**（`arm` 组，18 s、5 个目标、`env_id=0`）；
+早期版本误把 9 档固定命令的 episode 也列了进去，同一件事重复 9 遍 —— 已修。）
+⇒ **待办**：现在只有单 env，随机采样的 EE 目标会让比例在不同采集之间抖得厉害
+（同一模型两次跑，joint5 顶限位占比可能是 25% 或 91%）⇒ 想让结论更稳，应把臂统计并进
+`per_env` 做全 env 平均（已记进 NEXT_SESSION_PROMPT 的 A5）。
 
 ### DEF-048 `2026-10-05` policy_report 第四轮（多指令组合 / 抗扰扫描 / 每地形高度图）+ **修掉"扰动课程一直是空操作"的实质 bug**
 

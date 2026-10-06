@@ -2363,7 +2363,15 @@ def write_report(out_dir: str, groups: dict, meta: dict, figures: list[str]) -> 
 
     # 后面几节是条件出现的（臂负载 / 分地形 / 指令切换 / push 扫描）⇒ 编号用计数器，别写死
     sec_no = 4
-    arm_rows = [(lab, r) for lab in labels for s in summary[lab] for r in s.get("arm_joints", [])]
+    # 臂负载只统计**专用的臂测试那一段**（`arm` 组，默认 18 s、5 个末端目标）；
+    # 不要用 9 档固定命令的 episode —— 那会把同一件事重复列 9 遍（而且语义不同）。
+    arm_series = groups.get("arm") or {}
+    arm_rows = [
+        (lab, r)
+        for lab in arm_series
+        for ep in arm_series[lab]
+        for r in arm_joint_stats(ep, ep.joint_names_all, ep.torque_limit)
+    ]
     # 老 npz 里没有限幅元数据（`pos_limit`/`torque_limit` 都是空）⇒ 不写这一节，
     # 免得整张表都是 nan；重新采集一次就有了。
     if arm_rows and any(np.isfinite(r["tau_limit"]) or np.isfinite(r["at_limit_frac"])
