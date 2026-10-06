@@ -33,6 +33,65 @@
 | 2026-10-05 | 新增 **DEF-048**：`policy_report.py` 第四轮（schedule 驱动的多指令组合 / 抗扰扫描 fig13 / 每地形稠密高度图 / 图内英文 / npz 分组）+ **修掉扰动课程空操作的实质 bug**（`EventManager.active_terms` 是 dict，`in` 永远 False ⇒ `disturbance_ramp` 从未生效） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-06 | 新增 **DEF-050~053**（`NEXT_SESSION_PROMPT.md` **A 组 4 条全部做完**）：A5 臂负载表改**全 env 口径**（同一份 64 envs 数据里 env0 单独看 joint2 顶限位 0% vs 全 env 21.3%、joint4 饱和 81.2% vs 46.3%）、A6 删掉 IsaacLab 依赖里的 `[IK DEBUG]` 刷屏（15 行 → 0）、A7 新增 `--reset-grace`（默认 25 步）剔除复位瞬态污染、A8 fig04/fig11 支持 `--compare` 双 label | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-06 | 新增 **DEF-054**（**B2-②/⑤**）：IK 直驱的臂补上关节保护 —— **位置 clamp 默认开**（joint1/2/3/5/6 饱和与顶限位全面下降：joint5 顶限位 65%→25.6%、joint6 30.2%→1.0%）、**目标限速默认关**（A/B/C/D 消融证明它有害：joint4/5 `\|tau\|` 均值 69.9→88.8 / 76.5→90.4、超速升到 99%）；B1 的 20k 已在云端开跑且**实测扰动课程首次生效** | 分支 `codex/ll-train-detail-fix` |
+| 2026-10-06 | 新增 **DEF-055**（**B2-①**）：EE 目标加 **FK 可达性过滤**（20 万次关节采样 → 1.5 cm 体素栅格）⇒ joint4 饱和 **47.7%→10.7%**、超速 **93.4%→17.0%**、`\|tau\|` 均值 71.8→28.4 N·m；joint1/2/3/6 饱和基本清零；`reach_joint_margin=0.1` 消融证明不需要（joint2 贴限位是目标分布问题） | 分支 `codex/ll-train-detail-fix` |
+
+---
+
+### DEF-055 `2026-10-06` EE 目标采到"关节够不到"的点 ⇒ 关节4 饱和 47.7%、超速 93.4%：加 FK 可达性过滤（B2-①）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **缺陷**（命令层采样不含可达性约束）+ 修复 |
+| 状态 | 已修（`urdf_path` 一给就启用）；`reach_joint_margin` 也做了消融，结论是不需要 |
+| 关联 | `source/.../velocity/mdp/commands.py`：`build_reachable_grid` / `HeightInvariantEECommand._build_reach_grid/reachability_check/_resample_ee_goal`；cfg `HeightInvariantEECommandCfg.urdf_path/ee_link_name/reach_*`；启用在 `deeprobotics_m20/rough_env_cfg.py` 的 `ee_pose`（flat WBC 继承它）；证据 `logs/smoke/b2_posonly|b2_reach|b2_reach_m10/`；`NEXT_SESSION_PROMPT.md` B2-①；DEF-049/054 |
+
+**1. 现象**
+
+* `HeightInvariantEECommand._resample_ee_goal()` 只在**笛卡尔空间**检查两件事：
+  AABB 碰撞盒、地面高度；**没有任何运动学可达性约束** ⇒ 会采到"关节超程"的目标。
+* 后果（cap12 策略、64 envs × 900 步、命令 (0,0,0)/(1,0,0)，`logs/smoke/b2_posonly/`）：
+  joint4 `|tau|` 均值 **71.8 N·m**（限幅 100）、饱和 **47.7%**、超速 **93.4%**；
+  joint5 饱和 28.6% / 超速 72.7%；joint1/2/3 饱和 2.3 / 2.1 / 2.2%。
+  IK 到不了 ⇒ PD 长期满输出 ⇒ 假电流、假磨损，sim2real 直接失真。
+
+**2. 根因**
+
+* 目标是在球坐标里均匀采样的（`p_l / p_pitch / p_yaw` 区间 + 锥形姿态），
+  区间本身是按"经验上差不多够得到"定的；`o_pitch/o_yaw` 还靠"距离越远锥角越窄"硬凑。
+  这些都不保证解出的关节角在限位内（DEF-049 已经指出，但当时只做了诊断）。
+
+**3. 修正**
+
+* 与 `FKReachableEECommand` 同源的做法，但**只当过滤器**：初始化时用
+  `pytorch_kinematics` 把 `arm_base_link → gripper_base` 建链，在关节限位内均匀采样
+  **20 万**次做 FK，把末端位置量化成 **1.5 cm 体素占用栅格**（膨胀一格）。
+* 采样时把"落回栅格外"的候选目标重采样掉（与碰撞检查同一个 `max_resample_attempts` 循环）；
+  坐标换算：height-invariant 原点（Z = `sampled_height`）→ 世界 → `arm_base_link` 系。
+* 目标分布**没变**（仍是球坐标采样 + 区间课程 + `target_blend`），只是把够不到的点滤掉。
+* 关键取舍：`urdf_path` 没给就完全不启用（保持原行为）；**给了但建不起来就直接抛错**，
+  不做静默降级 —— DEF-048 那个"悄悄空操作"的教训。
+
+**4. 结果（验收）：A/B 对照（同一 checkpoint / 同一命令 / 64 envs × 900 步）**
+
+| 关节 | 指标 | 无过滤（仅位置 clamp） | **加可达性过滤** |
+|---|---|---|---|
+| joint1 | \|tau\| 均值 / 饱和 / 超速 | 20.7 / 2.3% / 0.7% | **2.2 / 0.0% / 0.0%** |
+| joint2 | \|tau\| 均值 / 饱和 / \|qd\|p99 | 16.7 / 2.1% / 2.97 | **2.0 / 0.0% / 1.08** |
+| joint3 | \|tau\| 均值 / 饱和 / \|qd\|p99 | 25.1 / 2.2% / 3.59 | 27.7 / **0.0%** / **1.46** |
+| joint4 | \|tau\| 均值 / 饱和 / 超速 | 71.8 / 47.7% / **93.4%** | **28.4 / 10.7% / 17.0%** |
+| joint5 | \|tau\| 均值 / 超速 / 顶限位 | 55.3 / 72.7% / 25.6% | 65.3 / **43.6%** / **0.0%** |
+| joint6 | \|tau\| 均值 / 饱和 / 超速 | 52.5 / 23.8% / 13.8% | **42.9 / 0.6% / 7.1%** |
+
+* joint4（"不可达目标"的主犯）**饱和 47.7%→10.7%、超速 93.4%→17.0%、`|tau|` 均值
+  71.8→28.4 N·m**；joint1/2/3/6 的饱和基本清零；joint5 超速 72.7%→43.6%。
+* 副作用：**joint2 顶限位 14.3%→94.2%**（目标分布偏向折叠姿态、关节2 本来就贴着 0 限位），
+  joint5 `|tau|` 均值略升（55.3→65.3）。`reach_joint_margin=0.1`（只采关节中间 80% 建栅格）
+  **没有改善**（joint2 94.2%→93.2%，joint4/5 反而略差）⇒ 默认 0.0，这条留给"任务设计"（改 `p_*` 区间）。
+* 回归：`Flat-Deeprobotics-M20-Piper-WBC-v0` 2-iter 训练 EXIT=0，启动打印
+  `[EE reach] 可达栅格：(88, 88, 72) 体素 × 0.015 m（200000 次 FK 采样，膨胀=True）`；
+  栅格初始化在启动阶段（一次性，秒级）。
+* 遗留：① joint5 的 `|qd|` p99 仍是 5.0 rad/s（限速那条路已被 DEF-054 否掉，得从力矩/轨迹层做）；
+  ② 夹爪（顶限位 100%）是 B2-④；③ 本改动**影响训练分布**（目标集变小）⇒ 需要和新策略一起验收。
 
 ---
 

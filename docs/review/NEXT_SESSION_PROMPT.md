@@ -271,8 +271,16 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
     ② 末段 push 3x3 生还率（`policy_report.py --push-sweep "1,1;2,2;3,3"`）比 `cloud_cap12_20k`。
     跑完记得 `scp` 回本机 + 关机（不急，先不关）。
 * [ ] **B2 机械臂 5 条改进**（DEF-049 的结论，按性价比排序）：
-  1. `_resample_ee_goal*` 加**可达性过滤**（IK 解一次 / 检查所需关节角是否在限位内）——
-     现在只查笛卡尔碰撞盒 + 地面高度，会采到关节超程的目标；
+  1. [x] `_resample_ee_goal*` 加**可达性过滤**（IK 解一次 / 检查所需关节角是否在限位内）——
+     现在只查笛卡尔碰撞盒 + 地面高度，会采到关节超程的目标
+     —— **2026-10-06 完成（DEF-055）**：新增 `build_reachable_grid()`
+     （`pytorch_kinematics` 建 `arm_base_link→gripper_base` 链，20 万次关节采样 FK →
+     **1.5 cm 体素占用栅格**，膨胀一格），在 `_resample_ee_goal` 的重采样循环里与碰撞检查
+     并联；`urdf_path` 给了才启用、建不起来**直接报错**（不静默降级）。
+     实测 joint4 饱和 **47.7%→10.7%**、超速 **93.4%→17.0%**、`|tau|` 均值 71.8→28.4；
+     joint1/2/3/6 饱和基本清零。`reach_joint_margin=0.1` 试过、**没帮助**（默认 0）。
+     遗留：joint2 会长期贴 0 限位（94%，属目标分布偏折叠姿态 ⇒ 要改 `p_*` 区间）、
+     joint5 `|qd|` p99 仍 5.0 rad/s。
   2. [x] IK 输出加**关节限位 clamp**（`DifferentialIKController.compute` 返回的是
      `joint_pos + delta`，下游只按 effort 裁剪）⇒ 让"到不了"表现为停在限位而不是硬顶 100 N·m
      —— **2026-10-06 完成（DEF-054）**：`CommandDrivenIKAction.apply_actions()` 里加

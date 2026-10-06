@@ -254,6 +254,13 @@ class DeeproboticsM20CommandsCfg(CommandsCfg):
             T_traj = (1.0, 3.0),
             orn_cone_min_scale = 0.1,
         ),
+        # ── B2-①：可达性过滤（DEF-049/DEF-054）──────────────────────────────
+        # 只查碰撞盒+地面会采到"关节超程"的目标 ⇒ IK 到不了 ⇒ 关节顶限位 / PD 顶 100 N·m
+        # （实测 joint4 饱和 46%、超速 84%）。给 URDF 就启用：初始化时用 FK 采样建一张
+        # "末端位置可达栅格"，采样时把栅格外面的目标重采样掉（同 `FKReachableEECommand`
+        # 的 FK 链，但只当**过滤器**用，目标分布仍是原来的球坐标采样 + 区间课程）。
+        urdf_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20_Piper_own/urdf/M20_Piper_own.urdf",
+        ee_link_name="gripper_base",
     )
     
     # ee_pose=mdp.FKReachableEECommandCfg(

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import torch
 import math
 from typing import TYPE_CHECKING, Sequence
@@ -141,6 +142,85 @@ def quat_slerp_batch(q0: torch.Tensor, q1: torch.Tensor, tau: torch.Tensor | flo
 
 from dataclasses import dataclass, field
 
+def build_reachable_grid(
+    urdf_path: str,
+    ee_link_name: str,
+    root_link_name: str,
+    joint_lower: torch.Tensor,
+    joint_upper: torch.Tensor,
+    num_samples: int,
+    res: float,
+    dilate: bool,
+    device: torch.device | str,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """用 **FK 采样**建一张"末端位置可达占用栅格"（B2-①，DEF-049/DEF-054）。
+
+    做法与 ``FKReachableEECommand`` 同源：在关节限位内均匀采样关节角 → 正向运动学
+    → 末端在 ``root_link_name`` 系下的位置 → 量化成体素占用表。只要关节角在限位内，
+    对应的末端位置就是**运动学可达**的。
+
+    Args:
+        joint_lower/joint_upper: (J,) 关节限位，顺序与 URDF 链的关节顺序一致。
+        num_samples: 采样次数（一次性，20 万次在一秒量级）。
+        res: 体素边长（m）。``dilate=True`` 时占用会膨胀一格，给 URDF↔USD 的
+            几何差异留余量。
+
+    Returns:
+        ``(grid, origin, res)``：``grid`` 是 (nx, ny, nz) 的 bool 张量，``origin`` 是
+        栅格第 0 号体素的原点（在 root link 系下），``res`` 是体素边长标量张量。
+    """
+    import pytorch_kinematics as pk
+
+    with open(urdf_path, "rb") as f:
+        urdf_str = f.read()
+    if isinstance(urdf_str, str):  # 兼容占位写法
+        urdf_str = urdf_str.encode("utf-8")
+    chain = pk.build_serial_chain_from_urdf(
+        urdf_str, ee_link_name, root_link_name=root_link_name
+    ).to(dtype=torch.float32, device=device)
+    chain_joint_names = chain.get_joint_parameter_names()
+    if len(chain_joint_names) != joint_lower.numel():
+        raise ValueError(
+            f"URDF 链关节数({len(chain_joint_names)}) 与给定的限位数({joint_lower.numel()}) 不一致"
+        )
+
+    n_batch = 20_000
+    mins = torch.full((3,), float("inf"), device=device)
+    maxs = torch.full((3,), -float("inf"), device=device)
+    pts_chunks: list[torch.Tensor] = []
+    done = 0
+    while done < num_samples:
+        n = min(n_batch, num_samples - done)
+        u = torch.rand(n, joint_lower.numel(), device=device)
+        q = joint_lower + u * (joint_upper - joint_lower)
+        poses = chain.forward_kinematics(q)
+        p = poses.get_matrix()[:, :3, 3]
+        pts_chunks.append(p.detach())
+        mins = torch.minimum(mins, p.min(dim=0).values.detach())
+        maxs = torch.maximum(maxs, p.max(dim=0).values.detach())
+        done += n
+    pts = torch.cat(pts_chunks, dim=0)
+
+    pad = 2.0 * res
+    origin = mins - pad
+    res_t = torch.tensor(float(res), device=device)
+    shape = torch.clamp(torch.floor((maxs + pad - origin) / res_t).long() + 1, min=1)
+    idx = torch.floor((pts - origin) / res_t).long()
+    idx = torch.clamp(idx, min=torch.zeros(3, dtype=torch.long, device=device),
+                      max=(shape - 1))
+    flat = idx[:, 0] * shape[1] * shape[2] + idx[:, 1] * shape[2] + idx[:, 2]
+    grid = torch.zeros(int(shape.prod()), dtype=torch.bool, device=device)
+    grid[flat.unique()] = True
+    grid = grid.reshape(int(shape[0]), int(shape[1]), int(shape[2]))
+    if dilate:
+        # 3×3×3 膨胀（等价于"允许 1 个体素的误差"）
+        g = torch.nn.functional.max_pool3d(
+            grid.float()[None, None], kernel_size=3, stride=1, padding=1
+        )[0, 0]
+        grid = g > 0.5
+    return grid.contiguous(), origin.contiguous(), res_t
+
+
 class HeightInvariantEECommand(mdp.UniformPoseCommand):
     
     cfg: HeightInvariantEECommandCfg
@@ -175,6 +255,14 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         self.num_collision_check_samples = cfg.num_collision_check_samples
         self.max_resample_attempts = cfg.max_resample_attempts
         self.arm_base_link_idx = env.scene["robot"].data.body_names.index(self.cfg.arm_base_link_name)
+
+        # ---- B2-①：可达性栅格（给了 urdf_path 才建；建不出来就直接报错，不静默降级）----
+        self.reach_grid: torch.Tensor | None = None
+        self.reach_origin: torch.Tensor | None = None
+        self.reach_res: torch.Tensor | None = None
+        self._reach_stats = {"checked": 0, "rejected": 0, "attempts": 0}
+        if getattr(self.cfg, "urdf_path", None):
+            self._build_reach_grid()
 
         # ---- 轨迹插值相关 ----
         self.T_traj = torch.ones(num_envs, device=device)   # 每个 env 的移动跟踪时长（秒）
@@ -502,12 +590,86 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
 
         for i in range(self.cfg.max_resample_attempts):
             self._resample_ee_goal_sphere(env_ids)
-            collision_mask = self.collision_check(env_ids)
-            env_ids = env_ids[collision_mask]
+            # B2-①：碰撞（AABB/地面）+ **可达性** 一起判，任一不合格就重采
+            bad_mask = self.collision_check(env_ids) | self.reachability_check(env_ids)
+            self._reach_stats["attempts"] += 1
+            env_ids = env_ids[bad_mask]
             if len(env_ids) == 0:
                 break
         self._resample_ee_goal_orn(init_env_ids)
         self.ee_end_pos_cart[init_env_ids,:] = sphere2cart(self.ee_end_pos_sphere[init_env_ids,:])
+
+    def _build_reach_grid(self) -> None:
+        """用 FK 采样建"末端位置可达占用栅格"（B2-①）。"""
+        names = list(self.robot.data.joint_names)
+        with open(self.cfg.urdf_path, "rb") as f:
+            urdf_str = f.read()
+        chain = pk.build_serial_chain_from_urdf(
+            urdf_str, self.cfg.ee_link_name, root_link_name=self.cfg.arm_base_link_name
+        )
+        chain_joints = list(chain.get_joint_parameter_names())
+        missing = [n for n in chain_joints if n not in names]
+        if missing:
+            raise ValueError(
+                f"URDF 链里的关节 {missing} 不在机器人 articulation 里（{names[:8]}...）"
+                "⇒ 可达性过滤无法建立，请检查 urdf_path / ee_link_name / arm_base_link_name"
+            )
+        ids = [names.index(n) for n in chain_joints]
+        lim = self.robot.data.joint_pos_limits[0, ids]  # (J, 2)
+        lo, hi = lim[:, 0].contiguous(), lim[:, 1].contiguous()
+        if not bool(torch.isfinite(lo).all() and torch.isfinite(hi).all()):
+            raise ValueError("关节限位里有非有限值 ⇒ 可达性过滤无法建立")
+        # 关节余量：只用中间 (1-2m) 的范围建栅格 ⇒ "贴限位才够得到"不算舒服可达
+        m = float(getattr(self.cfg, "reach_joint_margin", 0.0))
+        m = min(max(m, 0.0), 0.45)
+        if m > 0.0:
+            rng = (hi - lo)
+            lo, hi = lo + m * rng, hi - m * rng
+        grid, origin, res = build_reachable_grid(
+            urdf_path=self.cfg.urdf_path,
+            ee_link_name=self.cfg.ee_link_name,
+            root_link_name=self.cfg.arm_base_link_name,
+            joint_lower=lo, joint_upper=hi,
+            num_samples=int(self.cfg.reach_samples),
+            res=float(self.cfg.reach_grid_res),
+            dilate=bool(self.cfg.reach_grid_dilate),
+            device=self.device,
+        )
+        self.reach_grid, self.reach_origin, self.reach_res = grid, origin, res
+        print(f"[EE reach] 可达栅格：{tuple(grid.shape)} 体素 × {float(res):.3f} m"
+              f"（{int(self.cfg.reach_samples)} 次 FK 采样，膨胀={bool(self.cfg.reach_grid_dilate)}）")
+
+    def reachability_check(self, env_ids: torch.Tensor) -> torch.Tensor:
+        """判断采样的末端目标位置是否落在**可达栅格**内；返回 True = 不可达，需要重采。
+
+        坐标换算：`ee_end_pos_sphere` 所在坐标系的原点是
+        `(arm_base_xy, sampled_height)`（见 `get_height_invariant_base_frame`，Z 是世界系
+        固定值），而栅格建在 **arm_base_link 系**下 ⇒ 先加回 origin 的世界位置、再减
+        arm_base_link 的世界位置（含逐环境的 Z 差）。
+        """
+        n = len(env_ids)
+        if self.reach_grid is None:
+            return torch.zeros(n, dtype=torch.bool, device=self.device)
+        origin_pos, _ = self.get_height_invariant_base_frame(self._env, env_ids)
+        pos_hi = sphere2cart(self.ee_end_pos_sphere[env_ids])          # 相对 height-invariant 原点
+        pos_w = pos_hi + origin_pos                                    # 世界系
+        pos_ab = pos_w - self.robot.data.body_pos_w[env_ids, self.arm_base_link_idx]  # arm_base 系
+        idx = torch.floor((pos_ab - self.reach_origin) / self.reach_res).long()
+        shape = torch.tensor(self.reach_grid.shape, device=self.device)
+        inside = ((idx >= 0) & (idx < shape)).all(dim=-1)
+        idx_c = torch.clamp(idx, min=torch.zeros(3, dtype=torch.long, device=self.device),
+                            max=shape - 1)
+        occ = self.reach_grid[idx_c[:, 0], idx_c[:, 1], idx_c[:, 2]]
+        bad = (~inside) | (~occ)
+        self._reach_stats["checked"] += int(n)
+        self._reach_stats["rejected"] += int(bad.sum())
+        if (bool(os.environ.get("RL_TRAINING_EE_REACH_DEBUG"))
+                and self._reach_stats["checked"] % 20000 < n):
+            st = self._reach_stats
+            frac = 100.0 * st["rejected"] / max(st["checked"], 1)
+            print(f"[EE reach] 已检查 {st['checked']} 个候选目标，其中不可达 "
+                  f"{st['rejected']}（{frac:.1f}%）；重采样轮次 {st['attempts']}")
+        return bad
         self.pose_end_cart[init_env_ids] = torch.cat(
             [self.ee_end_pos_cart[init_env_ids], self.ee_end_orn_quat[init_env_ids]], dim=-1
         )  # (N, 7)
@@ -601,7 +763,37 @@ class HeightInvariantEECommandCfg(mdp.UniformPoseCommandCfg):
 
     target_blend_orn: float = 1.0
     """姿态混合比例 ∈ [0, 1]；1.0 = 原行为。"""
-   
+
+    # ── B2-①：EE 目标的**可达性过滤**（DEF-049 / DEF-054 的遗留主犯）──────────
+    # 只查"笛卡尔碰撞盒 + 地面高度"会采到关节超程的目标 ⇒ IK 到不了 ⇒ PD 一直顶
+    # （实测 joint4 饱和 46%、超速 84%）。这里用**正向运动学采样**（关节空间均匀采样
+    # → FK）建一张"末端位置可达占用栅格"，采样时把栅格外面的目标重采样掉。
+    # 只要 `urdf_path` 给了就启用；建不出来会**直接报错**（不做静默降级 —— DEF-048 的教训）。
+    urdf_path: str | None = None
+    """机械臂 URDF（FK 链用）；None = 不做可达性过滤。"""
+
+    ee_link_name: str | None = None
+    """URDF 里末端 link 名（如 "gripper_base"），与 `body_name` 对齐。"""
+
+    reach_samples: int = 200_000
+    """关节空间采样次数（建栅格用；一次性的初始化开销）。"""
+
+    reach_grid_res: float = 0.015
+    """可达栅格分辨率（m）。1.5 cm ≈ 关节角 1° 在 0.5 m 处的位置误差。"""
+
+    reach_grid_dilate: bool = True
+    """是否把占用栅格膨胀一格（给 URDF↔USD 的几何/命名误差留 1 个 cell 的余量）。"""
+
+    reach_joint_margin: float = 0.0
+    """建栅格时关节采样范围的内缩比例 ∈ [0, 0.5)。
+
+    0 = 用满关节限位（"贴限位才算够得到"的位置也会被判可达 ⇒ 目标会长期把关节压在限位上，
+    实测 joint2 顶限位会到 **94%**）；>0 = 每条关节只用中间 (1-2m) 的范围。
+
+    ⚠️ 实测 **0.1 没有改善**（同一份臂测试：joint2 顶限位 94.2%→93.2%，joint4/5 反而略差）
+    ⇒ 默认保持 0。joint2 长期贴限位是**目标分布本身**偏向折叠姿态所致，不是可达性判据的问题，
+    要动得改 `p_*` 采样区间（属于任务设计）。"""
+
 import pytorch_kinematics as pk
 
 
