@@ -34,6 +34,76 @@
 
 ---
 
+### DEF-049 `2026-10-06` fig03 的 pitch 画反了（报告侧符号 bug）+ 臂力矩打满的归因（IK 目标不可达 + PD 硬顶）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **报告工具的两个缺陷**（图看反）+ 一次**归因分析**（没有改动训练代码） |
+| 状态 | 已修并重新采集；分析方法固化成 `fig08` 右下角 + `report.md` 的新表 |
+| 关联 | `scripts/reinforcement_learning/rsl_rl/policy_report.py`；证据 `logs/smoke/report_flatAB_new/` |
+
+**1. 用户提问一：fig03 的 pitch "指令与实际反相"，是模型没学好还是画反了？**
+
+**是画反了**（模型没问题）。`Harness` 里姿态是用**投影重力反解**的：
+`pitch = asin(clamp(-g_b[0]))`、`roll = atan2(-g_b[1], -g_b[2])`。
+对绕 +y 的俯仰 θ，`g_b[0] = sinθ`，所以这个反解给出的是 **−θ**；
+而训练奖励 `body_pitch_tracking` / `body_roll_tracking` 用的是
+`euler_xyz_from_quat(root_quat_w)`（标准约定）。于是：
+
+| 量 | corr(cmd, 实测) | 说明 |
+|---|---|---|
+| pitch（旧实现） | **−0.843** | 反相 |
+| roll（旧实现） | +0.903 | 恰好一致（roll 那个反解正好等于 euler roll） |
+| height | +0.862 | 一致 |
+
+⇒ 只有 pitch 差了符号（幅值是对的：cmd ±20.05° vs 实测 ±20.05°）。
+**修法**：两处采集（`collect` / `collect_schedule`）统一改用
+`math_utils.euler_xyz_from_quat(root_quat_w)`，与奖励**同口径**。
+
+**2. 用户提问一的第二半：fig03 右侧三幅有一截没有数据、左侧那截也没有指令切换？**
+
+**是"速度段没有姿态指令"导致的，不是数据丢了。** 默认 schedule 的前 13 段是**纯速度**段
+（`body=None`），旧版 `seg_metrics` 只在 `body is not None` 时才填姿态误差 ⇒ 那 13 段的
+柱子全是 NaN（右侧空一截），而左侧的姿态指令行在那段本来就是一条直线（"骨架固定"）。
+**修法**：姿态误差一律对着**该段真正生效的 `body_cmd`** 算（速度段 = 重置时采样的站姿），
+坐标轴标签也用它 ⇒ 20 段全有数据。这也回答了"是不是一次仿真测完所有切换"：是，
+一条 16 s 连续轨迹按 `--seg-s` 切 20 段、统一记录；这个设计本身没问题，
+问题只是"无姿态指令的段"要按"当前生效指令"来算误差。
+
+**3. 用户提问二：机械臂关节力矩打满，是不是目标不可达但臂还在努力靠近？**
+
+**是（主因），而且这台机器上臂根本不由策略控制**：
+
+| 事实 | 证据 |
+|---|---|
+| 臂是 **IK 直接驱动**，不在策略动作里 | `actions` = 16 维（12 腿 + 4 轮）；`ee_ik` 是 `CommandDrivenIKAction`，`action_dim = 0`；`params/env.yaml` 的 rewards 表里**没有任何 `arm_ee_*` 项**（只有腿/轮 + body pose） |
+| IK 输出**不做关节限位裁剪** | `DifferentialIKController.compute` 返回 `joint_pos + delta_joint_pos`，没有 clamp；下游 `DelayedPDActuator` 只按 `effort_limit` 裁剪力矩 |
+| 关节被顶在机械限位上 | 18 s 里 `arm_joint2` 贴上限 3.140 rad 占 **26%**、`arm_joint5` 贴下限 −1.220 占 **25%**、`arm_joint6` 贴下限 −2.094 占 **55%** |
+| 同时力矩饱和 | `|tau| ≥ 99 N·m`：joint4 **71%**、joint5 67%、joint6 78%、joint2 29%（18 s 均值 70.6 / 67.3 / 78.1 / 29.1 N·m） |
+| 误差是**稳态**不是滞后 | 分段看：稳态位置误差可到 18.3 cm、姿态误差 55°~99°，**且腕关节那几段 100% 时间都在饱和** ⇒ 不是"来不及追"，是"到不了" |
+| 采样器不检查可达性 | `_resample_ee_goal*` 只做笛卡尔碰撞盒 + `underground_limit` 检查（`max_resample_attempts` 重采样），**没有 IK/关节限位可行性检查** ⇒ 偶尔会采到需要关节超程的目标 |
+| 夹爪是另一回事：增益/限幅不匹配 | `gripper` 的 `stiffness=4000`，行程只有 ±0.035 rad，`effort_limit=10 N·m` ⇒ 误差 > 0.0025 rad 就顶满；实测 100% 时间在行程边界附近、饱和占比 97% |
+| 姿态误差本来就没被奖励约束 | 臂跟踪奖励 `std`：位置 0.15 m、姿态 **0.5 rad（≈29°）**，且当前 WBC 任务的奖励表里**压根没有这两项** ⇒ 残余误差 5.9 cm / 42° 没有任何梯度去压 |
+
+**结论 / 建议**（按性价比排序）：
+1. 在 `_resample_ee_goal*` 里加**可达性过滤**（用 IK 解一次、或检查候选目标所需的关节角是否都在限位内），
+   把"采到超程目标"从源头去掉 —— 这是最省事、也最像真机安全策略的一条；
+2. 给 IK 输出加**关节限位 clamp**（或把 `arm_joint2/5/6` 的软限位收一点），
+   至少让"到不了"表现为"停在限位但不再硬顶 100 N·m"；
+3. 若确实要臂跟踪精度：把 `arm_ee_pos_tracking` / `arm_ee_ori_tracking` 加进 WBC 奖励表、
+   并把姿态 `std` 从 0.5 rad 收紧（否则奖励早就饱和，梯度≈0）；
+4. 夹爪：把 `stiffness` 从 4000 降到与 10 N·m / ±0.035 rad 匹配的量级（或改 `velocity_limit` 语义），
+   否则它永远顶在 10 N·m；
+5. sim2real 提醒：臂 `velocity_limit=3.0` 在 `DelayedPDActuator` 里**只用于力矩裁剪**、
+   **不限制关节速度**（`compute()` 只做 `kp*e + kd*ė` 后 `_clip_effort`）⇒ 实测腕关节 |qd| p99 = **5.0 rad/s**
+   （URDF 上限 5、配置 3），真机上会被驱动器/servo 挡住 ⇒ 部署前要么在 IK 层限速、要么把这条加进保护逻辑。
+
+**工具侧顺带做的**：`fig08` 右下角改成"饱和时间占比 vs 顶限位时间占比"柱状（原来只画力矩 RMS）；
+`report.md` 新增"机械臂负载与限幅"表（逐关节 `|tau|` 均值/峰值、限幅、饱和%、位置范围、位置限位、顶限位%、
+`|qd|` p99、速度限幅、超速%）；限幅数据改成从 **actuator 实例**读
+（`act.effort_limit` / `act.velocity_limit` + `robot.data.joint_pos_limits`，轮的 ±inf 逐关节置 NaN）——
+以前读 `robot.data.joint_effort_limits` 全是 1e9 占位值，所以一直显示"限幅不可用"。
+
 ### DEF-048 `2026-10-05` policy_report 第四轮（多指令组合 / 抗扰扫描 / 每地形高度图）+ **修掉"扰动课程一直是空操作"的实质 bug**
 
 | 项 | 内容 |

@@ -248,6 +248,7 @@ matplotlib.rcParams["font.family"] = "sans-serif"
 matplotlib.rcParams["axes.unicode_minus"] = False
 import torch  # noqa: E402
 import gymnasium as gym  # noqa: E402
+import isaaclab.utils.math as math_utils  # noqa: E402
 
 from isaaclab_tasks.utils.hydra import hydra_task_config  # noqa: E402
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
@@ -326,6 +327,9 @@ class EpisodeData:
     joint_names_all: list[str] = field(default_factory=list)
     col: dict[str, int] = field(default_factory=dict)
     torque_limit: np.ndarray | None = None
+    #: 每个关节的位置限位 (J,2) 与速度限幅 (J,)（从 actuator 实例读，见 _resolve_actuator_limits）
+    pos_limit: np.ndarray | None = None
+    vel_limit: np.ndarray | None = None
     mirror_rms: dict[str, list[float]] = field(default_factory=dict)
     #: 机械臂（有臂才有）
     ee_cmd_pos_b: np.ndarray | None = None
@@ -404,18 +408,24 @@ class Harness:
             pass
         self.n_joints = self.joint_sel.numel()
 
-        # ── 力矩限幅：USD 里常常是 0（本资产的 joint_effort_limits 全 0），
-        #    依次退到 joint_effort_limits_sim → actuator cfg 的 effort_limit。
-        self.torque_limit = _resolve_effort_limits(self.robot, self.joint_sel)
+        # ── 位置/力矩/速度限幅：USD 与 data 张量里常常是 0 或 1e9 占位值，
+        #    真正生效的值在 actuator 实例上（见 _resolve_actuator_limits）。
+        lims = _resolve_actuator_limits(self.robot, self.joint_sel)
+        self.torque_limit = lims["effort"]
+        self.pos_limit = lims["pos"]
+        self.vel_limit = lims["vel"]
         if self.torque_limit is None:
-            print("[report] 力矩限幅元数据不可用（IsaacLab 对本资产给的是 1e9 占位值）"
-                  "⇒ 该角度改用『峰值因子 |tau|max/RMS』呈现")
+            print("[report] 力矩限幅元数据不可用 ⇒ 该角度改用『峰值因子 |tau|max/RMS』呈现")
         else:
             lim = self.torque_limit
             leg, wheel = lim[0:12], lim[12:16]
             arm = lim[16:22] if lim.size >= 22 else np.array([np.nan])
             print(f"[report] 力矩限幅：腿 {np.nanmin(leg):.1f}~{np.nanmax(leg):.1f} N·m / "
                   f"轮 {np.nanmin(wheel):.1f} / 臂 {np.nanmax(arm):.1f}")
+        if self.pos_limit is not None and self.n_joints >= 22:
+            a = self.pos_limit[16:22]
+            print(f"[report] 臂关节位置限位：\n         " + "\n         ".join(
+                f"{n}: [{a[i, 0]:+.3f}, {a[i, 1]:+.3f}]" for i, n in enumerate(self.joint_names[16:22])))
 
         # ── 足端（轮）body ──
         self.foot_ids: list[int] = []
@@ -655,9 +665,12 @@ class Harness:
                 qpos = self.robot.data.joint_pos[:, self.joint_sel].clone()
                 qvel = self.robot.data.joint_vel[:, self.joint_sel].clone()
                 tau = self.robot.data.applied_torque[:, self.joint_sel].clone()
-                g_b = self.robot.data.projected_gravity_b
-                pitch = torch.asin(torch.clamp(-g_b[:, 0], -1.0, 1.0))
-                roll = torch.atan2(-g_b[:, 1], -g_b[:, 2])
+                # ⚠️ 姿态必须用**和训练奖励同一个约定**：`body_pitch_tracking` /
+                # `body_roll_tracking` 用的是 `euler_xyz_from_quat(root_quat_w)`；
+                # 早期这里用投影重力反解（pitch = asin(-g_b[0])）差了**一个负号**，
+                # 图里就出现"指令与实测反相"（DEF-049）。
+                roll_t, pitch, _ = math_utils.euler_xyz_from_quat(self.robot.data.root_quat_w)
+                roll = roll_t
                 h = compute_base_height_rel_to_feet(self.raw, self.asset_cfg, self.feet_cfg)
                 foot_xy_b, _ = _foot_xy_body(self.robot, self.foot_sel)
                 foot_z = self.robot.data.body_pos_w[:, self.foot_sel, 2].clone()
@@ -768,6 +781,8 @@ class Harness:
             data.joint_names_all = list(self.joint_names)
             data.col = {n: i for i, n in enumerate(self.joint_names)}
             data.torque_limit = self.torque_limit
+            data.pos_limit = self.pos_limit
+            data.vel_limit = self.vel_limit
             data.mirror_rms = mirror_rms(data.joint_pos, self.joint_names)
             _n = float(max(steps, 1))
             data.per_env = {
@@ -826,7 +841,8 @@ class Harness:
             for _ in range(n_steps):
                 v_b = self.robot.data.root_lin_vel_b[:, :2].clone()
                 w_z = self.robot.data.root_ang_vel_b[:, 2].clone()
-                g_b = self.robot.data.projected_gravity_b
+                # 与训练奖励同口径（见 fig01 那段注释：投影重力反解差一个负号）
+                roll_t, pitch_t, _ = math_utils.euler_xyz_from_quat(self.robot.data.root_quat_w)
                 h = compute_base_height_rel_to_feet(self.raw, self.asset_cfg, self.feet_cfg)
                 xy = self.robot.data.root_pos_w[:, :2].clone()
                 z = self.robot.data.root_pos_w[:, 2].clone()
@@ -847,8 +863,8 @@ class Harness:
                 rec["vel_b"].append(v_b[i].cpu().numpy())
                 rec["yaw"].append(float(w_z[i]))
                 rec["h"].append(float(h[i]))
-                rec["pitch"].append(float(torch.asin(torch.clamp(-g_b[i, 0], -1.0, 1.0))))
-                rec["roll"].append(float(torch.atan2(-g_b[i, 1], -g_b[i, 2])))
+                rec["pitch"].append(float(pitch_t[i]))
+                rec["roll"].append(float(roll_t[i]))
                 rec["body_cmd"].append(bcmd)
                 rec["xy"].append(xy[i].cpu().numpy())
                 rec["z"].append(float(z[i]))
@@ -889,6 +905,8 @@ class Harness:
         data.joint_names_all = list(self.joint_names)
         data.col = {n: i for i, n in enumerate(self.joint_names)}
         data.torque_limit = self.torque_limit
+        data.pos_limit = self.pos_limit
+        data.vel_limit = self.vel_limit
         data.mirror_rms = mirror_rms(data.joint_pos, self.joint_names)
         data.per_env = None
         data.env_terrain = self.env_terrain
@@ -933,6 +951,75 @@ def _foot_xy_body(robot, foot_sel: torch.Tensor) -> tuple[torch.Tensor, torch.Te
 
 
 def _resolve_effort_limits(robot, joint_sel: torch.Tensor) -> np.ndarray | None:
+    return _resolve_actuator_limits(robot, joint_sel)["effort"]
+
+
+def _resolve_actuator_limits(robot, joint_sel: torch.Tensor) -> dict:
+    """按**关节名**对齐地取 位置限位 / 力矩限幅 / 速度限幅（N·m, rad, rad/s）。
+
+    为什么不用 `robot.data.joint_effort_limits`：本资产在 IsaacLab 里读出来全是 **1e9**
+    占位值（"无限制"），拿它算占用率永远是 0.00。真正生效的值在 **actuator 实例**上
+    （`act.effort_limit` / `act.velocity_limit`，形状 (num_envs, num_joints)），
+    按 `act.joint_names` 对齐即可 —— 不要用 `act.joint_indices`（它可能是 `slice`，
+    早期版本就是在这里抛异常、整套限幅退化成"不可用"的）。
+    """
+    sel = joint_sel.detach().cpu().numpy()
+    out = {"pos": None, "effort": None, "vel": None}
+    _SANE = 1.0e6
+    try:
+        names_all = list(robot.data.joint_names)
+    except Exception:  # noqa: BLE001
+        names_all = []
+
+    def _map(vals_by_name: dict[str, float], sane_max: float) -> np.ndarray | None:
+        if not names_all or not vals_by_name:
+            return None
+        arr = np.array([vals_by_name.get(names_all[i], np.nan) for i in sel], dtype=float)
+        ok = np.isfinite(arr) & (arr > 0.0) & (np.abs(arr) < sane_max)
+        return np.where(ok, arr, np.nan) if ok.mean() > 0.5 else None
+
+    try:
+        eff, vel = {}, {}
+        for act in robot.actuators.values():
+            names = list(getattr(act, "joint_names", []) or [])
+            if not names:
+                continue
+            for attr, store in (("effort_limit", eff), ("velocity_limit", vel)):
+                buf = getattr(act, attr, None)
+                if buf is None:
+                    buf = getattr(act.cfg, attr, None)
+                if buf is None:
+                    continue
+                a = np.asarray(buf.detach().cpu().numpy() if hasattr(buf, "detach") else buf,
+                               dtype=float).ravel()
+                if a.size == 1:
+                    a = np.full(len(names), float(a[0]))
+                elif a.size % len(names) == 0:
+                    # actuator 实例上的形状是 (num_envs, num_joints)；取第 0 行即可
+                    a = a[: len(names)]
+                if a.size != len(names):
+                    continue
+                for n, v in zip(names, a):
+                    store[n] = float(v)
+        out["effort"] = _map(eff, _SANE)
+        out["vel"] = _map(vel, _SANE)
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        pl = np.asarray(robot.data.joint_pos_limits[0, joint_sel].detach().cpu().numpy(), dtype=float)
+        if pl.ndim == 2 and pl.shape[1] == 2:
+            # 轮的 joint_pos_limits 是 ±inf（连续关节）⇒ 逐关节置 NaN，别让整块作废
+            bad = (~np.isfinite(pl)) | (np.abs(pl) > _SANE)
+            pl = np.where(bad, np.nan, pl)
+            if np.isfinite(pl).any():
+                out["pos"] = pl
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _resolve_effort_limits_legacy(robot, joint_sel: torch.Tensor) -> np.ndarray | None:
     """取每个关节的力矩上限（N·m）；取不到返回 None。
 
     注意坑：`robot.data.joint_effort_limits` 在本资产上全是 **1e9**（IsaacLab 的
@@ -1106,6 +1193,7 @@ def summarize(ep: EpisodeData, joint_names: list[str], torque_limit: np.ndarray 
         "path_length_m": float(np.linalg.norm(np.diff(ep.root_xy, axis=0), axis=1).sum()),
         **spike,
     }
+    out["arm_joints"] = arm_joint_stats(ep, joint_names, torque_limit)
     if torque_limit is not None and has_joints:
         out["torque_limit_usage"] = [
             (
@@ -1116,6 +1204,52 @@ def summarize(ep: EpisodeData, joint_names: list[str], torque_limit: np.ndarray 
             for i in range(len(joint_names))
         ]
     return out
+
+
+def arm_joint_stats(ep: EpisodeData, joint_names: list[str],
+                    torque_limit: np.ndarray | None) -> list[dict]:
+    """机械臂（含夹爪）逐关节的**负载 / 饱和 / 顶限位**统计。
+
+    为什么要单列：这台机器的臂是 **IK 直接驱动**（`ee_ik` 的 action_dim = 0，不在策略
+    动作里），所以"力矩打满"通常不是策略在硬顶，而是 **IK 解出的关节目标超出可达范围 /
+    超出限幅**，PD 只能贴着上限推。这几个比例就是判据（DEF-049）。
+    """
+    if np.size(ep.torque) == 0 or not joint_names:
+        return []
+    L, pos, vel = ep.torque_limit, ep.pos_limit, ep.vel_limit
+    rows: list[dict] = []
+    for i, name in enumerate(joint_names):
+        if not str(name).startswith(("arm_joint", "gripper_joint")):
+            continue
+        a = np.abs(np.asarray(ep.torque[:, i], dtype=float))
+        lim = float(L[i]) if L is not None and np.isfinite(L[i]) else float("nan")
+        sat = float((a >= 0.99 * lim).mean()) if np.isfinite(lim) and lim > 0 else float("nan")
+        q = np.asarray(ep.joint_pos[:, i], dtype=float)
+        if pos is not None and np.isfinite(pos[i]).all():
+            lo, hi = float(pos[i, 0]), float(pos[i, 1])
+            near = np.minimum(np.abs(q - lo), np.abs(q - hi))
+            at_limit = float((near < 0.02).mean())
+        else:
+            lo = hi = at_limit = float("nan")
+        qd = np.abs(np.asarray(ep.joint_vel[:, i], dtype=float))
+        vlim = float(vel[i]) if vel is not None and np.isfinite(vel[i]) else float("nan")
+        rows.append({
+            "joint": str(name),
+            "tau_mean": float(a.mean()),
+            "tau_max": float(a.max()),
+            "tau_limit": lim,
+            "sat_frac": sat,
+            "q_min": float(q.min()),
+            "q_max": float(q.max()),
+            "q_lo": lo,
+            "q_hi": hi,
+            "at_limit_frac": at_limit,
+            "qd_mean": float(qd.mean()),
+            "qd_p99": float(np.percentile(qd, 99)),
+            "vel_limit": vlim,
+            "over_vel_frac": (float((qd > vlim).mean()) if np.isfinite(vlim) else float("nan")),
+        })
+    return rows
 
 
 # ──────────────────────────── 绘图 ────────────────────────────
@@ -1148,13 +1282,9 @@ def seg_metrics(ep: EpisodeData) -> list[dict]:
             "err_vx": float(np.abs(ep.cmd[sl, 0] - ep.vel_b[sl, 0]).mean()),
             "err_vy": float(np.abs(ep.cmd[sl, 1] - ep.vel_b[sl, 1]).mean()),
             "err_wz": float(np.abs(ep.cmd[sl, 2] - ep.yaw_rate[sl]).mean()),
-            "err_h": float(np.abs(ep.height[sl] - ep.body_cmd[sl, 0]).mean())
-            if ep.body_cmd is not None else float("nan"),
-            "err_pitch_deg": float(np.degrees(np.abs(ep.pitch[sl] - ep.body_cmd[sl, 1])).mean())
-            if ep.body_cmd is not None else float("nan"),
-            "err_roll_deg": float(np.degrees(np.abs(ep.roll[sl] - ep.body_cmd[sl, 2])).mean())
-            if ep.body_cmd is not None else float("nan"),
+            "err_h": float("nan"), "err_pitch_deg": float("nan"), "err_roll_deg": float("nan"),
         }
+        _fill_body_err(row, ep, sl)
         return [row]
     dt = float(ep.t[1] - ep.t[0]) if ep.t.size > 1 else 0.02
     out: list[dict] = []
@@ -1174,12 +1304,26 @@ def seg_metrics(ep: EpisodeData) -> list[dict]:
             "err_wz": float(np.abs(ep.cmd[sl, 2] - ep.yaw_rate[sl]).mean()),
             "err_h": float("nan"), "err_pitch_deg": float("nan"), "err_roll_deg": float("nan"),
         }
-        if ep.body_cmd is not None and body is not None:
-            row["err_h"] = float(np.abs(ep.height[sl] - ep.body_cmd[sl, 0]).mean())
-            row["err_pitch_deg"] = float(np.degrees(np.abs(ep.pitch[sl] - ep.body_cmd[sl, 1])).mean())
-            row["err_roll_deg"] = float(np.degrees(np.abs(ep.roll[sl] - ep.body_cmd[sl, 2])).mean())
+        # 姿态误差一律对着**这一步真正生效的机身姿态指令**算（`ep.body_cmd`）：
+        # 速度段虽然没写姿态指令，但策略看到的仍是"重置时采样的那个站姿"，
+        # 对着它算跟踪误差同样有意义、而且不会像以前那样整段留空（DEF-049）。
+        _fill_body_err(row, ep, sl, body_hint=body)
         out.append(row)
     return out
+
+
+def _fill_body_err(row: dict, ep: EpisodeData, sl: slice, body_hint=None) -> None:
+    """填 row 的高度/俯仰/侧倾稳态误差 + 这一段的"实际生效指令"（给坐标轴用）。"""
+    if ep.body_cmd is None or ep.body_cmd.size == 0:
+        if body_hint is not None:
+            row["body"] = [float(b) for b in body_hint]
+        return
+    bcmd = np.asarray(ep.body_cmd, dtype=float)[sl]
+    ref = bcmd if bcmd.size else np.asarray(ep.body_cmd, dtype=float)
+    row["err_h"] = float(np.abs(np.asarray(ep.height)[sl] - ref[:, 0]).mean())
+    row["err_pitch_deg"] = float(np.degrees(np.abs(np.asarray(ep.pitch)[sl] - ref[:, 1])).mean())
+    row["err_roll_deg"] = float(np.degrees(np.abs(np.asarray(ep.roll)[sl] - ref[:, 2])).mean())
+    row["body"] = [float(x) for x in ref.mean(axis=0)]
 
 
 def _dense_heightmap(ax, pts: np.ndarray, traj: np.ndarray | None, name: str, cmap="terrain"):
@@ -1664,22 +1808,41 @@ def fig08_arm(series, out_dir, dpi, meta):
         for cc in arm_cols:
             axes[1][0].plot(e.t, e.torque[:, cc], color=c, lw=0.8, alpha=0.8,
                             label=f"{lab} {e.joint_names_all[cc]}" if cc == arm_cols[0] else None)
-        rms = [float(np.sqrt(np.mean(e.torque[:, cc] ** 2))) for cc in arm_cols]
-        axes[1][1].bar(np.arange(len(arm_cols)) + m * (0.8 / max(len(labels), 1)),
-                       rms, 0.8 / max(len(labels), 1), color=c, label=lab)
-    axes[1][0].set_title("arm joint torque over time (replaces the old joint-angle panel)")
+            if e.torque_limit is not None and np.isfinite(e.torque_limit[cc]):
+                limv = float(e.torque_limit[cc])
+                for sgn in (1.0, -1.0):
+                    axes[1][0].axhline(sgn * limv, color=c, lw=1.0, ls=":", alpha=0.85)
+    axes[1][0].set_title("arm joint torque over time (dotted = actuator torque limit)")
     axes[1][0].set_ylabel("N*m")
     axes[1][0].set_xlabel("t (s)")
     axes[1][0].grid(alpha=0.3)
     axes[1][0].legend(fontsize=6, ncol=2)
-    axes[1][1].set_title("arm joint torque RMS")
+
+    # 右下：**饱和 / 顶限位时间占比** —— 直接回答"力矩打满是不是因为目标不可达"
     arm_names = [n for n in ep0.joint_names_all if n.startswith(("arm_joint", "gripper_joint"))]
     _w = 0.8 / max(len(labels), 1)
-    axes[1][1].set_xticks(np.arange(len(arm_names)) + _w * (len(labels) - 1) / 2)
+    _bw = _w / 2.0
+    for m, lab in enumerate(labels):
+        e = series[lab][0]
+        st = {r["joint"]: r for r in arm_joint_stats(e, e.joint_names_all, e.torque_limit)}
+        sat = [100.0 * st.get(n, {}).get("sat_frac", np.nan) for n in arm_names]
+        atl = [100.0 * st.get(n, {}).get("at_limit_frac", np.nan) for n in arm_names]
+        xx = np.arange(len(arm_names)) + m * _w
+        axes[1][1].bar(xx, sat, _bw, color=COLORS[m % len(COLORS)], label=f"{lab} torque saturated")
+        axes[1][1].bar(xx + _bw, atl, _bw, color=COLORS[m % len(COLORS)], alpha=0.45, hatch="//",
+                       label=f"{lab} jammed on joint limit")
+    axes[1][1].set_title("% of the run: torque saturated  vs  jammed on a joint limit")
+    axes[1][1].set_ylabel("% of run")
+    if not any(np.isfinite(r.get("sat_frac", np.nan)) or np.isfinite(r.get("at_limit_frac", np.nan))
+               for lab in labels for r in arm_joint_stats(series[lab][0], series[lab][0].joint_names_all,
+                                                          series[lab][0].torque_limit)):
+        axes[1][1].text(0.5, 0.5, "limit metadata missing in this dataset\n"
+                        "(re-collect with the current tool)", ha="center", va="center",
+                        transform=axes[1][1].transAxes, fontsize=9, color="0.4")
+    axes[1][1].set_xticks(np.arange(len(arm_names)) + _w * (len(labels) - 1) / 2 + _bw / 2)
     axes[1][1].set_xticklabels(arm_names, rotation=30, fontsize=7)
-    axes[1][1].set_ylabel("N*m")
     axes[1][1].grid(alpha=0.3, axis="y")
-    axes[1][1].legend(fontsize=7)
+    axes[1][1].legend(fontsize=6, ncol=2)
     fig.suptitle(f"(8) Arm / end-effector tracking and torque -- {meta['task']}"
                  f"  [{meta.get('arm_s', 0):.1f} s, {meta.get('arm_targets', 0)} target switches]")
     return _save(fig, out_dir, "fig08_arm_ee", dpi)
@@ -2085,7 +2248,7 @@ def fig13_push_robustness(series, out_dir, dpi, meta):
 _EP_FIELDS = ("t", "cmd", "vel_b", "yaw_rate", "root_xy", "root_z", "height", "pitch", "roll",
               "joint_pos", "joint_vel", "torque", "contact", "foot_xy_b", "foot_z_w")
 _EP_OPT = ("body_cmd", "ee_cmd_pos_b", "ee_pos_b", "ee_ori_err", "scan_min", "scan_max",
-           "scan_mean", "env_terrain_level")
+           "scan_mean", "env_terrain_level", "pos_limit", "vel_limit")
 
 
 def _dump_groups(path: str, groups: dict) -> None:
@@ -2198,8 +2361,28 @@ def write_report(out_dir: str, groups: dict, meta: dict, figures: list[str]) -> 
                 f"| {crest_max:.2f} | {s['power_mean_abs']:.2f} W | {s['path_length_m']:.2f} m |"
             )
 
-    # 后面几节是条件出现的（分地形 / 指令切换 / push 扫描）⇒ 编号用计数器，别写死
+    # 后面几节是条件出现的（臂负载 / 分地形 / 指令切换 / push 扫描）⇒ 编号用计数器，别写死
     sec_no = 4
+    arm_rows = [(lab, r) for lab in labels for s in summary[lab] for r in s.get("arm_joints", [])]
+    # 老 npz 里没有限幅元数据（`pos_limit`/`torque_limit` 都是空）⇒ 不写这一节，
+    # 免得整张表都是 nan；重新采集一次就有了。
+    if arm_rows and any(np.isfinite(r["tau_limit"]) or np.isfinite(r["at_limit_frac"])
+                        for _, r in arm_rows):
+        # 机械臂是 **IK 直接驱动**（`ee_ik` 的 action_dim = 0），所以"力矩打满"要看
+        # 两个比例：饱和时间占比 vs **顶在关节限位上**的时间占比（见 DEF-049）。
+        lines += ["", f"## {sec_no}. 机械臂负载与限幅（fig08 右下那张图的数字版）", "",
+                  "| 策略 | 关节 | \\|tau\\| 均值 | \\|tau\\| 峰值 | 力矩限幅 | 饱和时间占比 "
+                  "| 关节位置范围 | 位置限位 | 顶限位时间占比 | \\|qd\\| p99 | 速度限幅 | 超速时间占比 |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+        for lab, r in arm_rows:
+            lines.append(
+                f"| {lab} | {r['joint']} | {r['tau_mean']:.1f} | {r['tau_max']:.1f} "
+                f"| {r['tau_limit']:.1f} | {100 * r['sat_frac']:.1f}% "
+                f"| [{r['q_min']:+.3f}, {r['q_max']:+.3f}] "
+                f"| [{r['q_lo']:+.3f}, {r['q_hi']:+.3f}] | {100 * r['at_limit_frac']:.1f}% "
+                f"| {r['qd_p99']:.2f} | {r['vel_limit']:.1f} | {100 * r['over_vel_frac']:.1f}% |"
+            )
+        sec_no += 1
     terr = per_terrain_table(series)
     if terr:
         lines += ["", f"## {sec_no}. 分地形（逐 env 指标按『落在哪种地形上』分组）", "",
