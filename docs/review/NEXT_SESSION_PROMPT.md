@@ -311,4 +311,16 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
     `data.npz`+`meta.json` 用 `--from-npz`。
   * 云端 SSH 偶发 `banner exchange` 超时（实例被大环境数地形生成压住）——**不是关机**，
     控制台 `private.autodl.com/console/instance` 看状态是「运行中」就等几分钟重连。
+
+━━━ E. 云端仓库当前状态（2026-10-06 收尾时）━━━
+
+* 实例 `bbc64d91a6-99f1820e`（1237）里仓库在 `c50bd86`；**`git pull` 当时连不上 GitHub
+  （`GnuTLS recv error (-110)` / `port 443 timeout`）**，所以 `da1c228` 的
+  `policy_report.py` 是**直接 scp 覆盖**过去的（md5 `efff749ad841bb2047ed4f1b3ae16432`，
+  与本机一致），但 git 状态显示为 `M`（未提交）。⇒ **下次开机先 `git pull` 重试**
+  （通了就 `git checkout -- scripts/.../policy_report.py` 再 pull，或 `git stash` 掉这一份），
+  没通也能继续用（文件内容是对的）。
+* 该实例里还有一个**历史 `stash@{0}`（WIP on wbc）**，是早先 session 留下的，别误删。
+* 云端产物目录：`/root/report_flatAB_new`、`/root/report_terrain_new`（都已拉回本机）；
+  `/root/report_slowvx_fast` 已删（旧口径）。
 ```
