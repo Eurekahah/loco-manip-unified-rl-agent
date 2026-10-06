@@ -32,6 +32,77 @@
 | 2026-10-04 | 新增 **DEF-044**：取回云端两份产物 —— **多地形分地形表**（粗糙并不比平地差；下坡跟踪最差 0.2326、上坡最易摔 0.10 次/env）+ **SlowVx 治住地形等级回落**（末 1000 `terrain_levels` 3.706(斜率−0.09) → **4.74(+0.095)**、摔倒率 −51%、回报 +33%） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-05 | 新增 **DEF-048**：`policy_report.py` 第四轮（schedule 驱动的多指令组合 / 抗扰扫描 fig13 / 每地形稠密高度图 / 图内英文 / npz 分组）+ **修掉扰动课程空操作的实质 bug**（`EventManager.active_terms` 是 dict，`in` 永远 False ⇒ `disturbance_ramp` 从未生效） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-06 | 新增 **DEF-050~053**（`NEXT_SESSION_PROMPT.md` **A 组 4 条全部做完**）：A5 臂负载表改**全 env 口径**（同一份 64 envs 数据里 env0 单独看 joint2 顶限位 0% vs 全 env 21.3%、joint4 饱和 81.2% vs 46.3%）、A6 删掉 IsaacLab 依赖里的 `[IK DEBUG]` 刷屏（15 行 → 0）、A7 新增 `--reset-grace`（默认 25 步）剔除复位瞬态污染、A8 fig04/fig11 支持 `--compare` 双 label | 分支 `codex/ll-train-detail-fix` |
+| 2026-10-06 | 新增 **DEF-054**（**B2-②/⑤**）：IK 直驱的臂补上关节保护 —— **位置 clamp 默认开**（joint1/2/3/5/6 饱和与顶限位全面下降：joint5 顶限位 65%→25.6%、joint6 30.2%→1.0%）、**目标限速默认关**（A/B/C/D 消融证明它有害：joint4/5 `\|tau\|` 均值 69.9→88.8 / 76.5→90.4、超速升到 99%）；B1 的 20k 已在云端开跑且**实测扰动课程首次生效** | 分支 `codex/ll-train-detail-fix` |
+
+---
+
+### DEF-054 `2026-10-06` IK 直接驱动的臂**没有关节保护**（顶限位 65% / 腕关节超速 84%）—— 位置 clamp 有效、目标限速有害（B2-②/⑤）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **缺陷**（IK 输出未做关节保护）+ 一次 A/B/C/D 消融 |
+| 状态 | 部分已修：**位置 clamp 默认开**（净收益）；**目标限速默认关**（实测有害，留作旋钮）；可达性过滤见 B2-①（未做） |
+| 关联 | `source/.../locomotion/velocity/mdp/actions.py`：`CommandDrivenIKAction.apply_actions/_init_joint_protection/_protect_joint_target`、`CommandDrivenIKActionCfg.protect_joint_pos/joint_limit_margin/max_joint_vel/vel_limit_scale`；证据 `logs/smoke/a5_full|b2_posonly|b2_velonly|b2_ik_protect/`；DEF-049（臂 IK 归因）、DEF-050（臂负载全 env 口径）、`NEXT_SESSION_PROMPT.md` B2-②/⑤ |
+
+**1. 现象**
+
+* 触发条件：任何带 `ee_ik` 的任务（低层 WBC / 高层 replay）跑起来后看 `report.md` 第 4 节
+  或 fig08 右下角（`policy_report.py`，全 env 口径）。
+* 可观测证据（cap12 `model_19999.pt`，64 envs × 900 步，命令 (0,0,0)/(1,0,0)）；
+  基线 `logs/smoke/a5_full/`：
+  joint4 `|tau|` 均值 **69.9 N·m**（限幅 100）、饱和 **46.3%**、超速 **84.0%**；
+  joint5 76.5 / **53.2%** / 35.7%，其中 **顶限位 65.0%**；joint6 64.5 / 39.5% / 10.1%，
+  顶限位 30.2%；joint1/2/3 饱和 7.0 / 12.3 / 10.5%。
+* 影响面：力矩打满 ⇒ 仿真里的电流/发热/磨损都不真实，也是 sim2real 的硬伤；而这一切
+  **不是策略学出来的**（臂是 IK 直驱，策略动作只有 16 维，DEF-049）。
+
+**2. 根因**
+
+* `DifferentialIKController.compute()` 返回的是 `joint_pos + delta`，
+  `DifferentialInverseKinematicsAction.apply_actions()` 拿到后**直接**
+  `set_joint_position_target()`：
+  1. **不查关节位置限位** ⇒ 目标不可达时关节目标停在限位外，PD 长期满输出；
+  2. `velocity_limit=3.0` 在 `DelayedPDActuator` 里**只参与力矩裁剪** ⇒ 对速度没有约束
+     （实测腕关节 `|qd|` p99 = 5.0 rad/s）。
+
+**3. 修正**
+
+* 在 `CommandDrivenIKAction` 里覆写 `apply_actions()`，写 PD 目标前过一层
+  `_protect_joint_target()`：
+  ① **位置 clamp**（`protect_joint_pos`，默认开）：`torch.clamp(target, lo+margin, hi-margin)`，
+    限位从 `robot.data.joint_pos_limits` 取（逐关节校验有限性，异常只打印不抛）；
+  ② **目标限速**（`max_joint_vel`，**默认 -1 = 关**）：把单步目标变化量夹到
+    `max_joint_vel × step_dt`，`0` = 从 actuator 实例的 `velocity_limit` 自动读。
+* 两个旋钮都进 cfg，可用 hydra 覆盖（注意 `None` 默认值的字段 hydra 覆盖不进来，
+  所以用 `0.0 / -1.0` 哨兵 —— 踩过一次 `Expected: <class 'NoneType'>, Received: float`）。
+* 备选（否掉）：直接改 IsaacLab 的基类 —— 那是依赖侧文件（DEF-051 刚记过教训），
+  而且本仓库这份子类就是为接管 IK 而存在的。
+
+**4. 结果（验收）：A/B/C/D 消融（同一 checkpoint / 同一命令 / 每次 64 envs × 900 步）**
+
+| 关节 | 指标 | A 基线（无保护） | B 只位置 clamp | C 只目标限速 | D 两者都开 |
+|---|---|---|---|---|---|
+| joint1 | 饱和 / 顶限位 | 7.0% / 4.2% | **2.3% / 0.0%** | 1.0% / 21.2% | 1.4% / 19.7% |
+| joint2 | 饱和 / 顶限位 | 12.3% / 21.3% | **2.1% / 14.3%** | 0.3% / 48.8% | 0.4% / 42.5% |
+| joint3 | 饱和 / 顶限位 | 10.5% / 4.2% | **2.2% / 0.4%** | 0.4% / 14.1% | 1.0% / 5.2% |
+| joint4 | \|tau\|均值 / 饱和 / 超速 | 69.9 / 46.3% / 84.0% | 71.8 / 47.7% / 93.4% | **88.8** / 45.9% / **99.5%** | 90.1 / 51.6% / 99.7% |
+| joint5 | \|tau\|均值 / 饱和 / 顶限位 | 76.5 / 53.2% / 65.0% | **55.3** / **28.6%** / **25.6%** | 90.4 / 37.1% / 0.7% | 89.8 / 33.8% / 0.0% |
+| joint6 | \|tau\|均值 / 饱和 / 顶限位 | 64.5 / 39.5% / 30.2% | **52.5 / 23.8% / 1.0%** | 59.8 / 0.0% / 0.0% | 59.7 / 0.0% / 0.0% |
+
+* **B（位置 clamp）是净收益**：joint1/2/3/5/6 的饱和与顶限位全面下降
+  （joint5 饱和 53.2%→28.6%、顶限位 65.0%→25.6%；joint6 顶限位 30.2%→1.0%），
+  joint4 基本持平（46.3%→47.7%），`|tau|` 均值只有 joint4 略升。
+  ⇒ **默认开**（`protect_joint_pos=True`、`joint_limit_margin=0.0`）。
+* **C（只限速）有害**：`|tau|` 均值 joint4 69.9→**88.8**、joint5 76.5→**90.4**，
+  超速时间占比升到 **99.5% / 99.4%**，joint1/2 的顶限位反而升到 21.2% / 48.8%。
+  机理：目标被限速后**永远追不上**（不可达目标 + 限速 = 常驻跟踪误差）⇒ PD 一直出力，
+  实际关节速度不降反升、还更容易卡在限位上。⇒ **默认关**（`max_joint_vel=-1.0`），
+  代码留着供实验；真要限速得从力矩/轨迹层做，或先做 B2-①（滤掉不可达目标）。
+* 回归：`train.py --task Flat-Deeprobotics-M20-Piper-WBC-v0 --headless --num_envs 64
+  --max_iterations 2` EXIT=0（启动打印 `位置 clamp=on；速度限幅=off`）；
+  完整回归矩阵见本次 commit 的 `logs/smoke/b2_regression.log`。
+* 遗留：joint4 的饱和/超速没被治好（46~48% / 84~93%）⇒ 它是"目标不可达"的**主犯**，
+  需要 B2-①（可达性过滤）才能真正解决；夹爪（顶限位 100%、饱和 83~87%）是 B2-④。
 
 ---
 

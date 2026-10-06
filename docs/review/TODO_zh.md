@@ -34,6 +34,7 @@
 | 2026-10-05 | **DEF-048**：`policy_report.py` 第四轮（schedule 驱动的多指令组合 / `--push-sweep` 抗扰扫描 / 每地形稠密高度图 / 图内英文 / npz 分组）+ **修掉"扰动课程一直是空操作"的实质 bug**（`EventManager.active_terms` 是 dict）；删掉 4 个已被取代的老可视化脚本；旧报告目录清空后用新工具重跑平地 A/B + 多地形 | `codex/ll-train-detail-fix` |
 | 2026-10-06 | **DEF-049**：fig03 pitch 符号 bug（画反）+ 无姿态指令段误差留空 → 已修并用**云端重采**验证；限幅元数据改从 actuator 实例读；fig08/报告新增臂"饱和 vs 顶限位"诊断。**这一轮发现的未处理项（A 工具 5 条 + B 训练 5 条）已整段写进 `NEXT_SESSION_PROMPT.md`**，本文件不再重复 | `codex/ll-train-detail-fix` |
 | 2026-10-06 | **`NEXT_SESSION_PROMPT.md` A 组 4 条全部做完（DEF-050~053）**：A5 臂负载表改**全 env 口径**（`arm_pop`，同一份 64 envs 数据里 env0 单独看 joint2 顶限位 0% vs 全 env 21.3%）、A6 删掉 IsaacLab 依赖里的 `[IK DEBUG]` 刷屏、A7 新增 `--reset-grace`（默认 25 步）剔除复位瞬态、A8 fig04/fig11 支持 A/B 双 label。**B 组（训练侧 5 条）仍未动，B1 最优先** | `codex/ll-train-detail-fix` |
+| 2026-10-06 | **B 组开工**：B1 云端 20k 已开跑（`2026-10-06_15-32-05_cloud_ramp20k`，**扰动课程首次生效** `step=0 → 0.20×`；结果待回填）；**B2-②/⑤ 完成**（IK 关节保护：位置 clamp 默认开、目标限速默认关，A/B/C/D 消融见 DEF-054）；**B2-①③④ + B3/B4/B5 仍未做** | `codex/ll-train-detail-fix` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。

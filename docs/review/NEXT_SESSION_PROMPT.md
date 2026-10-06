@@ -258,24 +258,38 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
 
 ━━━ B. 训练 / 物理侧（要改代码 + 重训）━━━
 
-* [ ] **B1【最高优先】用修好的扰动课程重跑一条 20k**：`apply_event_scale` 的
-  `EventManager.active_terms` 判断 bug 让 `disturbance_ramp` **从上线起就是空操作**
-  （push 第 0 步就全量 ±2/±1/yaw±0.52）。修复后要验证：
-  训练期 `Episode_Termination/root_height_below_minimum` **前 2000 iter 的均值**是否明显低于
-  `cloud_slowvx20k`（后者没有爬升），以及**末段 push 3x3 的生还率是否更好**（用
-  `policy_report.py --push-sweep "1,1;2,2;3,3"` 比）。命令照 `queue_reports2.sh` 的写法改 task/run_name。
+* [~] **B1（最高优先）用修好的扰动课程重跑一条 20k —— 2026-10-06 已开跑，结果待回填**：
+  `apply_event_scale` 的 `EventManager.active_terms` 判断 bug 让 `disturbance_ramp`
+  **从上线起就是空操作**（push 第 0 步就全量 ±2/±1/yaw±0.52）。
+  * 已在 `bbc64d91a6-99f1820e`（1237）起：4096 envs / seed 42 / 20k /
+    `--run_name cloud_ramp20k`，run 目录 `2026-10-06_15-32-05_cloud_ramp20k`，
+    日志 `/root/run_ramp20k.log`，**ETA ≈16 h**（14:32 UTC 起跑）。
+  * **开跑即验证了一条**：`[curriculum] 扰动 randomize_push_robot.velocity_range 缩放到 0.20×
+    (step=0)` —— 旧三个 run（soft20k/cap12/slowvx）的日志里这类打印**都是 0 次**。
+  * 跑完要做的两条验收（口径不变）：① 训练期 `Episode_Termination/root_height_below_minimum`
+    **前 2000 iter 的均值** vs `cloud_cap12_20k`（它没有爬升，是最干净的同代对照）；
+    ② 末段 push 3x3 生还率（`policy_report.py --push-sweep "1,1;2,2;3,3"`）比 `cloud_cap12_20k`。
+    跑完记得 `scp` 回本机 + 关机（不急，先不关）。
 * [ ] **B2 机械臂 5 条改进**（DEF-049 的结论，按性价比排序）：
   1. `_resample_ee_goal*` 加**可达性过滤**（IK 解一次 / 检查所需关节角是否在限位内）——
      现在只查笛卡尔碰撞盒 + 地面高度，会采到关节超程的目标；
-  2. IK 输出加**关节限位 clamp**（`DifferentialIKController.compute` 返回的是
-     `joint_pos + delta`，下游只按 effort 裁剪）⇒ 让"到不了"表现为停在限位而不是硬顶 100 N·m；
+  2. [x] IK 输出加**关节限位 clamp**（`DifferentialIKController.compute` 返回的是
+     `joint_pos + delta`，下游只按 effort 裁剪）⇒ 让"到不了"表现为停在限位而不是硬顶 100 N·m
+     —— **2026-10-06 完成（DEF-054）**：`CommandDrivenIKAction.apply_actions()` 里加
+     位置 clamp（默认开）。实测 joint1/2/3/5/6 的饱和与顶限位全面下降
+     （joint5 顶限位 65.0%→25.6%、joint6 30.2%→1.0%、joint5 `|tau|` 均值 76.5→55.3）；
+     joint4 基本持平（46.3%→47.7%）⇒ 它是"不可达目标"的主犯，留给第 1 条。
   3. 若确实要臂跟踪精度：把 `arm_ee_pos_tracking`/`arm_ee_ori_tracking` 加进 **WBC 奖励表**
      （现在 `WBCRewardsCfg` 里**没有**这两项、`params/env.yaml` 可查），并把姿态 `std`
      从 0.5 rad（≈29°）收紧——否则奖励早饱和、梯度≈0；
   4. 夹爪 `stiffness=4000` 配 ±0.035 rad 行程 / 10 N·m 限幅 ⇒ 误差 >0.0025 rad 就顶满
      （实测 100% 时间在行程端、饱和 95%+）；把刚度降到匹配量级；
-  5. sim2real：臂 `velocity_limit=3.0` 在 `DelayedPDActuator` 里**只参与力矩裁剪、不限速**
+  5. [~] sim2real：臂 `velocity_limit=3.0` 在 `DelayedPDActuator` 里**只参与力矩裁剪、不限速**
      （实测腕关节 |qd| p99 到 5.0 rad/s，超速时间占比 72~97%）⇒ IK 层限速或加进保护逻辑。
+     **2026-10-06 做了并做了 A/B/C/D 消融：结论是"只夹 IK 目标"这条路不通**（DEF-054）——
+     目标被限速后永远追不上（不可达目标 + 限速 = 常驻跟踪误差），`|tau|` 与 `|qd|` 反而更大
+     （joint4 `|tau|` 均值 69.9→88.8 N·m、超速 84%→99.5%）。所以 `max_joint_vel` 已做进
+      cfg 但**默认 -1.0（关）**，留作旋钮；真要限速得从力矩/轨迹层做，或**先做第 1 条**。
   * 现状数字（cap12 / 旧代码，18 s 臂测试）：joint2 顶上限 3.140 rad 占 **26% / 33%**、
     joint5 顶下限占 **25% / 61%**、joint6 顶下限占 **55% / 60%**；
     `|tau|≥99 N·m` 时间占比 joint4 **41%/55%**、joint5 33%/82%、joint6 61%/61%；

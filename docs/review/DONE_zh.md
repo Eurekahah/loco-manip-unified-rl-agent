@@ -28,6 +28,7 @@
 | 2026-10-05 | 新增第十七节 **可视化第四轮 + 扰动课程实质 bug**：`policy_report.py` 第四轮（schedule 驱动的多指令组合 / `--push-sweep` 抗扰扫描 / 每地形稠密高度图 / 图内英文 / npz 分组）；修掉 `apply_event_scale` 因 `EventManager.active_terms` 是 dict 而**从未生效**的扰动课程；`git rm` 4 个老 test 脚本；旧报告目录清空后用新工具重跑（DEF-048） | `codex/ll-train-detail-fix` |
 | 2026-10-06 | **DEF-049 收尾**：fig03 的 pitch 符号 bug 已修并**云端重采验证**（corr −0.843 → **+0.843**，cap12 俯仰跟踪 1.68° vs 旧代码 5.54°）；"无姿态指令段误差留空"改成按生效 `body_cmd` 算；限幅/速度限幅改从 actuator 实例读；fig08 + `report.md` 新增**机械臂负载与限幅**诊断（结论：臂是 IK 直接驱动、WBC 奖励表无臂跟踪项，joint2/5/6 顶在限位上）。**未处理项清单在 `NEXT_SESSION_PROMPT.md` 的 A/B 两节** | `codex/ll-train-detail-fix` |
 | 2026-10-06 | 新增第十八节 **A 组（报告/工具侧）4 条收尾**：臂负载改全 env 口径（A5）、删依赖里的 `[IK DEBUG]`（A6）、`--reset-grace` 剔除复位瞬态（A7）、fig04/fig11 支持 A/B 双 label（A8）；全部本机实测，**未重训** | `codex/ll-train-detail-fix` |
+| 2026-10-06 | 新增第十九节 **B 组开工**：B1 的 20k 已在云端开跑（run `2026-10-06_15-32-05_cloud_ramp20k`，**实测扰动课程首次真正生效**：`step=0` 缩放 0.20×，旧三个 run 的同类打印为 0 次）；B2-②/⑤ **IK 关节保护**做完并 A/B/C/D 消融定稿（位置 clamp 默认开、目标限速默认关） | `codex/ll-train-detail-fix` |
 
 ---
 
@@ -615,6 +616,50 @@ python scripts/reinforcement_learning/rsl_rl/policy_report.py --headless \
 
 ⇒ 报告侧口径现在与"训练/部署"口径一致（同一份数据、全 env、稳态窗口），
 下一步按 `NEXT_SESSION_PROMPT.md` 的 **B1** 起：用修好的扰动课程重跑全长 20k 并在云端出 A/B 报告。
+
+---
+
+## 十九、B 组开工：B1 云端 20k + B2-②/⑤ IK 关节保护（2026-10-06，分支 `codex/ll-train-detail-fix`）
+
+**a) B1 起跑并验证"扰动课程终于生效"（训练中，结果待回填）**
+
+* 云端实例 `bbc64d91a6-99f1820e`（ssh `-p 1237`，3090）仓库先同步到 `bb93453`
+  （`git bundle` + `scp`，GitHub 直连仍不通），然后起
+  `History-Adaptation-Deeprobotics-M20-v0`：4096 envs / seed 42 / 20k iter /
+  `--run_name cloud_ramp20k`，`setsid nohup` 脱离会话，日志 `/root/run_ramp20k.log`；
+  run 目录 `logs/rsl_rl/history_adaptation/2026-10-06_15-32-05_cloud_ramp20k`，
+  启动 15:32:05 CST，ETA ≈15.7 h（≈16 h 后回填 DONE/DEFECT_LOG）。
+* **开跑即验收的一件事：扰动课程第一次真的按比例放大**——
+  `step=0` 打印 `randomize_push_robot.velocity_range 缩放到 0.20×`（= ±0.4/±0.2/yaw±0.104，
+  50k 步后到 1.0×，即 ±2/±1/yaw±0.52）。对照：`run_soft20k.log` / `run_cap12.log` /
+  `run_slowvx.log` 里 `[curriculum] 扰动` 的出现次数都是 **0**（DEF-048 那个 bug 的后果）。
+* 跑完要做的两条验收（DEF-048 定的口径）：① 训练期 `Episode_Termination/root_height_below_minimum`
+  前 2000 iter 的均值 vs `cloud_cap12_20k`（后者没有爬升）；② 末段 push 3×3 生还率
+  （`policy_report.py --push-sweep "1,1;2,2;3,3"`）比 `cloud_cap12_20k`。
+
+**b) B2-②/⑤：IK 输出加关节保护（DEF-054）—— 位置 clamp 默认开、目标限速默认关**
+
+* 改动：`CommandDrivenIKAction` 覆写 `apply_actions()`，写 PD 目标前过 `_protect_joint_target()`：
+  位置 clamp（`protect_joint_pos=True`，限位取自 `robot.data.joint_pos_limits`）+
+  单步目标限速（`max_joint_vel`，默认 **-1.0 = 关**）；两个旋钮都可用 hydra 覆盖。
+* 消融（cap12 `model_19999.pt`，64 envs × 900 步，命令 (0,0,0)/(1,0,0)，同一 seed）：
+  基线 `a5_full` / 只位置 `b2_posonly` / 只限速 `b2_velonly` / 两者 `b2_ik_protect`。
+
+  | 关节 | A 基线 | B 只位置 clamp | C 只目标限速 |
+  |---|---|---|---|
+  | joint1 饱和 / 顶限位 | 7.0% / 4.2% | **2.3% / 0.0%** | 1.0% / 21.2% |
+  | joint2 饱和 / 顶限位 | 12.3% / 21.3% | **2.1% / 14.3%** | 0.3% / 48.8% |
+  | joint5 \|tau\| 均值 / 饱和 / 顶限位 | 76.5 / 53.2% / 65.0% | **55.3 / 28.6% / 25.6%** | 90.4 / 37.1% / 0.7% |
+  | joint6 \|tau\| 均值 / 饱和 / 顶限位 | 64.5 / 39.5% / 30.2% | **52.5 / 23.8% / 1.0%** | 59.8 / 0.0% / 0.0% |
+  | joint4 \|tau\| 均值 / 超速 | 69.9 / 84.0% | 71.8 / 93.4% | 88.8 / **99.5%** |
+
+  ⇒ 位置 clamp 是净收益（5 个关节的饱和/顶限位全面下降，joint4 持平），**默认开**；
+  目标限速**有害**（目标追不上 ⇒ PD 常驻误差 ⇒ 力矩与转速反而更高），**默认关**，
+  代码留作旋钮。joint4 是"目标不可达"的主犯 ⇒ 留给 B2-①（可达性过滤）。
+* 验收：`Flat-Deeprobotics-M20-Piper-WBC-v0` 2-iter 训练 EXIT=0（打印
+  `位置 clamp=on；速度限幅=off`）+ **完整回归矩阵 11 OK / 1 SKIP / 0 FAIL**
+  （`logs/smoke/b2_regression.log`，与改动前基线一致；SKIP 仍是本机跑不了生成地形的
+  `Rough-Slopes-*`，DEF-031）。
 
 ---
 
