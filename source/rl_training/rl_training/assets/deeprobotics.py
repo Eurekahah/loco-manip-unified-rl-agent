@@ -189,8 +189,20 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             joint_names_expr=["arm_joint[1-6]"],
             effort_limit=100.0,       # 根据 Piper 实际力矩限制填写
             velocity_limit=3.0,     # rad/s
-            stiffness=300.0, # 20
-            damping=20, # 0.1
+            # ⚠️ 2026-10-08（B2-⑤ / DEF-064）：stiffness 保持 300，**damping 20 → 8**。
+            # 开环定目标探针（`probe_arm_pd.py`，同一串已知可达的 EE 目标 + 训练好的站立策略）
+            # 实测（有效增益 ≈ 配置值的 1.07~1.13 倍）：
+            #   300/20（现状，有效 322/22.5）→ 逐档 |tau| 均 53.4 N·m、**饱和 23.5%**、
+            #        静止档 47.6 N·m / |qd| p99 5.0、4 档平均位置误差 4.14 cm
+            #   300/12 → 34.3 N·m、饱和 0%、2.71 cm
+            #   300/8  → **22.5 N·m、饱和 0%、2.19 cm**（本次采用）
+            #   150/8  → 21.0 N·m、饱和 0%、**2.89 cm**（再降刚度只会让跟踪变差）
+            # 另：`max_delay` 0~5 → 0~0 几乎无变化 ⇒ 颤振**不是**延迟造成的，是阻尼项太大
+            # （|qd| 到 5 rad/s 时 20×5 = 100 N·m = 满限幅）。
+            # 注意：臂仍会贴 `joint_vel_limits`（joint1~5 是 5.0 rad/s，cfg 里写 3.0）
+            # ⇒ 速度那条要另想办法（B2-⑤ 的 IK 限速/力矩层），不是 PD 能解决的。
+            stiffness=300.0,
+            damping=8,
             friction=0.01,
             armature=0.01,
             min_delay=0,
