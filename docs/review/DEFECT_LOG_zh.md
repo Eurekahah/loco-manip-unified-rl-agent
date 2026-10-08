@@ -75,6 +75,13 @@
 * 对照口径：与 `cloud_slowvx20k` 的**同迭代数**（`model_10000.pt`）比；
   重点看逐地形报告里的**上坡 `(0,0,0)`**：`err_vel_xy`、**高度 std**、`pitch σ`、力矩、终止。
 * 跑完还要做：`policy_report --terrain-grid keep` 出分地形表 + 与旧 run 的 A/B。
+* ⚠️ **混杂因素（必须写清）**：`cloud_slowvx20k` 是 2026-10-02 训的，那时**还没有**本轮的
+  臂改动（IK 位置 clamp 默认开、夹爪 PD 换成 286/5）。所以这次 A/B 是
+  "坡度门控 + 臂改动" vs "两者都没有"。臂改动主要影响**臂的力矩/姿态**，
+  而上坡短板是**牵引/平衡**问题，理论上关系不大，但严格归因需要一条干净对照：
+  跑同一条 10k、用 hydra 把臂改动退回去
+  （`env.actions.ee_ik.protect_joint_pos=False env.scene.robot.actuators.piper_gripper.stiffness=4000.0 ...damping=200.0`）。
+  如果这次上坡指标**大幅改善** ⇒ 归因门控；如果只是小幅 ⇒ 需要再跑那条干净对照。
 
 ---
 
