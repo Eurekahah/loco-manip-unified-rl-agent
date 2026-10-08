@@ -693,8 +693,9 @@ class Harness:
             # 逐 env 累加（"分地形"统计用；不存 (T,N) 大数组）
             _N, _dev = self.n_envs, self.device
             acc = {k: torch.zeros(_N, device=_dev) for k in
-                   ("xy", "xy2", "yaw", "yaw2", "h", "h2", "z", "z2", "pitch2", "roll2", "tau", "done",
-                    "valid")}
+                   ("xy", "xy2", "yaw", "yaw2", "h", "h2", "z", "z2",
+                    # B3：逐地形姿态**均值**也要（坡面分析要看"上坡时身体有没有按坡度俯仰"）
+                    "pitch", "pitch2", "roll", "roll2", "tau", "done", "valid")}
             c_cnt = torch.zeros(_N, 4, device=_dev)
             cmd_t = torch.tensor(cmd, device=_dev, dtype=torch.float32).expand(_N, 3)
             # A7：复位后前 `reset_grace` 步的样本是"复位瞬态"（机器人被摆回原点、速度≈0），
@@ -788,10 +789,8 @@ class Harness:
                 _acc("yaw", torch.abs(cmd_t[:n_ok, 2] - w_z[:n_ok]))
                 _acc("h", h)
                 _acc("z", z)
-                m2 = min(acc["pitch2"].numel(), pitch.shape[0])
-                acc["pitch2"][:m2] += (pitch[:m2] ** 2) * w_steady[:m2]
-                m3 = min(acc["roll2"].numel(), roll.shape[0])
-                acc["roll2"][:m3] += (roll[:m3] ** 2) * w_steady[:m3]
+                _acc("pitch", pitch)   # 同时累加 pitch 与 pitch2（`_acc` 里按 key2 自动平方）
+                _acc("roll", roll)
                 t_rms = torch.sqrt((tau ** 2).mean(dim=-1))
                 m4 = min(acc["tau"].numel(), t_rms.shape[0])
                 acc["tau"][:m4] = torch.maximum(acc["tau"][:m4], t_rms[:m4])
@@ -852,12 +851,14 @@ class Harness:
                     torch.clamp(acc["h2"] / _nv - (acc["h"] / _nv) ** 2, min=0)
                 ).cpu().numpy(),
                 "root_z_mean": (acc["z"] / _nv).cpu().numpy(),
-                "pitch_std_deg": np.degrees(
-                    torch.sqrt(torch.clamp(acc["pitch2"] / _nv, min=0)).cpu().numpy()
-                ),
-                "roll_std_deg": np.degrees(
-                    torch.sqrt(torch.clamp(acc["roll2"] / _nv, min=0)).cpu().numpy()
-                ),
+                # B3：这里以前是 sqrt(E[pitch²])（**RMS 而不是 std**，名字叫 std）；现在改成
+                # 真 std，并补上均值（坡面分析要看"上坡站桩时身体平均俯仰多少"）。
+                "pitch_mean_deg": np.degrees((acc["pitch"] / _nv).cpu().numpy()),
+                "roll_mean_deg": np.degrees((acc["roll"] / _nv).cpu().numpy()),
+                "pitch_std_deg": np.degrees(torch.sqrt(torch.clamp(
+                    acc["pitch2"] / _nv - (acc["pitch"] / _nv) ** 2, min=0)).cpu().numpy()),
+                "roll_std_deg": np.degrees(torch.sqrt(torch.clamp(
+                    acc["roll2"] / _nv - (acc["roll"] / _nv) ** 2, min=0)).cpu().numpy()),
                 "tau_rms_max": acc["tau"].cpu().numpy(),
                 "duty": (c_cnt / _nv.unsqueeze(-1)).cpu().numpy(),
                 "done": acc["done"].cpu().numpy(),
@@ -2209,7 +2210,11 @@ def per_terrain_table(series: dict) -> dict:
                 if not sel.any():
                     continue
                 d = out.setdefault(tname, {}).setdefault(lab, {}).setdefault(cmd_key, {})
-                for key in ("err_xy", "err_yaw", "height_std", "tau_rms_max", "done"):
+                for key in ("err_xy", "err_yaw", "height_std", "tau_rms_max", "done",
+                            # B3：坡面分析的姿态均值（旧 npz 没有这两个键 ⇒ 下面用 get 兜底）
+                            "pitch_mean_deg", "roll_mean_deg", "pitch_std_deg", "roll_std_deg"):
+                    if key not in ep.per_env:
+                        continue
                     v = np.asarray(ep.per_env[key], dtype=float)[sel]
                     d[key] = float(np.mean(v))
                 d["duty_min"] = float(np.asarray(ep.per_env["duty"])[sel].min())
