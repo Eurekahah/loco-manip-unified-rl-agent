@@ -40,6 +40,43 @@
 | 2026-10-08 | 新增 **DEF-062/063**（按用户要求"一个一个执行下一步"）：**B3 修法**——静止伫立惩罚**按坡度门控**（用轮心高度差估脚下坡度，云端实测豁免 11~14% 的坡面 env-step）+ 验证 run `cloud_slopefix10k`；**B1 课程新旋钮**——`peak_scale`（爬到 1.5× 并保持），run `cloud_push15_20k` 已排队；另新增夹爪阶跃响应探针 `probe_gripper_response.py`（旧参数位置环失效：饱和 88~100%、稳态误差 0.031 rad） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-08 | 新增 **DEF-064**（用户问"臂关节力矩也常打满，是 PD 没调好吗"）：新增**开环定目标**探针 `probe_arm_pd.py`（`policy_report` 的 EE 列跨配置不可比，实测软增益会把指令也拉向身体）⇒ 实测 **阻尼是主因**（\|qd\| 5 rad/s × 20 = 100 N·m 满限幅）、**延迟无关**；`damping 20 → 8` 后逐档 \|tau\| 均值 53.4→**22.5 N·m**、饱和 **23.5%→0%**，且跟踪还从 4.14→**2.19 cm**；再降刚度只会变差（150/8 → 2.89 cm） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-08 | 新增 **DEF-065**（用户："改，顺便看看还有什么能做"）：① 夹爪开指令 ±0.04 → **±0.035**（超出行程 ⇒ 稳态误差 0.0050→0.0001、\|tau\| 1.25→0.55 N·m）；② 新增启动事件 `align_joint_velocity_limits` 把**臂**的 PhysX 速度上限对齐到 actuator cfg（USD 5 → **3.0 rad/s**）⇒ `\|qd\|` p99 5.00→3.00、超速 33%→5~18%、力矩再降到 14~17 N·m 且跟踪不劣化；三处冒烟 EXIT=0 | 分支 `codex/ll-train-detail-fix` |
+| 2026-10-08 | 新增 **DEF-066**（顺带清 known_issues ⑭）：EE 碰撞检查拿**世界坐标**比"机体盒子" ⇒ **只有 env 0 有效、其它 env 静默失效**；改成高度不变系局部坐标 + 盒子重定义为机体区域 ⇒ 拒绝率从 ≈0 变成 **24%**（204 个候选拒 49，AABB 5），三处冒烟 EXIT=0、臂负载不变差 | 分支 `codex/ll-train-detail-fix` |
+
+---
+
+### DEF-066 `2026-10-08` EE 目标的碰撞检查只在 env 0 有效（世界坐标 vs 机体盒子）—— known_issues ⑭
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **缺陷**（坐标系用错 ⇒ 检查静默失效） |
+| 状态 | 已修；碰撞拒绝率从"≈0（只有 env 0）"变成 **24%**，三处冒烟 EXIT=0 |
+| 关联 | `commands.py:HeightInvariantEECommand.collision_check`（改用局部坐标）+ `HeightInvariantEECommandCfg`（盒子重定义为机体区域）；`TODO_zh.md` P1 低层 known_issues ⑭；数据 `logs/smoke/colfix_check2.log` |
+
+**1. 现象 / 根因**
+
+* `collision_check` 把球坐标路径转成 **世界坐标** `path_pts`，却拿 `collision_*_limits`
+  （`[-0.3,-0.3,0]…[0.3,0.3,0.5]`，语义是"机体周围的盒子"）去比 ⇒
+  **只有 env 0（正好在世界原点）碰巧有效**，其它 env（按 2.5 m 间距铺开）的路径点永远在盒外
+  ⇒ AABB 检查静默失效；只有"地下检测"（世界 z < 0.05）还在起作用。
+* 这与 `TODO_zh.md` 里 known_issues ⑭ 记的"静默降级 + 硬编码 AABB"是同一件事。
+
+**2. 修正**
+
+* AABB 改比 **高度不变系的局部坐标**（`path_cart_local`）⇒ 盒子随机器人走，对所有 env 一致；
+  世界坐标 `path_pts` 只留给"地下检测"用。
+* 盒子重新表达成"机体区域"：局部系原点在世界 z = `sampled_height`（0.6 m），机体在它下面
+  ⇒ 默认 `[-0.3,-0.3,-0.60] … [0.3,0.3,-0.05]`（地面 0 m ~ 机体顶 0.55 m）。
+* 加了统计（`RL_TRAINING_COL_DEBUG=1` 打印"已检查 / 被拒 / AABB / 地下"）。
+
+**3. 结果（验收）**
+
+* 短报告（32 envs，arm 组 900 步）：`[EE col] 已检查 204 个候选，碰撞/穿地 49（24.0%），
+  其中 AABB 5 / 地下 0` —— 修前 AABB 只可能命中 env 0（≈1/32 的样本），实际为 0。
+* 臂的负载指标没有变差（同一批：joint1 1.2 N·m、joint4 12.1、joint5 27.6、饱和 0~2%）。
+* 冒烟：`Flat-Deeprobotics-M20-Piper-WBC-v0` / `History-Adaptation-Deeprobotics-M20-v0` /
+  `Isaac-Deeprobotics-High-Level-Pick-WBC-Flat-Teacher-v0` 各 2-iter **EXIT=0**。
+* 遗留：`underground_limit` 仍是**世界 z**（0.05 m）—— 在平地正确，在多地形上近似
+  （地形有 ±0.4 的高度），要精确得接 height scanner。已记在 TODO 里。
 
 ---
 

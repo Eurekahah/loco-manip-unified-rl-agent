@@ -261,6 +261,8 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         self.reach_origin: torch.Tensor | None = None
         self.reach_res: torch.Tensor | None = None
         self._reach_stats = {"checked": 0, "rejected": 0, "attempts": 0}
+        # 碰撞检查的统计（DEF-066：改坐标系后要看"到底拒了多少"）
+        self._col_stats = {"checked": 0, "rejected": 0}
         if getattr(self.cfg, "urdf_path", None):
             self._build_reach_grid()
 
@@ -438,17 +440,24 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
         ).reshape(T, N, 3)  # (T, N, 3)
 
         # ── AABB 碰撞检测 ──────────────────────────────────────────
+        # ⚠️ 2026-10-08（known_issues ⑭ / DEF-066）：这里以前比的是 **世界坐标** `path_pts`，
+        # 而 `collision_*_limits` 描述的是"机体周围的盒子" ⇒ 只有 env 0（正好在原点）
+        # 碰巧有效，其它 env 的路径点永远在盒子外 = **碰撞检查静默失效**。
+        # 现在比 **高度不变系的局部坐标** `path_local`（盒子随机器人走）。
+        # 注意 z 的语义：局部系原点在世界 z = `sampled_height`（0.6 m），机体在它下面
+        # ⇒ 默认盒子的 z 区间是负的（见 `HeightInvariantEECommandCfg`）。
+        path_local = path_cart_local.reshape(T, N, 3)
         upper = self.collision_upper_limits
         lower = self.collision_lower_limits
 
         if upper.dim() == 1:
             in_box = torch.logical_and(
-                torch.all(path_pts < upper, dim=-1),
-                torch.all(path_pts > lower, dim=-1),
+                torch.all(path_local < upper, dim=-1),
+                torch.all(path_local > lower, dim=-1),
             )  # (T, N)
             collision_mask = torch.any(in_box, dim=0)  # (N,)
         else:
-            pts = path_pts.unsqueeze(2)  # (T, N, 1, 3)
+            pts = path_local.unsqueeze(2)  # (T, N, 1, 3)
             in_box = torch.logical_and(
                 torch.all(pts < upper, dim=-1),
                 torch.all(pts > lower, dim=-1),
@@ -462,7 +471,16 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
             path_pts[..., 2] < self.underground_limit, dim=0
         )  # (N,)
 
-        return collision_mask | underground_mask
+        bad = collision_mask | underground_mask
+        self._col_stats["checked"] += int(N)
+        self._col_stats["rejected"] += int(bad.sum())
+        if (bool(os.environ.get("RL_TRAINING_COL_DEBUG"))
+                and self._col_stats["checked"] % 200 < N):
+            st = self._col_stats
+            print(f"[EE col] 已检查 {st['checked']} 个候选，碰撞/穿地 "
+                  f"{st['rejected']}（{100.0 * st['rejected'] / max(st['checked'], 1):.1f}%）"
+                  f"，其中 AABB {int(collision_mask.sum())} / 地下 {int(underground_mask.sum())}")
+        return bad
 
     
     def get_height_invariant_base_frame(self, env: ManagerBasedEnv, env_ids):
@@ -738,8 +756,12 @@ class HeightInvariantEECommandCfg(mdp.UniformPoseCommandCfg):
 
     ranges: Ranges = MISSING
 
-    collision_lower_limits: list = field(default_factory=lambda: [-0.3, -0.3, 0.0])
-    collision_upper_limits: list = field(default_factory=lambda: [ 0.3,  0.3, 0.5])
+    # ⚠️ 2026-10-08（DEF-066）：这两个盒子现在是**高度不变系的局部坐标**（以前被当成世界坐标用，
+    # 只有 env 0 有效）。原点在世界 z = `sampled_height`（默认 0.6 m），机体在它**下面**
+    # ⇒ z 区间取 [-0.6, -0.05]（地面 0 m ~ 机体顶部 0.55 m）。
+    # 想做"正上方禁区"（例如限制抬手高度）就把 z 区间改成正的。
+    collision_lower_limits: list = field(default_factory=lambda: [-0.3, -0.3, -0.60])
+    collision_upper_limits: list = field(default_factory=lambda: [ 0.3,  0.3, -0.05])
     underground_limit: float = 0.05          # EE z 低于此值视为穿地
     num_collision_check_samples: int = 10    # 路径插值采样点数
     max_resample_attempts: int = 10          # 最大重采样次数
