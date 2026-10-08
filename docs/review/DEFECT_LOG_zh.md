@@ -131,6 +131,11 @@ EE 指令是"从**重采样那一刻的实际 EE 位姿**插值到随机新目�
   跑同一条 10k、用 hydra 把臂改动退回去
   （`env.actions.ee_ik.protect_joint_pos=False env.scene.robot.actuators.piper_gripper.stiffness=4000.0 ...damping=200.0`）。
   如果这次上坡指标**大幅改善** ⇒ 归因门控；如果只是小幅 ⇒ 需要再跑那条干净对照。
+* 再补一条（2026-10-08 晚，DEF-064 之后）：**云端的 `cloud_slopefix10k` 与排队的
+  `cloud_push15_20k` 都还是旧臂阻尼（`damping=20`）** —— 这是故意的：
+  ① 两者之间、以及它们与 `cloud_slowvx20k` 之间保持同一套臂参数；
+  ② 新的 `damping=8`（DEF-064）等下一轮训练再一起上（它只改臂，不改腿/底盘，
+     对"上坡牵引"这类结论影响很小，但严格说下一轮才是"最终参数"的基线）。
 
 ---
 
