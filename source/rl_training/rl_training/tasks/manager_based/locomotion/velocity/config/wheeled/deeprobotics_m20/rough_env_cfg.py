@@ -254,13 +254,16 @@ class DeeproboticsM20CommandsCfg(CommandsCfg):
             T_traj = (1.0, 3.0),
             orn_cone_min_scale = 0.1,
         ),
-        # ── B2-①：可达性过滤（DEF-049/DEF-054）──────────────────────────────
-        # 只查碰撞盒+地面会采到"关节超程"的目标 ⇒ IK 到不了 ⇒ 关节顶限位 / PD 顶 100 N·m
-        # （实测 joint4 饱和 46%、超速 84%）。给 URDF 就启用：初始化时用 FK 采样建一张
-        # "末端位置可达栅格"，采样时把栅格外面的目标重采样掉（同 `FKReachableEECommand`
-        # 的 FK 链，但只当**过滤器**用，目标分布仍是原来的球坐标采样 + 区间课程）。
-        urdf_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20_Piper_own/urdf/M20_Piper_own.urdf",
-        ee_link_name="gripper_base",
+        # ── B2-①：可达性过滤（DEF-049/DEF-055）—— **默认关闭** ──────────────
+        # 只查碰撞盒+地面会采到"关节超程"的目标 ⇒ IK 到不了 ⇒ 关节顶限位 / PD 顶 100 N·m。
+        # 打开它（给 urdf_path）后力矩收益很大（joint4 饱和 47.7%→10.7%、超速 93.4%→17.0%），
+        # **但有实测副作用**（DEF-055 §4）：EE 跟踪误差 5.87→15.20 cm、姿态 35°→96°，
+        # joint2 会长期贴在 0 限位（94%）；且"位置可达"不等于"当前构型够得到"
+        # （局部 IK 收敛不到）。高层 Pick 链依赖 EE 到位 ⇒ 先不要默认开，
+        # 等"同一目标序列"的受控 A/B 或 pick 成功率验收后再定。
+        # 想开：把下面两行的注释去掉（或 hydra 覆盖 `env.commands.ee_pose.urdf_path=...`）。
+        # urdf_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20_Piper_own/urdf/M20_Piper_own.urdf",
+        # ee_link_name="gripper_base",
     )
     
     # ee_pose=mdp.FKReachableEECommandCfg(

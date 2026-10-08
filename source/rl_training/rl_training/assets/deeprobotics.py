@@ -200,8 +200,19 @@ DEEPROBOTICS_M20_PIPER_CFG = ArticulationCfg(
             joint_names_expr=["gripper_joint[1-2]"],
             effort_limit=10.0,       # 根据 Piper 实际力矩限制填写
             velocity_limit=1.0,     # rad/s
-            stiffness=4000.0, # 20
-            damping=200.0, # 0.1
+            # ⚠️ 2026-10-08（B2-④ / DEF-058）：原值 4000 / 200 实测**长期顶满 10 N·m**
+            # （饱和 88%/84%）。扫描结论（64 envs × 900 步，`logs/smoke/cloud_batch2.log`）：
+            #   k4000 c200 → 饱和 88/84%、|tau|均 9.2 N·m（现状）
+            #   k4000 c40  → 饱和 47/44%、|tau|均 6.0
+            #   k4000 c12.6（临界阻尼）→ 饱和 6/3%、|tau|均 2.1
+            #   k1000 c20  → 饱和 12/12%、|tau|均 2.8
+            #   k286  c5   → 饱和 **0/0%**、|tau|均 **0.5**、|qd| p99 0.5 rad/s（限幅 1.0）
+            # 取"行程匹配"刚度：夹爪行程 0.035 rad，满行程误差刚好给到限幅 10 N·m
+            # ⇒ 夹持力上限不变（仍能顶到 10 N·m），但**不再长期饱和**、速度也在限幅内。
+            # 阻尼取 ζ≈1.5（armature=0.01 下 c_crit≈3.4，取 5）。
+            # 保守替代（只想改阻尼）：k=4000 / c=12.6，饱和也能从 88% 降到 6%。
+            stiffness=286.0,
+            damping=5.0,
             friction=0.01,
             armature=0.01,
             min_delay=0,

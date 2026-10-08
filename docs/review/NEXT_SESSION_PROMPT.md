@@ -258,7 +258,7 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
 
 ━━━ B. 训练 / 物理侧（要改代码 + 重训）━━━
 
-* [~] **B1（最高优先）用修好的扰动课程重跑一条 20k —— 2026-10-06 已开跑，结果待回填**：
+* [x] **B1 用修好的扰动课程重跑一条 20k —— 2026-10-08 已完成并验收（DEF-059）**：
   `apply_event_scale` 的 `EventManager.active_terms` 判断 bug 让 `disturbance_ramp`
   **从上线起就是空操作**（push 第 0 步就全量 ±2/±1/yaw±0.52）。
   * 已在 `bbc64d91a6-99f1820e`（1237）起：4096 envs / seed 42 / 20k /
@@ -266,12 +266,16 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
     日志 `/root/run_ramp20k.log`，**ETA ≈16 h**（14:32 UTC 起跑）。
   * **开跑即验证了一条**：`[curriculum] 扰动 randomize_push_robot.velocity_range 缩放到 0.20×
     (step=0)` —— 旧三个 run（soft20k/cap12/slowvx）的日志里这类打印**都是 0 次**。
-  * 跑完要做的两条验收（口径不变）：① 训练期 `Episode_Termination/root_height_below_minimum`
-    **前 2000 iter 的均值** vs `cloud_cap12_20k`（它没有爬升，是最干净的同代对照）；
-    ② 末段 push 3x3 生还率（`policy_report.py --push-sweep "1,1;2,2;3,3"`）比 `cloud_cap12_20k`。
-    跑完记得 `scp` 回本机 + 关机（不急，先不关）。
+  * **验收结果（两条都拿到了）**：① 前 2000 iter `root_height_below_minimum`
+    **0.0386 → 0.0195（−49%）**、`bad_orientation_2` 0.0724 → 0.0521；
+    ② **但 3× 外推抗扰变差**：终止/环境/分钟 **5.16 vs 2.70**（2× 也差：0.88 vs 0.29），
+    1× 反而更好（0.12 vs 0.00，最大瞬时误差 1.29 vs 1.62）。
+    ⇒ **渐进扰动不是无条件更好**（早期吃满扰动的旧 run 学到了更保守的抗扰姿态）。
+    候选后续：课程爬到 1.5× 再回落 / 最后 20% 恢复满强度扰动 / 维持现状但把抗扰纳入选型。
+  * run 已 `scp` 回本机（`logs/rsl_rl/history_adaptation/2026-10-06_15-32-05_cloud_ramp20k`，42 文件/300 MB），
+    云实例**还开着**（空着，随时可安排下一批）。
 * [ ] **B2 机械臂 5 条改进**（DEF-049 的结论，按性价比排序）：
-  1. [x] `_resample_ee_goal*` 加**可达性过滤**（IK 解一次 / 检查所需关节角是否在限位内）——
+  1. [x]（**已实现但默认关**）`_resample_ee_goal*` 加**可达性过滤**——
      现在只查笛卡尔碰撞盒 + 地面高度，会采到关节超程的目标
      —— **2026-10-06 完成（DEF-055）**：新增 `build_reachable_grid()`
      （`pytorch_kinematics` 建 `arm_base_link→gripper_base` 链，20 万次关节采样 FK →
@@ -279,34 +283,55 @@ python：C:\Users\autolab\miniconda3\envs\env_isaac_lab\python.exe（跑 Isaac �
      并联；`urdf_path` 给了才启用、建不起来**直接报错**（不静默降级）。
      实测 joint4 饱和 **47.7%→10.7%**、超速 **93.4%→17.0%**、`|tau|` 均值 71.8→28.4；
      joint1/2/3/6 饱和基本清零。`reach_joint_margin=0.1` 试过、**没帮助**（默认 0）。
-     遗留：joint2 会长期贴 0 限位（94%，属目标分布偏折叠姿态 ⇒ 要改 `p_*` 区间）、
-     joint5 `|qd|` p99 仍 5.0 rad/s。
+     ⚠️ **2026-10-08 补测（DEF-060）：过滤有实测副作用**——EE 位置误差 5.87→**15.20 cm**、
+     姿态 35°→**96°**、joint2 贴 0 限位 94%（"位置可达"≠"当前构型够得到"，局部 IK 收敛不到）；
+     而且"过滤 + 无位置 clamp"更糟（joint2/3/5 力矩 87 N·m）。⇒ **已改成默认关**
+     （`rough_env_cfg.py` 里把 `urdf_path` 注释掉，留一行开关），等"同一目标序列"或
+     pick 成功率的受控验收再决定。若将来要开，**必须同时开着位置 clamp**。
   2. [x] IK 输出加**关节限位 clamp**（`DifferentialIKController.compute` 返回的是
      `joint_pos + delta`，下游只按 effort 裁剪）⇒ 让"到不了"表现为停在限位而不是硬顶 100 N·m
      —— **2026-10-06 完成（DEF-054）**：`CommandDrivenIKAction.apply_actions()` 里加
      位置 clamp（默认开）。实测 joint1/2/3/5/6 的饱和与顶限位全面下降
      （joint5 顶限位 65.0%→25.6%、joint6 30.2%→1.0%、joint5 `|tau|` 均值 76.5→55.3）；
      joint4 基本持平（46.3%→47.7%）⇒ 它是"不可达目标"的主犯，留给第 1 条。
-  3. 若确实要臂跟踪精度：把 `arm_ee_pos_tracking`/`arm_ee_ori_tracking` 加进 **WBC 奖励表**
+  3. [x] **用户 2026-10-08 决定：不做**（"不用把臂跟踪精度作为奖励项"）⇒ 本条关闭；
+     "停在限位"这条路已由位置 clamp 落实并做过副作用测试（DEF-054/DEF-060）。
+     原方案留档：把 `arm_ee_pos_tracking`/`arm_ee_ori_tracking` 加进 **WBC 奖励表**
      （现在 `WBCRewardsCfg` 里**没有**这两项、`params/env.yaml` 可查），并把姿态 `std`
      从 0.5 rad（≈29°）收紧——否则奖励早饱和、梯度≈0；
-  4. 夹爪 `stiffness=4000` 配 ±0.035 rad 行程 / 10 N·m 限幅 ⇒ 误差 >0.0025 rad 就顶满
+  4. [x] 夹爪 `stiffness=4000` 配 ±0.035 rad 行程 / 10 N·m 限幅 ⇒ 误差 >0.0025 rad 就顶满
      （实测 100% 时间在行程端、饱和 95%+）；把刚度降到匹配量级；
+     **2026-10-08 完成（DEF-058）**：扫描 5 组后取 **`stiffness=286.0 / damping=5.0`**
+     （= 10 N·m ÷ 0.035 rad，"满行程误差刚好顶到限幅"）⇒ 饱和 **88%/84% → 0%/0%**、
+     `|qd|` p99 0.52（限幅 1.0）；已改 `assets/deeprobotics.py`，三个 pick/WBC 冒烟 EXIT=0。
+     **遗留**：抓取成功率待复验（本机跑不了完整 pick 回合）。
   5. [~] sim2real：臂 `velocity_limit=3.0` 在 `DelayedPDActuator` 里**只参与力矩裁剪、不限速**
      （实测腕关节 |qd| p99 到 5.0 rad/s，超速时间占比 72~97%）⇒ IK 层限速或加进保护逻辑。
      **2026-10-06 做了并做了 A/B/C/D 消融：结论是"只夹 IK 目标"这条路不通**（DEF-054）——
      目标被限速后永远追不上（不可达目标 + 限速 = 常驻跟踪误差），`|tau|` 与 `|qd|` 反而更大
      （joint4 `|tau|` 均值 69.9→88.8 N·m、超速 84%→99.5%）。所以 `max_joint_vel` 已做进
       cfg 但**默认 -1.0（关）**，留作旋钮；真要限速得从力矩/轨迹层做，或**先做第 1 条**。
+     **2026-10-08 补**：joint5 的 `|qd|` p99 仍是 5.0 rad/s（默认关着限速）⇒ 仍是遗留项。
   * 现状数字（cap12 / 旧代码，18 s 臂测试）：joint2 顶上限 3.140 rad 占 **26% / 33%**、
     joint5 顶下限占 **25% / 61%**、joint6 顶下限占 **55% / 60%**；
     `|tau|≥99 N·m` 时间占比 joint4 **41%/55%**、joint5 33%/82%、joint6 61%/61%；
     EE 稳态误差：位置可到 18 cm、姿态 55°~99°（且那几段腕关节 100% 在饱和）。
-* [ ] **B3 坡面短板专项（2~10k iter）**：下坡速度跟踪最差 + 上坡最易摔。候选：
-  a. "只放坡面"的地形变体（照 `ROUGH_SLOPES_FLAT_TERRAINS_CFG` 把比例改成上下坡各 0.5）跑 10k；
-  b. 或单独调 `track_lin_vel_xy_exp` / `track_ang_vel_z_exp` 在坡面段的权重/std（先用 a 定位）。
-* [ ] **B4 把 SlowVx 配方落成默认**：四个 v_x 台阶（150k/200k/250k/300k 环境步）写进
-  `RoughSlopesEnvWBCConfig.__post_init__`，保留 `-play-` 变体。
+* [x] **B3 坡面短板：已归因（2026-10-08，DEF-061）** —— 先纠正前提：**短板不是"下坡"**，
+  而是"**上坡 + 低/零速**"。256 envs 逐地形实测（`logs/smoke/report_slope_analysis/`）：
+  上坡 `(0,0,0)` 的速度误差是平地 **4.4×**（0.2257 vs 0.0513）、**高度抖动 24×**（std 0.0496）、
+  俯仰 σ 2.41°（平地 0.15°）、力矩 +37%、**终止 0.094**（其它地形全 0）；
+  而下坡 `(0,0,0)/(0.8,0,0)` 已经和平地一个量级（0.0629 / 0.1382）。机理：
+  **"静止伫立"惩罚按零速命令门控惩罚轮子转动 ⇒ 在坡上等于锁死轮子 ⇒ 下滑—补—滑振荡**
+  （高度 std 爆表、平均俯仰几乎不偏），且轮式方案缺"刹车/牵引"通道（最差腿触地 0.176 vs 平地 0.937），
+  终止全是 `bad_orientation_2`。
+  **待做（修法，按性价比）**：a. 静止惩罚**按坡度门控**（或改成"奖励不滑动"而非"不转轮"）；
+  b. 做"**只放上坡**"的地形变体跑 2~10k 验 a 是否对症；
+  c. 若 a 不够再单独放宽上坡的 `track_lin_vel_xy_exp` std。
+* [x] **B4 把 SlowVx 配方落成默认**（2026-10-08 完成，DEF-056）：四个 v_x 台阶
+  （150k/200k/250k/300k 环境步）已写进 `RoughSlopesEnvWBCConfig`；
+  `RoughSlopesSlowVxEnvWBCConfig` 变**别名**（不再二次 ×2，老任务名继续可用）、
+  `-play-` 变体不变；云端多地形 2-iter 冒烟 EXIT=0。
+  复现旧配方（75k/100k/125k/150k）需用 hydra 覆盖 `num_steps`。
 * [ ] **B5 其他老账**（都在 TODO_zh.md）：s3 臂摆动鲁棒性、执行器刚度课程、
   低层 known_issues ⑭⑮、`mdp/__init__.py` 星号导入遮蔽（影响面小）、
   `vr_extented` 的"无超时线程"（已评估降级）。
