@@ -233,6 +233,11 @@ class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
             "command_threshold": 0.1,
             "yaw_weight": 1.0,
             "asset_cfg": SceneEntityCfg("robot"),
+            # B3 / DEF-061：**坡面上关掉静止惩罚**（上坡"停住轮子"= 往下滑 ⇒ 振荡）。
+            # 用轮心高度差估"脚下坡度"，|pitch| ≥ 0.06 rad（≈3.4°）判为坡面。
+            # 0 = 关闭门控（复现旧行为）。
+            "slope_gate_rad": 0.06,
+            "feet_cfg": SceneEntityCfg("robot", body_names=".*wheel"),
         },
     )
     stand_still_wheel_vel = RewTerm(
@@ -242,6 +247,8 @@ class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
             "command_name": "base_velocity",
             "command_threshold": 0.1,
             "asset_cfg": SceneEntityCfg("robot", joint_names=None),  # 具体名单在 deeprobotics_m20 的 rough cfg 里填
+            "slope_gate_rad": 0.06,   # B3 / DEF-061，同上
+            "feet_cfg": SceneEntityCfg("robot", body_names=".*wheel"),
         },
     )
 

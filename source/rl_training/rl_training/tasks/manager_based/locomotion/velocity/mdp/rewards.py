@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 
 import torch
@@ -850,6 +851,8 @@ def stand_still_vel_l2(
     command_threshold: float = 0.1,
     yaw_weight: float = 1.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    slope_gate_rad: float = 0.0,
+    feet_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*wheel"),
 ) -> torch.Tensor:
     """零速命令下惩罚底盘残余线速度（xy 平面）与残余 yaw 角速度。
 
@@ -880,7 +883,64 @@ def stand_still_vel_l2(
     stand_yaw = (torch.abs(cmd[:, 2]) < command_threshold).float()
     lin_vel_sq = torch.sum(torch.square(asset.data.root_lin_vel_b[:, :2]), dim=1)
     yaw_rate_sq = torch.square(asset.data.root_ang_vel_b[:, 2])
-    return lin_vel_sq * stand_lin + yaw_weight * yaw_rate_sq * stand_yaw
+    gate = slope_gate(env, asset, slope_gate_rad, feet_cfg)
+    return (lin_vel_sq * stand_lin + yaw_weight * yaw_rate_sq * stand_yaw) * gate
+
+
+def _ground_slope_pitch(
+    env: ManagerBasedRLEnv, asset: Articulation, feet_cfg: SceneEntityCfg
+) -> torch.Tensor:
+    """用**四个轮心的 body 系高度差**估计"脚下地面"的俯仰角（rad，正 = 前高后低 = 上坡）。
+
+    为什么不用 `projected_gravity`：本任务的机身姿态是**被控平的**（`body_pose` 命令
+    pitch/roll ≈ 0），在坡上重力投影仍接近 `[0,0,-1]` ⇒ 看不出坡。而轮心在 body 系的
+    z 差正好反映"前轮所在地面比后轮高多少"：上坡时 `z_front > z_rear`。
+    """
+    ids = feet_cfg.body_ids
+    if len(ids) < 2:
+        return torch.zeros(asset.num_instances, device=asset.device)
+    pos_w = asset.data.body_pos_w[:, ids, :]
+    root_pos = asset.data.root_pos_w
+    root_quat = asset.data.root_quat_w
+    pos_b = math_utils.quat_apply(
+        math_utils.quat_conjugate(root_quat).unsqueeze(1).expand(-1, pos_w.shape[1], -1),
+        pos_w - root_pos.unsqueeze(1),
+    )  # (N, 4, 3) body 系
+    xb, zb = pos_b[..., 0], pos_b[..., 2]
+    order = torch.argsort(xb, dim=1)              # 按 body-x 排序：前两个 = 前轮
+    rear, front = order[:, :2], order[:, -2:]
+    dz = zb.gather(1, front).mean(1) - zb.gather(1, rear).mean(1)
+    dx = (xb.gather(1, front).mean(1) - xb.gather(1, rear).mean(1)).clamp_min(1e-3)
+    return torch.atan2(dz, dx)
+
+
+def slope_gate(
+    env: ManagerBasedRLEnv,
+    asset: Articulation,
+    slope_gate_rad: float,
+    feet_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """`1.0`（平地/微坡，惩罚照常）或 `0.0`（坡面上关掉"静止伫立"惩罚）。
+
+    为什么要这个门控（B3 / DEF-061）：上坡时"把轮子停住"= 往下滑；策略只能在
+    "滑—补—滑"之间振荡（实测上坡 `(0,0,0)` 高度 std 是平地的 **24×**、终止 0.094）。
+    坡面上允许轮子动（去做牵引/刹车）之后，这个惩罚在该工况下才是合理的。
+    `slope_gate_rad <= 0` ⇒ 不门控（完全保持原行为）。
+    """
+    if slope_gate_rad is None or float(slope_gate_rad) <= 0.0:
+        return torch.ones(asset.num_instances, device=asset.device)
+    pitch = _ground_slope_pitch(env, asset, feet_cfg)
+    gate = (pitch.abs() < float(slope_gate_rad)).float()
+    if os.environ.get("RL_TRAINING_SLOPE_DEBUG"):
+        _s = getattr(env, "_slope_dbg", {"n": 0, "on": 0.0, "abs_sum": 0.0})
+        _s["n"] += 1
+        _s["on"] += float(gate.mean())
+        _s["abs_sum"] += float(pitch.abs().mean())
+        env._slope_dbg = _s
+        if _s["n"] % 200 == 0:
+            print(f"[slope gate] 调用 {_s['n']} 次：门控开启比例均值 {_s['on'] / _s['n']:.3f}，"
+                  f"|坡度| 均值 {_s['abs_sum'] / _s['n'] * 57.3:.2f}°")
+    return gate
 
 
 def stand_still_wheel_vel_l2(
@@ -888,6 +948,8 @@ def stand_still_wheel_vel_l2(
     command_name: str,
     command_threshold: float = 0.1,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=".*_wheel_joint"),
+    slope_gate_rad: float = 0.0,
+    feet_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*wheel"),
 ) -> torch.Tensor:
     """零速命令下惩罚轮关节转速（"轮足原地站着不该一直转"）。
 
@@ -902,7 +964,8 @@ def stand_still_wheel_vel_l2(
     cmd = env.command_manager.get_command(command_name)
     is_standing = (torch.linalg.norm(cmd[:, :2], dim=1) < command_threshold).float()
     wheel_vel_sq = torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1)
-    return wheel_vel_sq * is_standing
+    gate = slope_gate(env, asset, slope_gate_rad, feet_cfg)
+    return wheel_vel_sq * is_standing * gate
 
 
 # ============================================================================
