@@ -34,6 +34,46 @@
 | 2026-10-06 | 新增 **DEF-050~053**（`NEXT_SESSION_PROMPT.md` **A 组 4 条全部做完**）：A5 臂负载表改**全 env 口径**（同一份 64 envs 数据里 env0 单独看 joint2 顶限位 0% vs 全 env 21.3%、joint4 饱和 81.2% vs 46.3%）、A6 删掉 IsaacLab 依赖里的 `[IK DEBUG]` 刷屏（15 行 → 0）、A7 新增 `--reset-grace`（默认 25 步）剔除复位瞬态污染、A8 fig04/fig11 支持 `--compare` 双 label | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-06 | 新增 **DEF-054**（**B2-②/⑤**）：IK 直驱的臂补上关节保护 —— **位置 clamp 默认开**（joint1/2/3/5/6 饱和与顶限位全面下降：joint5 顶限位 65%→25.6%、joint6 30.2%→1.0%）、**目标限速默认关**（A/B/C/D 消融证明它有害：joint4/5 `\|tau\|` 均值 69.9→88.8 / 76.5→90.4、超速升到 99%）；B1 的 20k 已在云端开跑且**实测扰动课程首次生效** | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-06 | 新增 **DEF-055**（**B2-①**）：EE 目标加 **FK 可达性过滤**（20 万次关节采样 → 1.5 cm 体素栅格）⇒ joint4 饱和 **47.7%→10.7%**、超速 **93.4%→17.0%**、`\|tau\|` 均值 71.8→28.4 N·m；joint1/2/3/6 饱和基本清零；`reach_joint_margin=0.1` 消融证明不需要（joint2 贴限位是目标分布问题） | 分支 `codex/ll-train-detail-fix` |
+| 2026-10-08 | 新增 **DEF-056**（**B4**）：SlowVx 配方（v_x 课程台阶 150k/200k/250k/300k）**落成多地形任务默认**（`RoughSlopesEnvWBCConfig`），`RoughSlopesSlowVxEnvWBCConfig` 变别名、`-play-` 不变；等价性由字面量改写保证，端到端冒烟上云 | 分支 `codex/ll-train-detail-fix` |
+
+---
+
+### DEF-056 `2026-10-08` SlowVx 配方落成多地形任务的**默认**（B4）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **配置收口**（把已验证的配方设为默认，保留旧任务名） |
+| 状态 | 已完成（等价性由"字面量改写 + 别名不再二次推迟"保证；多地形任务的端到端冒烟只能上云，见下） |
+| 关联 | `source/.../deeprobotics_m20/flat_env_wbc_cfg.py`：`RoughSlopesEnvWBCConfig.__post_init__` / `RoughSlopesSlowVxEnvWBCConfig` / `SLOW_VX_FACTOR`；DEF-044（SlowVx 验证结论）、DEF-040 §2；`NEXT_SESSION_PROMPT.md` B4 |
+
+**1. 现象 / 动机**
+
+* `cloud_roughslopes20k`（默认配方）的地形等级在中段爬到峰值 **5.80/9**、后 1/3 回落到 **3.6**；
+  回落期正好是 v_x 命令课程放开（±2→±5 m/s）的时候 ⇒ 根因是"**命令难度涨得比地形课程快**"。
+* `cloud_slowvx20k` 把四个台阶各推迟一倍（75k/100k/125k/150k → **150k/200k/250k/300k** 环境步）
+  后地形等级**不再回落**：末 1000 `terrain_levels` **3.706（−0.09/1k）→ 4.74（+0.095/1k）**、
+  `bad_orientation_2` −51%、回报 +33%（DEF-044）。既然是验证过的更好配方，就该是默认。
+
+**2. 修正**
+
+* 四个台阶的时间表**直接写进 `RoughSlopesEnvWBCConfig`**（150k/200k/250k/300k）——
+  于是 `Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0` 现在就是当初验证过的那份配方。
+* `RoughSlopesSlowVxEnvWBCConfig` 改成**别名**（不再二次 ×2），保留
+  `Rough-Slopes-SlowVx-…-v0` 这个既有任务名可用；`SLOW_VX_FACTOR` 保留为历史常量并注明。
+* `-play-` 变体不动：PLAY 本来就把四个台阶置 None（直接用终态 ±5 m/s），
+  所以 `Rough-Slopes-…-play-v0` 与 `…-SlowVx-play-v0` 依旧等价。
+* 备选（否掉）：删掉 SlowVx 那两个 cfg/任务名 —— 会让历史 run 的 `--task` 名字对不上，
+  也破坏"按名字复现旧 run"的约定。
+
+**3. 结果（验收）**
+
+* 静态：`py_compile` 通过；四处字面量（150k/200k/250k/300k）与 `RoughSlopesSlowVxEnvWBCConfig`
+  去掉二次推迟，逻辑上与原 SlowVx 任务**逐字段等价**。
+* **本机跑不了多地形任务**（DEF-031：生成地形 + 训练级网格会在 env 创建期死锁）⇒
+  端到端冒烟放到云端做（与本批 B2 改动一起，见 DONE 第二十节）。
+* 兼容性：`cloud_roughslopes20k` 那类"旧默认配方"的 run 以后要用
+  `env.curriculum.base_velocity_lin_vel_x_s4.params.modify_params.num_steps=75000` 之类的 hydra
+  覆盖才能复现（文档里记一下即可，不影响新训练）。
 
 ---
 

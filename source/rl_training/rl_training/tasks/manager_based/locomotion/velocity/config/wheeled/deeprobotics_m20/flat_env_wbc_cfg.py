@@ -951,14 +951,23 @@ class RoughSlopesEnvWBCConfig(RoughEnvWBCConfig):
         self.scene.terrain.terrain_generator.curriculum = True
         self.scene.terrain.max_init_terrain_level = 5
 
-        # 多地形上把 v_x 课程重新打开（RoughEnvWBCConfig 里被置 None 了；
-        # 步骤与 `RoughWOStairsEnvWBCConfig` 完全一致，便于横向对比）。
+        # 多地形上把 v_x 课程重新打开（RoughEnvWBCConfig 里被置 None 了）。
+        #
+        # ⚠️ 2026-10-08（B4 / DEF-044）：**这里直接落 SlowVx 的时间表**（四个台阶
+        # 150k / 200k / 250k / 300k 环境步）——原来它们是 75k/100k/125k/150k，
+        # 实测"地形等级中段爬到 5.8 之后在末段回落到 3.6"（DEF-040 §2），
+        # 根因是**命令难度涨得比地形课程快**；台阶各推迟一倍后地形等级不再回落
+        # （末 1000 `terrain_levels` 3.706(−0.09/1k) → **4.74(+0.095/1k)**、
+        # `bad_orientation_2` −51%、回报 +33%，DEF-044）。
+        # 所以把 SlowVx 配方作为**默认**：`Rough-Slopes-*-M20-v0` 现在就是当初
+        # 验证过的那个配方；`RoughSlopesSlowVxEnvWBCConfig` 保留为**别名**（不再二次推迟）。
+        # `-play-` 变体不受影响（PLAY 把四个台阶全置 None，直接用终态 ±5）。
         self.curriculum.base_velocity_lin_vel_x_s4 = CurrTerm(
             func=mdp.modify_term_cfg,
             params={
                 "address": "commands.base_velocity.ranges.lin_vel_x",
                 "modify_fn": mdp.override_value,
-                "modify_params": {"value": (-2.0, 2.0), "num_steps": 75_000},
+                "modify_params": {"value": (-2.0, 2.0), "num_steps": 150_000},
             },
         )
         self.curriculum.base_velocity_lin_vel_x_s5 = CurrTerm(
@@ -966,7 +975,7 @@ class RoughSlopesEnvWBCConfig(RoughEnvWBCConfig):
             params={
                 "address": "commands.base_velocity.ranges.lin_vel_x",
                 "modify_fn": mdp.override_value,
-                "modify_params": {"value": (-3.0, 3.0), "num_steps": 100_000},
+                "modify_params": {"value": (-3.0, 3.0), "num_steps": 200_000},
             },
         )
         self.curriculum.base_velocity_lin_vel_x_s6 = CurrTerm(
@@ -974,7 +983,7 @@ class RoughSlopesEnvWBCConfig(RoughEnvWBCConfig):
             params={
                 "address": "commands.base_velocity.ranges.lin_vel_x",
                 "modify_fn": mdp.override_value,
-                "modify_params": {"value": (-4.0, 4.0), "num_steps": 125_000},
+                "modify_params": {"value": (-4.0, 4.0), "num_steps": 250_000},
             },
         )
         self.curriculum.base_velocity_lin_vel_x_s7 = CurrTerm(
@@ -982,7 +991,7 @@ class RoughSlopesEnvWBCConfig(RoughEnvWBCConfig):
             params={
                 "address": "commands.base_velocity.ranges.lin_vel_x",
                 "modify_fn": mdp.override_value,
-                "modify_params": {"value": (-5.0, 5.0), "num_steps": 150_000},
+                "modify_params": {"value": (-5.0, 5.0), "num_steps": 300_000},
             },
         )
         if self.__class__.__name__ == "RoughSlopesEnvWBCConfig":
@@ -1029,38 +1038,33 @@ class RoughSlopesEnvWBCConfig_PLAY(RoughSlopesEnvWBCConfig):
 
 
 # ============================================================================
-# 多地形 + **v_x 命令课程推迟一倍**（2026-10-02 新增，DEF-040 §2 的候选修法）
+# SlowVx：v_x 命令课程台阶 ×2（2026-10-02 提出 → **2026-10-08 落成默认**，B4/DEF-044）
 # ----------------------------------------------------------------------------
 # 背景：`cloud_roughslopes20k` 的地形等级在中段爬到峰值 5.80（满分 9），后 1/3 回落到 3.6。
-# 后 1/3 恰好在放开 v_x 命令课程（±2→±5 m/s，s4~s7 分别在 3125/4167/5208/6250 iter 生效）
-# ⇒ 猜想是"命令难度涨得比地形课程快"，把 v_x 课程的四个台阶各推迟一倍
-# （±5 从 31% 推迟到 62% 的训练进度）。
-# 与 `cloud_roughslopes20k` 的差异**有两条**（要一起看）：
-#   ① 本变体吃到了新的全局默认 `max_noise_std=1.2`（DEF-039）；
-#   ② v_x 课程台阶 ×2。
+# 后 1/3 恰好在放开 v_x 命令课程（±2→±5 m/s，s4~s7）⇒ 根因是"命令难度涨得比地形课程快"。
+# **验证结论（DEF-044）**：台阶各推迟一倍后地形等级不再回落
+# （末 1000 `terrain_levels` 3.706（−0.09/1k）→ **4.74（+0.095/1k）**、`bad_orientation_2` −51%、
+# 回报 +33%）⇒ 从 2026-10-08 起，这四档时间表**直接写在 `RoughSlopesEnvWBCConfig` 里**，
+# 也就是说 `Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0` 现在就是验证过的那个配方；
+# `SLOW_VX_FACTOR` / `RoughSlopesSlowVxEnvWBCConfig` 保留为**别名**（任务名继续可用，不再二次推迟）。
 # `-play-` 变体不另开：PLAY 本来就关掉 v_x 课程（把所有台阶置 None），
 # 所以验收直接用 `Rough-Slopes-History-Adaptation-Deeprobotics-M20-play-v0` 即可。
 # ============================================================================
 SLOW_VX_FACTOR: int = 2
-"""v_x 命令课程台阶的推迟倍数（`RoughSlopesSlowVxEnvWBCConfig` 用）。"""
+"""v_x 命令课程台阶的推迟倍数（历史常量：该配方 2026-10-08 已落成
+`RoughSlopesEnvWBCConfig` 的默认值，`RoughSlopesSlowVxEnvWBCConfig` 只是别名，不再乘它）。"""
 
 
 @configclass
 class RoughSlopesSlowVxEnvWBCConfig(RoughSlopesEnvWBCConfig):
-    """多地形 + v_x 课程台阶 ×2（其余全部与 `RoughSlopesEnvWBCConfig` 一致）。"""
+    """**别名**：SlowVx 配方（v_x 台阶 ×2）从 2026-10-08 起已是 `RoughSlopesEnvWBCConfig` 的默认。
+
+    保留这个类只是为了不破坏 `--task=Rough-Slopes-SlowVx-…-v0` 这个既有名字
+    （B4：配方落默认、老 task 名继续可用），因此这里**不再二次推迟**。
+    """
 
     def __post_init__(self):
         super().__post_init__()
-        for name in (
-            "base_velocity_lin_vel_x_s4",
-            "base_velocity_lin_vel_x_s5",
-            "base_velocity_lin_vel_x_s6",
-            "base_velocity_lin_vel_x_s7",
-        ):
-            term = getattr(self.curriculum, name)
-            if term is not None:
-                mp = term.params["modify_params"]
-                mp["num_steps"] = int(mp["num_steps"] * SLOW_VX_FACTOR)
         if self.__class__.__name__ == "RoughSlopesSlowVxEnvWBCConfig":
             self.disable_zero_weight_rewards()
 
