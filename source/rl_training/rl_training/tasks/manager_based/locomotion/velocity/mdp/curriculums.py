@@ -232,6 +232,17 @@ def _progress(env: ManagerBasedRLEnv, num_steps: int, start_scale: float) -> flo
     return start_scale + (1.0 - start_scale) * p
 
 
+def _progress_target(
+    env: ManagerBasedRLEnv, num_steps: int, start_scale: float, target_scale: float
+) -> float:
+    """线性进度：``common_step_counter`` 从 0 → num_steps 时返回 start_scale → target_scale。
+
+    `target_scale == 1.0` 时与 `_progress` 完全等价（旧行为不变）。
+    """
+    p = min(max(env.common_step_counter / max(int(num_steps), 1), 0.0), 1.0)
+    return start_scale + (float(target_scale) - start_scale) * p
+
+
 def apply_range_stages(
     env: ManagerBasedRLEnv,
     env_ids: Sequence[int],
@@ -287,8 +298,16 @@ def apply_event_scale(
     spec: Sequence[dict],
     num_steps: int,
     start_scale: float = 0.3,
+    peak_scale: float = 1.0,
+    peak_steps: int | None = None,
 ) -> None:
     """把**扰动类事件**的参数从 ``start_scale`` 线性放大到 1.0（扰动课程）。
+
+    ``peak_scale > 1``（B1 / DEF-059 的实验旋钮）：爬到 ``peak_scale`` **并保持**，
+    即"训练时的扰动比评测口径（1.0×）更强"。动机：`cloud_ramp20k` 实测**早期更稳**
+    （前 2000 iter 的高度终止 −49%），但 **2×/3× 外推抗扰反而比"从第 0 步就满强度"
+    的旧 run 差**（3× 摔倒 5.16 vs 2.70 次/环境/分钟）⇒ 试"温和起步 + 更强的稳定期"。
+    ``peak_steps`` 默认 = ``num_steps``（爬到峰值用的步数）。
 
     ``spec`` 里给出"事件名 + 参数名 + **完整幅度**"，缩放始终基于完整幅度计算，
     因此幂等；例如::
@@ -302,7 +321,8 @@ def apply_event_scale(
     第 0 步就全量开启的 push / 外力会让早期"一被推就趴窝"，
     而趴窝现在由 `root_height_below_minimum` 记账。
     """
-    s = _progress(env, num_steps, start_scale)
+    s = _progress_target(env, peak_steps if peak_steps else num_steps,
+                         start_scale, peak_scale)
     for item in spec:
         term_name = item["term"]
         # 事件可能被某个 cfg/探针关掉（置 None）—— `get_term_cfg` 对不存在的项会抛

@@ -37,6 +37,73 @@
 | 2026-10-08 | 新增 **DEF-056**（**B4**）：SlowVx 配方（v_x 课程台阶 150k/200k/250k/300k）**落成多地形任务默认**（`RoughSlopesEnvWBCConfig`），`RoughSlopesSlowVxEnvWBCConfig` 变别名、`-play-` 不变；等价性由字面量改写保证，端到端冒烟上云 | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-08 | 新增 **DEF-057**：报告 A/B 的**机身姿态指令两个 label 不同**（实测 0.3671 vs 0.5130，两份报告都是这一对）⇒ 高度/姿态跨 label 比较无效；改成 `collect()` 里固定标称站姿（0.513/0/0）；顺带把 `pitch_std_deg` 从"RMS"改成真 std 并补逐 env 的 pitch/roll 均值 | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-08 | 新增 **DEF-058~061**：④ **B2-④** 夹爪 PD 扫描（阻尼 200 → 力矩饱和 88%；改 `286/5` 后 0%）｜③ **B2-③** 副作用实证（位置 clamp 无副作用、EE 误差还略降；**可达过滤会让 EE 误差 5.87→15.20 cm** ⇒ 过滤改默认关）｜② **B1 验收**（扰动课程确实修好：前 2000 iter `root_height_below_minimum` −49%；但 **3× 外推抗扰变差**：5.16 vs 2.70 次/环境/分钟）｜① **B3 坡面分析**（短板是"**上坡 + 低/零速**"：速度误差 4.4×、高度抖动 24×、终止 0.094，机理=静止惩罚在坡上等于锁轮子 ⇒ 下滑振荡） | 分支 `codex/ll-train-detail-fix` |
+| 2026-10-08 | 新增 **DEF-062/063**（按用户要求"一个一个执行下一步"）：**B3 修法**——静止伫立惩罚**按坡度门控**（用轮心高度差估脚下坡度，云端实测豁免 11~14% 的坡面 env-step）+ 验证 run `cloud_slopefix10k`；**B1 课程新旋钮**——`peak_scale`（爬到 1.5× 并保持），run `cloud_push15_20k` 已排队；另新增夹爪阶跃响应探针 `probe_gripper_response.py`（旧参数位置环失效：饱和 88~100%、稳态误差 0.031 rad） | 分支 `codex/ll-train-detail-fix` |
+
+---
+
+### DEF-063 `2026-10-08` B3 修法（进行中）：静止伫立惩罚**按坡度门控** + 上坡专项验证 run
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **缺陷修复**（按 DEF-061 的归因）+ 验证实验 |
+| 状态 | 已实现并冒烟；**验证 run `cloud_slopefix10k` 训练中（结果待回填）** |
+| 关联 | `mdp/rewards.py:slope_gate/_ground_slope_pitch/stand_still_*`；`flat_env_wbc_cfg.py`（两个惩罚项加 `slope_gate_rad=0.06`）；DEF-061（归因）、DEF-046（本机跑不了地形训练） |
+
+**1. 改什么**
+
+* `stand_still_vel_l2` / `stand_still_wheel_vel_l2` 增加 `slope_gate_rad`：
+  **脚下坡度超过阈值时把这项惩罚乘 0**（= 坡面上允许轮子动，去做牵引/刹车），
+  平地与微坡完全不变（默认 `slope_gate_rad=0.0` 时就是原行为）。
+* 坡度怎么测：**用四个轮心在 body 系下的高度差**（`atan2(Δz, Δx)`，前高后低为正）。
+  为什么不用重力投影：本任务的机身姿态是**被控平**的（`body_pose` pitch/roll≈0），
+  在坡上 `projected_gravity` 仍接近 `[0,0,-1]`，看不出坡。
+* 阈值取 **0.06 rad ≈ 3.4°**；调试用 `RL_TRAINING_SLOPE_DEBUG=1` 会打印
+  "门控开启比例 / |坡度| 均值"。
+
+**2. 冒烟（不是训练结论）**
+
+* 本机平地 3-iter：EXIT=0，行为不变（平地 |坡度|≈0 ⇒ 门控恒 1）。
+* 云端多地形 14-iter（`--num_envs 64`）：EXIT=0，实测
+  **门控开启比例 86~89%、|坡度| 均值 1.8~2.0°**
+  ⇒ 约 11~14% 的 env-step 落在坡面上被豁免（地形是"粗糙 40% + 上下坡各 25% + 平地 10%"，
+  坡面 patch 中间还有 2 m 平台，所以均值只有 2° 是合理的）。
+
+**3. 验证 run（进行中）**
+
+* `cloud_slopefix10k`：`Rough-Slopes-History-Adaptation-Deeprobotics-M20-v0`（= SlowVx 配方，
+  B4 之后就是默认）+ 坡度门控，4096 envs / seed 42 / **10k iter**，2026-10-08 13:44 CST 起。
+* 对照口径：与 `cloud_slowvx20k` 的**同迭代数**（`model_10000.pt`）比；
+  重点看逐地形报告里的**上坡 `(0,0,0)`**：`err_vel_xy`、**高度 std**、`pitch σ`、力矩、终止。
+* 跑完还要做：`policy_report --terrain-grid keep` 出分地形表 + 与旧 run 的 A/B。
+
+---
+
+### DEF-062 `2026-10-08` 扰动课程加 `peak_scale` 旋钮（"温和起步 + 更强稳定期"实验，进行中）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **特性**（课程旋钮）+ 实验 |
+| 状态 | 已实现并冒烟；**run `cloud_push15_20k` 已排队（等 `cloud_slopefix10k` 跑完自动开）** |
+| 关联 | `mdp/curriculums.py:_progress_target/apply_event_scale(peak_scale, peak_steps)`；`flat_env_wbc_cfg.py` 的 `disturbance_ramp.params`；DEF-059（B1 的两面结论） |
+
+**1. 动机（来自 DEF-059 的实测）**：课程修好后**早期更稳**（前 2000 iter 高度终止 −49%），
+但 **2×/3× 外推抗扰比"第 0 步就满强度"的旧 run 差**（3× 摔倒 5.16 vs 2.70 次/环境/分钟）
+⇒ 猜想是"**稳定期练得不够狠**"，于是加一个"爬到 `peak_scale`（>1）并保持"的旋钮：
+温和起步不变，但训练期的扰动**比评测口径（1.0×）更强**。
+
+**2. 实现**：`apply_event_scale(..., peak_scale=1.0, peak_steps=None)` ——
+`s = start + (peak−start)·min(step/peak_steps,1)`；`peak_scale=1.0` 与旧行为**完全等价**。
+cfg 里默认 `peak_scale=1.0 / peak_steps=0`（0 = 用 `num_steps`；**不能写 None** ——
+hydra 覆盖 None 字段会按 NoneType 校验，连整数都传不进来，同 DEF-040 §5 的坑）。
+
+**3. 冒烟**：本机 8-iter + `peak_scale=1.5 peak_steps=100` ⇒ 打印序列
+`0.20×(step=0) → 0.23 → 0.27 → … → 1.12× → 1.50×(step=113)` 后保持 ✔
+（1.5× 时 push 力度 = x±3.0 / y±1.5 / yaw±0.78，是训练口径的 1.5 倍）。
+
+**4. 验证 run（已排队）**：`cloud_push15_20k` —— flat `History-Adaptation-Deeprobotics-M20-v0`、
+4096 envs / seed 42 / 20k / `peak_scale=1.5`，与 `cloud_ramp20k`（1.0×）和
+`cloud_cap12_20k`（旧代码=第 0 步满强度）三方对照，判据仍是
+① 前 2000 iter 的高度终止、② 末段 push 1×/2×/3× 的终止率。
 
 ---
 

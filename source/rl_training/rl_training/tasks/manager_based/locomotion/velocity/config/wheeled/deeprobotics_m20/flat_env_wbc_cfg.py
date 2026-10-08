@@ -452,6 +452,12 @@ class WBCCurriculumCfg(DeeproboticsM20CurriculumsCfg):
         params={
             "num_steps": 50_000,
             "start_scale": 0.2,
+            # B1/DEF-059 实验旋钮：爬到 peak_scale（>1 = 训练扰动比评测口径更强）并保持。
+            # 1.0 = 旧行为（爬到 1.0×）。`cloud_push15_20k` 用 hydra 覆盖成 1.5 试。
+            "peak_scale": 1.0,
+            # 0 = 用 num_steps（注意：这里不能用 None —— hydra 覆盖 None 字段会按 NoneType
+            # 校验，连 100 这种整数都传不进来，见 DEF-040 §5 的同类坑）
+            "peak_steps": 0,
             "spec": [
                 {"term": "randomize_push_robot", "param": "velocity_range",
                  "base": {"x": (-2.0, 2.0), "y": (-1.0, 1.0), "yaw": (-0.52, 0.52)}},
