@@ -45,8 +45,9 @@ parser.add_argument("--task", type=str, default="Flat-Deeprobotics-M20-Piper-WBC
 parser.add_argument("--agent", type=str, default="rsl_rl_cfg_entry_point")
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--hold-s", type=float, default=1.5, help="每段保持时长（秒）")
-parser.add_argument("--open-target", type=float, default=0.04,
-                    help="开目标（高层 BinaryJointPositionAction 用 ±0.04，注意行程只有 ±0.035）")
+parser.add_argument("--open-target", type=float, default=0.035,
+                    help="开目标（高层 BinaryJointPositionAction 现在是 ±0.035 = 行程上限；"
+                         "以前是 ±0.04，会带 0.005 rad 的永久误差）")
 parser.add_argument("--label", type=str, default="run")
 parser.add_argument("--out", type=str, default=None, help="把指标写成 JSON")
 cli_args.add_rsl_rl_args(parser)

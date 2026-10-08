@@ -345,6 +345,21 @@ class EventCfg:
         },
     )
 
+    # DEF-065 / B2-⑤ 遗留：把**臂关节**的"引擎级"速度上限对齐到 actuator cfg 的
+    # `velocity_limit`（USD 里是 5 rad/s，cfg 写 3.0 ⇒ 实测 |qd| p99 恒为 5.0、超速 33%）。
+    # 只动 `arm_joint.*`：腿/轮保持原样，避免扰动已训好的运动策略。
+    align_arm_velocity_limits = EventTerm(
+        func=mdp.align_joint_velocity_limits,
+        mode="startup",
+        params={
+            # ⚠️ 参数顺序要与函数签名一致：IsaacLab 的 EventManager 是**按顺序**校验的
+            # （顺序不一致会报 "... expects ... but received ..."）
+            "asset_cfg": SceneEntityCfg("robot"),
+            "scale": 1.0,
+            "joint_names": ["arm_joint.*"],
+        },
+    )
+
     randomize_rigid_body_mass = EventTerm(
         func=mdp.randomize_rigid_body_mass,
         mode="startup",

@@ -73,7 +73,11 @@ class HLFlatPickActionsCfg(HighLevelActionsCfg):
     gripper_action = mdp.BinaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=["gripper_joint1", "gripper_joint2"],
-        open_command_expr={"gripper_joint1": 0.04, "gripper_joint2": -0.04},
+        # ⚠️ 2026-10-08（DEF-058/064 后续）：原来是 ±0.04，而夹爪行程只有 ±0.035
+        # ⇒ "开到底"永远带 0.005 rad 的稳态误差（旧 PD 下就是永久 10 N·m 顶满）。
+        # 改成与行程一致：静止时误差 → 0（`probe_gripper_response.py` 实测稳态误差
+        # 从 0.00500 降到 0，饱和仍为 0%）。
+        open_command_expr={"gripper_joint1": 0.035, "gripper_joint2": -0.035},
         close_command_expr={"gripper_joint1": 0.0, "gripper_joint2": 0.0},
     )
 

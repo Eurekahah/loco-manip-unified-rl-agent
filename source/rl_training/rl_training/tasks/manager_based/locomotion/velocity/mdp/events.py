@@ -17,6 +17,65 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
 
 
+def align_joint_velocity_limits(
+    env: ManagerBasedEnv,
+    # 框架要求：事件函数前两个位置参数必须是 (env, env_ids)，且 env_ids **不能有默认值**
+    # （否则 `manager_base._prepare_term` 的参数集合校验会失败，报 "... but received ..."）
+    env_ids: torch.Tensor | None,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    scale: float = 1.0,
+    joint_names: list[str] | None = None,
+) -> None:
+    """把**引擎级**的关节速度上限对齐到 actuator cfg 的 `velocity_limit`（DEF-065 / B2-⑤ 遗留）。
+
+    为什么需要：本资产 USD 里 `maxJointVelocity` 对臂关节是 **5 rad/s**（joint6 是 3），
+    而 actuator cfg 写的是 3.0 —— 但 `DelayedPDActuator` **不拿这个值限速**
+    （只用于力矩裁剪），所以实测臂关节 `|qd|` p99 恒为 **5.0**（贴 USD 上限）、
+    超速时间占比 33%，改 PD 参数也治不了（DEF-064 §4）。
+    这里用 `Articulation.write_joint_velocity_limit_to_sim` 把 PhysX 的 DOF max velocity
+    改成 actuator 的值 —— PhysX 在超速时**会主动制动**关节，于是仿真至少在"速度上限"
+    这一条上与真机一致（真机 Piper 的关节速度限幅就是 3 rad/s 量级）。
+
+    Args:
+        scale: 对齐系数；`<= 0` 表示跳过（复现旧行为）；>1 可放宽（调试/消融用）。
+        joint_names: 只对齐这些关节（正则全匹配，如 `["arm_joint.*"]`）；
+            `None` = 全部关节。**默认只用于臂关节** —— 腿/轮不动，避免扰动已训好的运动策略。
+    """
+    import re
+
+    if scale is None or float(scale) <= 0.0:
+        return
+    robot = env.scene[asset_cfg.name]
+    n_set = 0
+    for act in robot.actuators.values():
+        all_jn = list(getattr(act, "joint_names", []) or [])
+        if not all_jn:
+            continue
+        buf = getattr(act, "velocity_limit", None)
+        if buf is None:
+            continue
+        v = torch.as_tensor(buf, dtype=torch.float32)
+        if v.dim() >= 2:          # actuator 实例上是 (num_envs, num_joints)
+            v = v[0]
+        v = v.flatten()
+        if v.numel() < len(all_jn):
+            v = v.expand(len(all_jn))
+        table = {n: float(v[i]) for i, n in enumerate(all_jn)}
+        jn = all_jn
+        if joint_names is not None:
+            pats = [re.compile(p) for p in joint_names]
+            jn = [n for n in all_jn if any(p.fullmatch(n) for p in pats)]
+        if not jn:
+            continue
+        v_sel = torch.tensor([table[n] for n in jn], dtype=torch.float32)
+        ids, _ = robot.find_joints(jn)
+        robot.write_joint_velocity_limit_to_sim(
+            (v_sel * float(scale)).to(robot.device), joint_ids=ids
+        )
+        n_set += len(jn)
+    print(f"[limits] 已把 {n_set} 个关节的**引擎**速度上限对齐到 actuator cfg（scale={scale}）")
+
+
 def randomize_rigid_body_inertia(
     env: ManagerBasedEnv,
     env_ids: torch.Tensor | None,

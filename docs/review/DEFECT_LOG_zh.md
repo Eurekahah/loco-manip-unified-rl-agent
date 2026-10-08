@@ -39,6 +39,52 @@
 | 2026-10-08 | 新增 **DEF-058~061**：④ **B2-④** 夹爪 PD 扫描（阻尼 200 → 力矩饱和 88%；改 `286/5` 后 0%）｜③ **B2-③** 副作用实证（位置 clamp 无副作用、EE 误差还略降；**可达过滤会让 EE 误差 5.87→15.20 cm** ⇒ 过滤改默认关）｜② **B1 验收**（扰动课程确实修好：前 2000 iter `root_height_below_minimum` −49%；但 **3× 外推抗扰变差**：5.16 vs 2.70 次/环境/分钟）｜① **B3 坡面分析**（短板是"**上坡 + 低/零速**"：速度误差 4.4×、高度抖动 24×、终止 0.094，机理=静止惩罚在坡上等于锁轮子 ⇒ 下滑振荡） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-08 | 新增 **DEF-062/063**（按用户要求"一个一个执行下一步"）：**B3 修法**——静止伫立惩罚**按坡度门控**（用轮心高度差估脚下坡度，云端实测豁免 11~14% 的坡面 env-step）+ 验证 run `cloud_slopefix10k`；**B1 课程新旋钮**——`peak_scale`（爬到 1.5× 并保持），run `cloud_push15_20k` 已排队；另新增夹爪阶跃响应探针 `probe_gripper_response.py`（旧参数位置环失效：饱和 88~100%、稳态误差 0.031 rad） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-08 | 新增 **DEF-064**（用户问"臂关节力矩也常打满，是 PD 没调好吗"）：新增**开环定目标**探针 `probe_arm_pd.py`（`policy_report` 的 EE 列跨配置不可比，实测软增益会把指令也拉向身体）⇒ 实测 **阻尼是主因**（\|qd\| 5 rad/s × 20 = 100 N·m 满限幅）、**延迟无关**；`damping 20 → 8` 后逐档 \|tau\| 均值 53.4→**22.5 N·m**、饱和 **23.5%→0%**，且跟踪还从 4.14→**2.19 cm**；再降刚度只会变差（150/8 → 2.89 cm） | 分支 `codex/ll-train-detail-fix` |
+| 2026-10-08 | 新增 **DEF-065**（用户："改，顺便看看还有什么能做"）：① 夹爪开指令 ±0.04 → **±0.035**（超出行程 ⇒ 稳态误差 0.0050→0.0001、\|tau\| 1.25→0.55 N·m）；② 新增启动事件 `align_joint_velocity_limits` 把**臂**的 PhysX 速度上限对齐到 actuator cfg（USD 5 → **3.0 rad/s**）⇒ `\|qd\|` p99 5.00→3.00、超速 33%→5~18%、力矩再降到 14~17 N·m 且跟踪不劣化；三处冒烟 EXIT=0 | 分支 `codex/ll-train-detail-fix` |
+
+---
+
+### DEF-065 `2026-10-08` 臂"引擎级"速度上限没跟着 actuator cfg（5 rad/s vs 3.0）+ 夹爪开指令超出行程
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **两处"仿真参数不一致"**（都是 sim2real 口径问题） |
+| 状态 | 已修并实测；WBC / Pick-WBC / History 三处冒烟 EXIT=0 |
+| 关联 | `mdp/events.py:align_joint_velocity_limits`；`velocity_env_cfg.py:EventCfg.align_arm_velocity_limits`（startup）；`hl_flat_pick_env_cfg.py:gripper_action.open_command_expr`；证据 `logs/smoke/arm_pd_velcap.json`、`grip_new035.json` |
+
+**1. 臂速度上限：USD 5 rad/s vs cfg 3.0（DEF-064 §4 的遗留）**
+
+* 现象：`robot.data.joint_vel_limits` 臂关节是 **[5,5,5,5,5,3] rad/s**（USD 的
+  `maxJointVelocity`），而 actuator cfg 写 `velocity_limit=3.0`。`DelayedPDActuator`
+  **不用**这个值限速（只做力矩裁剪）⇒ 实测 `|qd|` p99 **恒为 5.0**、超速时间占比 **33%**；
+  改 PD 参数（DEF-064）治不了这条。
+* 修法：新增启动事件 `align_joint_velocity_limits`，用
+  `Articulation.write_joint_velocity_limit_to_sim()` 把 **PhysX 的 DOF max velocity**
+  改写成 actuator cfg 的值（PhysX 会在超速时**主动制动**）。只对 `arm_joint.*` 生效
+  —— 腿/轮不动，避免扰动已训好的运动策略。
+* 实测（同一串开环目标，`arm_pd_velcap` vs 改前的 `arm_pd_final`）：
+
+  | 指标 | 改前（USD 5 rad/s） | **改后（3.0 rad/s）** |
+  |---|---|---|
+  | `data_joint_vel_limits` | [5,5,5,5,5,3] | **[3,3,3,3,3,3]** |
+  | `\|qd\|` p99 | 5.00 | **3.00** |
+  | 超速时间占比（逐档） | 33~38% | **1.7~18.3%** |
+  | 逐档 `\|tau\|` 均值 | 21~24 N·m | **14~17 N·m** |
+  | 逐档位置误差 | 0.68~1.59 cm | **0.71~1.43 cm**（不劣化） |
+
+* 踩坑记录（给以后写启动事件的人）：`ManagerTermBase` 的参数校验要求事件函数
+  签名为 `(env, env_ids, **params)`，且 **`env_ids` 不能有默认值**，否则报
+  `"... expects mandatory parameters: [] and optional parameters: [...] but received: [...]"`。
+
+**2. 夹爪"开"指令超出行程（±0.04 vs ±0.035）**
+
+* 高层 `BinaryJointPositionAction` 原来是 `open_command_expr={"gripper_joint1": 0.04, ...}`，
+  而夹爪行程只有 ±0.035 ⇒ 开到底**永远带 0.005 rad 稳态误差**（旧 PD 下就是永久顶满 10 N·m，
+  见 DEF-058）。改成 ±0.035。
+* 实测（`probe_gripper_response.py`，新 PD 286/5）："开"档稳态误差 **0.00500 → 0.00012**，
+  `|tau|` 均 1.25 → **0.55 N·m**，饱和仍 0%，上升时间 40 ms。
+
+**3. 口径提醒**：这两条都改变仿真行为（臂最大转速、夹爪开位）⇒
+云端在跑/排队的两个 run 用的仍是旧代码（彼此一致）；下一轮训练才带上这两条。
 
 ---
 
