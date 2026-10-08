@@ -671,6 +671,12 @@ class Harness:
             for _ in range(warmup):
                 obs = self._step(cmd, obs)
             obs = self._force_reset(cmd, obs)
+            # ⚠️ 2026-10-08（A/B 可比性）：**把机身姿态指令也固定住**。
+            # 以前 `collect()` 只固定速度指令，`body_pose` 交给命令项自己采样 ⇒ 每个 label
+            # 在"第一次 force_reset"时抽到的**单条**姿态指令不同（实测 A 档高度指令 0.367、
+            # B 档 0.513，两份报告都是这样）⇒ 跨 label 的"高度均值/高度std/俯仰"根本不可比。
+            # 现在固定成与 `collect_schedule` 同一个标称站姿（高度 0.513、pitch/roll 0）。
+            self._write_body_cmd(getattr(self, "nominal_body", None))
 
             rec = {k: [] for k in (
                 "t", "cmd", "vel_b", "yaw", "xy", "z", "h", "pitch", "roll",
@@ -2955,6 +2961,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     neutral_body = None
     # 臂 / push 两段为了各档位可比，写一个**固定**的标称站姿（0.513 = 常规站立高度）
     nominal_body = ((min(0.513, hr[1]), 0.0, 0.0) if bp is not None else None)
+    # `collect()`（逐档固定命令）也用它 ⇒ A/B 两个 label 的机身姿态指令完全一致（见 collect 里的注释）
+    harness.nominal_body = nominal_body
 
     # ── schedule（一条连续轨迹里切换速度 + 机身姿态）─────────────────────
     segments = None

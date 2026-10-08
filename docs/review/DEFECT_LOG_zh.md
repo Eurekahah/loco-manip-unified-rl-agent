@@ -35,6 +35,63 @@
 | 2026-10-06 | 新增 **DEF-054**（**B2-②/⑤**）：IK 直驱的臂补上关节保护 —— **位置 clamp 默认开**（joint1/2/3/5/6 饱和与顶限位全面下降：joint5 顶限位 65%→25.6%、joint6 30.2%→1.0%）、**目标限速默认关**（A/B/C/D 消融证明它有害：joint4/5 `\|tau\|` 均值 69.9→88.8 / 76.5→90.4、超速升到 99%）；B1 的 20k 已在云端开跑且**实测扰动课程首次生效** | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-06 | 新增 **DEF-055**（**B2-①**）：EE 目标加 **FK 可达性过滤**（20 万次关节采样 → 1.5 cm 体素栅格）⇒ joint4 饱和 **47.7%→10.7%**、超速 **93.4%→17.0%**、`\|tau\|` 均值 71.8→28.4 N·m；joint1/2/3/6 饱和基本清零；`reach_joint_margin=0.1` 消融证明不需要（joint2 贴限位是目标分布问题） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-08 | 新增 **DEF-056**（**B4**）：SlowVx 配方（v_x 课程台阶 150k/200k/250k/300k）**落成多地形任务默认**（`RoughSlopesEnvWBCConfig`），`RoughSlopesSlowVxEnvWBCConfig` 变别名、`-play-` 不变；等价性由字面量改写保证，端到端冒烟上云 | 分支 `codex/ll-train-detail-fix` |
+| 2026-10-08 | 新增 **DEF-057**：报告 A/B 的**机身姿态指令两个 label 不同**（实测 0.3671 vs 0.5130，两份报告都是这一对）⇒ 高度/姿态跨 label 比较无效；改成 `collect()` 里固定标称站姿（0.513/0/0）；顺带把 `pitch_std_deg` 从"RMS"改成真 std 并补逐 env 的 pitch/roll 均值 | 分支 `codex/ll-train-detail-fix` |
+
+---
+
+### DEF-057 `2026-10-08` 报告里 A/B 两个 label 的**机身姿态指令根本不是同一个** ⇒ 高度/姿态跨 label 比较全部无效
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **报告工具缺陷**（A/B 口径不一致，与 DEF-049/A7 同类） |
+| 状态 | 已修（`collect()` 里固定标称站姿） |
+| 关联 | `scripts/reinforcement_learning/rsl_rl/policy_report.py`：`Harness.collect()` / `nominal_body`；证据 `logs/smoke/report_flatAB_new`（旧）vs `logs/smoke/report_ramp_ab`（新）vs `logs/smoke/b1_bodyfix_check`（修后） |
+
+**1. 现象（怎么发现的）**
+
+* 在验收 B1 时对比两份 A/B 报告发现同一个 checkpoint 的"高度均值"对不上：
+  旧报告 `report_flatAB_new` 里 cap12 是 **0.3698**，新报告 `report_ramp_ab` 里同一个
+  cap12 变成 **0.5017**；而"另一个 label"（旧报告的 oldcode、新报告的 ramp20k）
+  恰好都是 **0.36** 左右。两份报告的 `--steps/--warmup/--seed/--num_envs` 完全一样。
+* 直接读回 `body_cmd` 才看清根因：**每个 label 的机身姿态指令是"该 label 第一次复位时抽到的
+  那一个随机样本"**，而且**只与 label 顺序有关**：
+
+  | 报告 | label A（第一个） | label B（第二个） |
+  |---|---|---|
+  | `report_flatAB_new` | cap12：高度指令 **0.3671** | oldcode：**0.5130** |
+  | `report_ramp_ab` | ramp20k：**0.3671** | cap12：**0.5130** |
+
+  ⇒ 两份报告、两组完全不同的命令/步数，抽到的都是 0.3671 / 0.5130 这一对
+  （固定 seed 下的确定性序列）⇒ **A/B 的高度/俯仰/侧倾是在不同指令下测的**。
+
+**2. 根因**
+
+* `Harness.collect()` 只把**速度指令**固定住（`_write_cmd`），机身姿态指令交给
+  `BodyPoseCommand` 自己在每次 reset 时重采样；而记录用的是 `env_id` 那一个 env
+  ⇒ 每个 label 只拿到**一个**随机高度样本，label A 与 label B 抽到的还不同。
+* 影响面：所有"A 档 vs B 档"的 `高度均值/高度std/pitch` 列（`report.md` 第 1 节、
+  fig03 的姿态误差）都不可比；`err_vel_xy/摔倒率/步态` 不受影响
+  （速度指令是固定的），**push 组也不受影响**（它本来就写 `nominal_body`）。
+
+**3. 修正**
+
+* `collect()` 每档命令开始前调用 `_write_body_cmd(nominal_body)`：把姿态指令固定成与
+  arm / push 段同一个**标称站姿**（高度 `min(0.513, height_range 上界)`、pitch/roll = 0）。
+  `nominal_body` 由 `main()` 计算后挂到 harness 上（`harness.nominal_body`）。
+* 备选（否掉）：每个 label 用同一随机种子重放采样 —— 要动 RNG 状态机（`_force_reset` 会连带
+  重采速度/其他命令），脆弱且难解释；固定标称值是本仓库已有的约定（arm/push 段就是这么做的）。
+
+**4. 结果（验收）**
+
+* 修后 A/B（`--num_envs 32 --steps 200 --schedule none --no-push`，`b1_bodyfix_check`）：
+  两个 label 的 `body_cmd` 都是 **`[0.513, 0, 0]`**，实测高度均值 **0.5173 vs 0.5211**
+  （(0,0,0) 档）⇒ 可比了；`report.md` 第 1 节的"高度均值/高度std/pitch均值"三列现在有意义。
+* 兼容性：**旧报告的 height/pitch 列不要跨 label 引用**（本次改动只影响新采集；
+  已有结论里凡是用到"高度均值/高度std/pitch"做 A/B 判断的，需要重新采集才可信；
+  用 `err_vel_xy/摔倒率/步态/力矩` 的结论不受影响）。
+* 顺带：本次还发现 `policy_report` 里 `pitch_std_deg/roll_std_deg` 以前是
+  `sqrt(E[pitch²])`（**RMS 而不是 std**）——同批一起改成真 std，并新增
+  `pitch_mean_deg/roll_mean_deg` 到逐 env 统计（B3 坡面分析要用）。
 
 ---
 
