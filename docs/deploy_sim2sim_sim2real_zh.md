@@ -28,7 +28,8 @@ python scripts/reinforcement_learning/rsl_rl/probe_deploy_layout.py \
 | 机械臂 | 由 **IK** 从 `ee_pose` 命令驱动（不占动作维度） | 必须自己实现，见第 6 节 |
 | history | 10 步 × 70 维，**最旧→最新** | 每步 70 维组成见第 4 节 |
 | 训练终止阈值 | 倾角 > 0.8 rad(45.8°)、root 高度 < 0.30 m | 真机上当作**保护阈值**用 |
-| 当前 run | `2026-09-20_00-50-31`，checkpoint `model_19999.pt` | 导出于 `<run>/exported_deploy/` |
+| 当前 run（**平地**） | `2026-09-20_00-50-31`（部署基线）/ `2026-09-30_19-36-00_cloud_cap12_20k`（平地最佳） | 导出于 `<run>/exported_deploy/` |
+| 当前 run（**多地形**） | **`2026-10-02_00-44-42_cloud_slowvx20k`**，`model_19999.pt` | 见 §1.1 |
 
 ---
 
@@ -44,6 +45,28 @@ python scripts/reinforcement_learning/rsl_rl/probe_deploy_layout.py \
 
 ⚠️ **陷阱**：同 run 下的 `<run>/exported/policy.pt` 是 `play.py` 导出的 **actor-only** 版本
 （输入 115 = 83 + 32 latent，那 32 维 latent 没有来源），拿去部署会静默算错。
+
+### 1.1 多地形部署用哪个（2026-10-09 结论）
+
+**用 `logs/rsl_rl/history_adaptation/2026-10-02_00-44-42_cloud_slowvx20k/exported_deploy/`**
+（`policy.onnx` / `policy.pt` / `policy_layout.json`；ONNX↔TorchScript 自检相对误差 3.0e-7）。
+
+| | `cloud_roughslopes20k`（旧多地形，也有部署态产物） | **`cloud_slowvx20k`（推荐）** |
+|---|---|---|
+| 地形等级（末段 1000） | 峰值 5.80 → **回落到 3.6/9** | **4.74（+0.095/1k，不回落）** |
+| `bad_orientation_2`（末段） | 0.194 | **−51%**（DEF-044） |
+| `Train/mean_reward` | 基线 | **+33%** |
+
+* **接口与平地部署基线完全一致**（`kind=history`、`policy_obs 83`、`history 10×70`、
+  `action 16`）⇒ 换模型只要替 `policy.onnx`/`policy.pt`，部署侧的维度断言不用改。
+* ⚠️ **已知短板：上坡 + 低/零速**（256 envs 逐地形实测：上坡 `(0,0,0)` 的速度误差是平地的
+  **4.4×**、高度抖动 **24×**、终止 0.094 且全是 `bad_orientation_2`；见 DEF-061）。
+  真机上"在斜坡上原地站住/慢慢走"要额外小心（修法正在验证：`cloud_slopefix10k`）。
+* 它的地形能力大致到 **level 4.7/9**（训练分布内），更陡的坡不要指望。
+* 这批策略是在**臂参数还没修好**的仿真里训的（臂抖 + 顶限位，DEF-064/065）；
+  策略不控制臂，但底盘受到的扰动略有不同 ⇒ 下一轮带新臂参数的训练会更干净。
+* 真机执行器限幅要对齐：仿真里臂的速度上限已从 5 收到 **3 rad/s**（DEF-065），
+  别按 5 去放开；夹爪是 10 N·m / 1 rad/s。
 导出脚本默认已经写到 `exported_deploy/`，并在遇到这种目录时打印警告。
 
 数值一致性（导出时自检 + 独立复核）：TorchScript vs eager `0.000e+00`；
