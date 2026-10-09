@@ -915,3 +915,64 @@ run 目录里的 `<run>/git/loco-manip-unified-rl-agent.diff`（rsl_rl 训练启
 
 四个高层 reward 与合并高层链时的记录（1.11 / 1.28 / 0.15 / 10.25）逐位一致 ⇒ 基线没有回归。
 日志里只有 Isaac 自带的 `failed to open .../kit/.../user.config.json` 警告（只读安装目录，无害）。
+
+---
+
+## 二十一、合并就绪性评估：`codex/ll-train-detail-fix` → `main`（2026-10-09）
+
+**a) 分支关系与规模**
+
+* `main = 7dce9e9`（2026-09-22，P1-1 A/B 收尾）；本分支 = `4f402eb`，**领先 56 个提交**，
+  而 **main 是 HEAD 的严格祖先** ⇒ **可以 `git merge --ff-only`，零冲突**。
+* 规模：`git diff --stat main..HEAD` = **56 文件 / +11082 / −4112**。
+  新增 11 个（`policy_report.py` / `eval_fixed_command.py` / `summarize_run.py` /
+  `smoke_regression.py` / `sweep_ee_anchor.py` / 6 个 probe / `docs/model_zoo_zh.md` /
+  `docs/deploy_code_delta_2026-10-09_zh.md`），删除 7 个（4 个老 test 脚本 + openvla 动作与 cfg +
+  没人注册的 `PreTrainedPolicyAction`）。
+* 工作区 `git status` **干净**；`logs/` 被 `.gitignore` 排除（`**/logs/*`，跟踪文件数 0）
+  ⇒ 不会把实验产物/模型带进 main。
+* **没有新增第三方依赖**：`pytorch_kinematics` 在基线里就已是模块级 import
+  （`commands.py:577` → 现 819 行）；`setup.py` 只是 `find_packages` + 删掉 `cusrl[all]`。
+  （既有欠账：它不在 `INSTALL_REQUIRES` 里，换机器要靠环境自带宽。）
+
+**b) 合并闸门：本机回归矩阵 = 11 OK / 1 SKIP / 0 FAIL**（与基线一致）
+
+```
+python scripts/reinforcement_learning/rsl_rl/smoke_regression.py --num_envs 64 --max_iterations 2
+# 日志 logs/smoke/merge_regression.log
+# SKIP = Rough-Slopes-*（本机生成地形训练死锁，DEF-031），其余 11 条 EXIT=0
+```
+
+**c) 合并会把 main 的"默认行为"升级成下面这些**（都各有 DEF 条目与实测，不是随手改的）
+
+| 层 | 变化 |
+|---|---|
+| 探索噪声 | `max_noise_std` **0.0 → 1.2**（DEF-039，20k A/B 定稿） |
+| 臂执行器 | `damping` **20 → 8**；引擎速度上限对齐 **3 rad/s**（DEF-064/065） |
+| 夹爪 | PD **4000/200 → 286/5**；开指令 **±0.04 → ±0.035**（DEF-058/065） |
+| IK | 输出**夹到关节限位**（默认开，DEF-054）；FK 可达性过滤（默认**关**，DEF-055） |
+| EE 命令 | 复位**锚定真实位姿**（⑫，DEF-034）；碰撞盒改**机体局部系**（⑭，DEF-066） |
+| 扰动 | push 间隔 **10~15 s → 5~10 s**、幅度 **±0.5 → ±2.0/±1.0 + yaw±0.52**、课程 0.2×→1.0×（DEF-028/048） |
+| 静止伫立 | 新增两项惩罚 + 三条 25k 课程，权重**软化到 −2.0 / −5e-4**、`rel_standing_envs` 0.02→0.15；**坡面门控 0.06 rad**（DEF-026/061） |
+| 地形 | 新增多地形任务，默认配方 = **SlowVx**（v_x 台阶 ×2，DEF-044/056） |
+| 工程债 | cusrl 全删、`find_packages`、星号导入注释、视觉编码器本地权重优先、删除 4 个老脚本等 |
+
+复现旧行为大多有开关：`agent.policy.max_noise_std=0.0`（**必须写小数**）、
+`env.actions.ee_ik.protect_joint_pos=False`、`env.curriculum.disturbance_ramp.params.peak_scale=1.0`、
+`env.rewards.stand_still_vel_l2.params.slope_gate_rad=0`、臂/夹爪 PD 用 hydra 覆盖回旧值。
+
+**d) 合并前建议先定的一件事：B3 坡度门控的默认值**
+
+* 现状：`slope_gate_rad=0.06`（**默认开**），但它的验证 run `cloud_slopefix10k`（多地形 10k）
+  **还在跑**（2026-10-08 13:44 起，约 19 h）⇒ 结论未知。
+* 两个选择：① **等它跑完再合**（最稳）；② 先合，但把 `slope_gate_rad` 默认改回 `0.0`
+  （一行、等价旧行为），等验证出来再单独提一条改回 0.06。
+
+**e) 合并后要做的**
+
+* 在 main 上再跑一次同一条回归命令（合并后验收）。
+* 更新 DONE 第六节的部署基线说明：基线行为仍靠 tag `deploy-baseline-2026-09-20`（`2d49f47`）
+  复现 —— 合并后 main 的"默认行为"**不再等于**部署基线（臂/夹爪 PD、速度上限、碰撞盒、
+  静止惩罚、扰动强度、噪声上界、地形默认配方都变了）。
+* 用 main 复现旧 run 需要按 §c 的开关做 hydra 覆盖（尤其静止惩罚权重与扰动区间）。
+* 部署产物**不需要重训**（策略权重与仿真参数无关）；但下一轮训练会用新的物理口径。
