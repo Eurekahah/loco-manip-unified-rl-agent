@@ -234,9 +234,13 @@ class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
             "yaw_weight": 1.0,
             "asset_cfg": SceneEntityCfg("robot"),
             # B3 / DEF-061：**坡面上关掉静止惩罚**（上坡"停住轮子"= 往下滑 ⇒ 振荡）。
-            # 用轮心高度差估"脚下坡度"，|pitch| ≥ 0.06 rad（≈3.4°）判为坡面。
-            # 0 = 关闭门控（复现旧行为）。
-            "slope_gate_rad": 0.06,
+            # 用轮心高度差估"脚下坡度"，`slope_gate_rad` = 判为坡面的阈值（rad）。
+            # ⚠️ 2026-10-09：**默认暂设 0（= 关闭门控，复现旧行为）** —— 它的验证 run
+            # `cloud_slopefix10k`（多地形 10k）还在跑，结论未定；合并到 main 时不该把
+            # 未验证的默认改动带进去。等 run 出来（若上坡指标明显改善）再单独提一条改回
+            # 0.06（或按结果调阈值）。临时开启：hydra
+            # `env.rewards.stand_still_vel_l2.params.slope_gate_rad=0.06`。
+            "slope_gate_rad": 0.0,
             "feet_cfg": SceneEntityCfg("robot", body_names=".*wheel"),
         },
     )
@@ -247,7 +251,7 @@ class WBCRewardsCfg(DeeproboticsM20RewardsCfg):
             "command_name": "base_velocity",
             "command_threshold": 0.1,
             "asset_cfg": SceneEntityCfg("robot", joint_names=None),  # 具体名单在 deeprobotics_m20 的 rough cfg 里填
-            "slope_gate_rad": 0.06,   # B3 / DEF-061，同上
+            "slope_gate_rad": 0.0,   # B3 / DEF-061：同上，默认暂关（等 cloud_slopefix10k 验证）
             "feet_cfg": SceneEntityCfg("robot", body_names=".*wheel"),
         },
     )
