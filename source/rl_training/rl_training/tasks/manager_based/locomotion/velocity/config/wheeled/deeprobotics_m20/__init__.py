@@ -211,3 +211,24 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationV2PPORunnerCfg",
     },
 )
+
+# V3 = V2 + 参考实现的历史编码器结构（逐帧共享投影 → 时间卷积）；env 与 V2 相同。
+gym.register(
+    id="History-Adaptation-V3-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV2",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationV3PPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="History-Adaptation-V3-Deeprobotics-M20-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV2_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationV3PPORunnerCfg",
+    },
+)

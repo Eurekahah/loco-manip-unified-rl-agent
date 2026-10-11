@@ -58,6 +58,7 @@ class ActorCriticHistory(nn.Module):
         history_encoder_hidden_channels: tuple[int, ...] | list[int] = (32, 32, 32),
         history_encoder_kernel_sizes: tuple[int, ...] | list[int] = (4, 3, 2),
         history_encoder_strides: tuple[int, ...] | list[int] = (2, 1, 1),
+        history_encoder_projection_dim: int = 0,
         privileged_encoder_hidden_dims: tuple[int, ...] | list[int] = (128, 64),
         # Actor / critic configuration (same semantics as rsl_rl.modules.ActorCritic)
         actor_obs_normalization: bool = False,
@@ -124,6 +125,7 @@ class ActorCriticHistory(nn.Module):
             kernel_sizes=history_encoder_kernel_sizes,
             strides=history_encoder_strides,
             activation=activation,
+            projection_dim=history_encoder_projection_dim,
         )
         self.privileged_encoder = PrivilegedEncoder(
             num_privileged_obs=num_privileged_obs,

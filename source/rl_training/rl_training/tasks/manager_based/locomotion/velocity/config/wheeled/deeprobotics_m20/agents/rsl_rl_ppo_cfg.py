@@ -96,6 +96,14 @@ class RslRlPpoActorCriticHistoryCfg(RslRlPpoActorCriticCfg):
     history_encoder_strides: tuple[int, ...] = MISSING
     """历史编码器各层步长。"""
 
+    history_encoder_projection_dim: int = 0
+    """历史编码器的"逐帧共享投影"宽度；**0 = 旧行为**（不投影，直接对原始维度做时间卷积）。
+
+    参考实现（vwb `StateHistoryEncoder`）是"先对每个时间步做一次共享 `Linear(num_prop -> 3*channel_size)`，
+    再在投影后的特征上做时间卷积"——即先把异构量纲（rad / rad·s⁻¹ / 归一化动作 / 指令）各自线性映射到
+    统一宽度，再做时间聚合。设成正数即启用该结构（例如 30 = 参考实现的 `3 * channel_size(10)`）。
+    """
+
     privileged_encoder_hidden_dims: tuple[int, ...] = MISSING
     """特权信息编码器的隐藏层维度。"""
 
@@ -192,3 +200,21 @@ class HistoryAdaptationV2PPORunnerCfg(HistoryAdaptationPPORunnerCfg):
             "history": ["history"],
             "privileged": ["privileged"],
         }
+
+
+@configclass
+class HistoryAdaptationV3PPORunnerCfg(HistoryAdaptationV2PPORunnerCfg):
+    """V3 = V2 + 参考实现的历史编码器结构（逐帧共享投影 → 时间卷积）。
+
+    vwb `StateHistoryEncoder` 在 T=10 时的配置是：逐帧 `Linear(num_prop → 30)`，
+    然后 `Conv1d(30→20, k=4, s=2)`、`Conv1d(20→10, k=2, s=1)`，最后线性输出 latent。
+    这里用同一组超参（channel_size = 10 ⇒ 投影 30 / 卷积通道 20,10）。
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_adaptation_v3"
+        self.policy.history_encoder_projection_dim = 30
+        self.policy.history_encoder_hidden_channels = (20, 10)
+        self.policy.history_encoder_kernel_sizes = (4, 2)
+        self.policy.history_encoder_strides = (2, 1)
