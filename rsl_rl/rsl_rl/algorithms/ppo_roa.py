@@ -179,7 +179,9 @@ class PPORoA(PPO):
             # BOTH the history encoder and the privileged encoder and caches their outputs
             # (`self.policy._last_history_latent` / `_last_privileged_latent`) -- that's what
             # lets us compute the ROA/RMA loss below without a redundant forward pass.
-            self.policy.act(obs_batch, masks=masks_batch, hidden_state=hidden_states_batch[0])
+            # 参考实现（vwb `ppo.py:166`）在 PPO 的 forward 里用 `hist_encoding=False`：actor 走**教师模式**，
+            # 即 surrogate/value 损失作用在"特权 latent 驱动的策略"上；历史 latent 只出现在下面的 priv_reg 项里。
+            self.policy.act(obs_batch, hist_encoding=False, masks=masks_batch, hidden_state=hidden_states_batch[0])
             actions_log_prob_batch = self.policy.get_actions_log_prob(actions_batch)
             value_batch = self.policy.evaluate(obs_batch, masks=masks_batch, hidden_state=hidden_states_batch[1])
             mu_batch = self.policy.action_mean[:original_batch_size]
@@ -250,10 +252,8 @@ class PPORoA(PPO):
             # Term 2: Constrain privileged encoder (Lagrangian multiplier)
             # Gradient → privileged_latent → PrivilegedEncoder (μ)
             # This prevents μ from drifting too far during RL training
-            constraint_loss = nn.functional.mse_loss(
-                privileged_latent,
-                history_latent.detach()
-            )
+            # 与参考实现一致：用 L2 范数（vwb `ppo.py:177`），MSE 会把量级压掉约 200 倍
+            constraint_loss = (privileged_latent - history_latent.detach()).norm(p=2, dim=-1).mean()
             
             # Add to total loss
             loss = loss + self.constraint_coef * constraint_loss

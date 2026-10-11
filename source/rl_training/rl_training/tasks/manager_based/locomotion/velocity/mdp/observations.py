@@ -173,6 +173,49 @@ def history_single_step_obs(
         dim=-1,
     )
 
+
+def history_single_step_obs_full(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """V2：历史窗口的每一帧 = **actor 自己的观测**（顺序与 ``WBCObservationsCfg.PolicyCfg`` 一致）。
+
+    为什么这么改：参考实现（MarkFzp/Deep-Whole-Body-Control、Ericonaldo/visual_wholebody）里历史窗口
+    是"最近 N 帧 proprio"，而它们的 proprio 向量**含速度指令**（vwb config ``num_proprio``
+    末尾那几组就是 commands/gait phase；actor 的 ``infer_hist_latent`` 取
+    ``obs[:, -num_hist*num_prop:]``，与 actor 输入同序同宽）。
+
+    旧版 ``history_single_step_obs`` 只有 [ang_vel, gravity, joint_pos, joint_vel, last_action]，
+    **没有指令**——学生就分不清"我被外力推了"和"我被命令加速了"，而这两者在历史里长得一样、
+    对"辨识环境参数"的含义却完全不同。
+
+    顺序（与 PolicyCfg 一致）::
+
+        [base_ang_vel(3), projected_gravity(3), velocity_commands(3),
+         joint_pos(N), joint_vel(N), last_action(A), ee_goal(7), body_pose_cmd(3)]
+    """
+    base_ang_vel = base_mdp.base_ang_vel(env, asset_cfg)
+    projected_gravity = base_mdp.projected_gravity(env, asset_cfg)
+    velocity_commands = base_mdp.generated_commands(env, command_name="base_velocity")
+    joint_pos = base_mdp.joint_pos_rel(env, asset_cfg)
+    joint_vel = base_mdp.joint_vel_rel(env, asset_cfg)
+    last_action = base_mdp.last_action(env)
+    ee_goal = ee_goal_local(env, command_name="ee_pose")
+    body_pose_cmd = base_mdp.generated_commands(env, command_name="body_pose")
+    return torch.cat(
+        [
+            base_ang_vel,
+            projected_gravity,
+            velocity_commands,
+            joint_pos,
+            joint_vel,
+            last_action,
+            ee_goal,
+            body_pose_cmd,
+        ],
+        dim=-1,
+    )
+
 """
 特权信息观测项(lazy-init cached version)
 

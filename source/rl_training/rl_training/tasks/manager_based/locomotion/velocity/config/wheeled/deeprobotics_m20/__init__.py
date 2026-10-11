@@ -184,3 +184,30 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationPPORunnerCfg",
     },
 )
+
+# ── V2：对齐参考实现（DWL / visual_wholebody）的历史窗口内容 + 非对称 critic（2026-10-11）──
+#   与 `History-Adaptation-*` 的差别只有两处：
+#     ① 历史窗口每一帧 = actor 自己的观测（含速度指令 / EE 目标 / 体姿指令）—— 参考实现里
+#        `hist = obs[:, -num_hist*num_prop:]`，而 num_prop 含 commands；
+#     ② critic 的 obs_group 额外吃 `privileged`（86 + 89 = 175 维）—— 参考实现的非对称 critic。
+#   算法侧还配套了 `rsl_rl` 的三处修复（actor 的 hist_encoding 双模式、PPO 走教师模式、
+#   priv_reg 用 L2 范数），见 docs/history_encoder_loss_cliff_zh.md。
+gym.register(
+    id="History-Adaptation-V2-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV2",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationV2PPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="History-Adaptation-V2-Deeprobotics-M20-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV2_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationV2PPORunnerCfg",
+    },
+)

@@ -254,7 +254,7 @@ class ActorCriticHistory(nn.Module):
         obs_list = [obs[obs_group] for obs_group in self.obs_groups["privileged"]]
         return torch.cat(obs_list, dim=-1)
 
-    def _compute_latents(self, obs: TensorDict) -> torch.Tensor:
+    def _compute_latents(self, obs: TensorDict, hist_encoding: bool = True) -> torch.Tensor:
         """Run both encoders and return the latent that the actor should condition on.
 
         Both latents are cached on `self` (history latent WITH grad, privileged latent WITH
@@ -272,7 +272,14 @@ class ActorCriticHistory(nn.Module):
 
         self._last_history_latent = history_latent
         self._last_privileged_latent = privileged_latent
-        return history_latent
+        # ── 参考实现（MarkFzp/Deep-Whole-Body-Control、Ericonaldo/visual_wholebody）里 actor 有两种模式 ──
+        #   hist_encoding=False → actor 用的是**特权 latent（教师）**，这条路径由 PPO 直接训练 ⇒
+        #                         特权编码器有 RL 梯度锚，不会退化成常数；
+        #   hist_encoding=True  → 用历史 latent（学生，也是部署态）。
+        # 我们此前把开关砍掉了（永远用历史 latent），导致特权编码器唯一的梯度来自
+        # `λ·MSE(priv, sg(hist))` 这条"教师→学生"的正则 ⇒ 教师塌缩成常数（见
+        # docs/history_encoder_loss_cliff_zh.md 的实测）。
+        return history_latent if hist_encoding else privileged_latent
 
     # --------------------------------------------------------------------------------- #
     # Standard ActorCritic-style API consumed by rsl_rl.algorithms.PPO / PPORoA         #
@@ -289,10 +296,10 @@ class ActorCriticHistory(nn.Module):
             raise ValueError(f"Unknown standard deviation type: {self.noise_std_type}. Should be 'scalar' or 'log'")
         self.distribution = Normal(mean, std)
 
-    def act(self, obs: TensorDict, **kwargs: dict[str, Any]) -> torch.Tensor:
+    def act(self, obs: TensorDict, hist_encoding: bool = True, **kwargs: dict[str, Any]) -> torch.Tensor:
         actor_obs = self.get_actor_obs(obs)
         actor_obs = self.actor_obs_normalizer(actor_obs)
-        latent = self._compute_latents(obs)
+        latent = self._compute_latents(obs, hist_encoding=hist_encoding)
         self._update_distribution(torch.cat([actor_obs, latent], dim=-1))
         return self.distribution.sample()
 

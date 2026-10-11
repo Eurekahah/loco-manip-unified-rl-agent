@@ -167,3 +167,28 @@ class HistoryAdaptationPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         max_grad_norm=1.0,
         constraint_coef_schedule= (0.0, 0.1, 3000, 7000),
     )
+
+
+@configclass
+class HistoryAdaptationV2PPORunnerCfg(HistoryAdaptationPPORunnerCfg):
+    """V2 的 agent 配置：与参考实现一致地把**特权观测也喂给 critic**（非对称 critic）。
+
+    只改 ``obs_groups["critic"]``（``critic`` + ``privileged``，86 + 89 = 175 维），其余超参
+    与 ``HistoryAdaptationPPORunnerCfg`` 逐字段一致；配 ``FlatEnvWBCConfigV2`` 使用（V2 的历史
+    窗口 = actor 自己的观测，含速度指令）。
+
+    为什么：参考实现（vwb `actor_critic.py` 的 ``Critic.forward``：``obs[:, :num_prop+num_priv]``；
+    DWL 同理）里 critic 直接吃 ``[prop, priv]``，值函数能"看见"摩擦/质量/负载/PD 增益等特权量
+    ⇒ 优势估计更准。本仓库原来 critic 只有 86 维（policy obs + base_lin_vel），特权观测
+    只喂了编码器、没喂值函数。
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_adaptation_v2"
+        self.obs_groups = {
+            "policy": ["policy"],
+            "critic": ["critic", "privileged"],
+            "history": ["history"],
+            "privileged": ["privileged"],
+        }

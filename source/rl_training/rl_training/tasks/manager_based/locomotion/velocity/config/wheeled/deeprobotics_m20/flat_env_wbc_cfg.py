@@ -932,3 +932,41 @@ class RoughSlopesEnvWBCConfig_PLAY(RoughSlopesEnvWBCConfig):
         self.rewards.stand_still_wheel_vel.weight = -0.0005
         if self.__class__.__name__ == "RoughSlopesEnvWBCConfig_PLAY":
             self.disable_zero_weight_rewards()
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# V2：对齐参考实现（MarkFzp/Deep-Whole-Body-Control、Ericonaldo/visual_wholebody）的历史窗口内容。
+#   参考实现里 `hist = obs[:, -num_hist*num_prop:]`，而 `num_prop`（actor 的 proprio 输入）
+#   **包含速度指令等 commands**；旧版历史只有 [ang_vel, gravity, joint_pos, joint_vel,
+#   last_action]，缺指令 ⇒ 学生无法区分"被扰动"与"被命令加速"。
+#   配套的 agent cfg（critic 也吃特权观测＝非对称 critic）见
+#   `agents/rsl_rl_ppo_cfg.py: HistoryAdaptationV2PPORunnerCfg`。
+# ══════════════════════════════════════════════════════════════════════════════════════
+@configclass
+class WBCObservationsV2Cfg(WBCObservationsCfg):
+    @configclass
+    class HistoryCfg(ObsGroup):
+        """V2 历史窗口：每一帧 = actor 自己的观测（与 PolicyCfg 同序、同宽）。"""
+
+        history_obs = ObsTerm(
+            func=mdp.history_single_step_obs_full,
+            history_length=10,
+            flatten_history_dim=True,
+            clip=(-100.0, 100.0),
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    history: HistoryCfg = HistoryCfg()
+
+
+@configclass
+class FlatEnvWBCConfigV2(FlatEnvWBCConfig):
+    observations: WBCObservationsV2Cfg = WBCObservationsV2Cfg()
+
+
+@configclass
+class FlatEnvWBCConfigV2_PLAY(FlatEnvWBCConfig_PLAY):
+    observations: WBCObservationsV2Cfg = WBCObservationsV2Cfg()

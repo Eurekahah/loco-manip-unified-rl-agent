@@ -107,7 +107,9 @@ class OnPolicyRunnerHis:
             with torch.inference_mode():
                 for _ in range(self.num_steps_per_env):
                     # Sample actions
-                    actions = self.alg.act(obs)
+                    # 参考实现（vwb `on_policy_runner.py:132`）：rollout 与 update 用**同一个** hist_encoding，
+                    # 即每 dagger_update_freq 次迭代走一次"学生模式 + 纯模仿更新"，其余走"教师模式 + PPO"。
+                    actions = self.alg.act(obs, hist_encoding=use_dagger_update)
                     # Step the environment
                     obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
                     # Move to device
