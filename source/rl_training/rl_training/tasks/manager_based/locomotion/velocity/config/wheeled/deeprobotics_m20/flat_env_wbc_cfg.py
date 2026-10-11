@@ -970,3 +970,48 @@ class FlatEnvWBCConfigV2(FlatEnvWBCConfig):
 @configclass
 class FlatEnvWBCConfigV2_PLAY(FlatEnvWBCConfig_PLAY):
     observations: WBCObservationsV2Cfg = WBCObservationsV2Cfg()
+
+
+# ── 消融：历史长度 5 / 20 / 50（V2 的历史内容不变，只改窗口长度）───────────────
+# 注意：窗口长度**必须与 agent cfg 里的 `policy.history_length` 以及编码器的卷积配置一致**
+# （`ActorCriticHistory` 会按 `num_history_obs // history_length` 反推单步维度）。
+@configclass
+class FlatEnvWBCConfigV2Len5(FlatEnvWBCConfigV2):
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.history.history_obs.history_length = 5
+
+
+@configclass
+class FlatEnvWBCConfigV2Len5_PLAY(FlatEnvWBCConfigV2_PLAY):
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.history.history_obs.history_length = 5
+
+
+@configclass
+class FlatEnvWBCConfigV2Len20(FlatEnvWBCConfigV2):
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.history.history_obs.history_length = 20
+
+
+@configclass
+class FlatEnvWBCConfigV2Len20_PLAY(FlatEnvWBCConfigV2_PLAY):
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.history.history_obs.history_length = 20
+
+
+@configclass
+class FlatEnvWBCConfigV2Len50(FlatEnvWBCConfigV2):
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.history.history_obs.history_length = 50
+
+
+@configclass
+class FlatEnvWBCConfigV2Len50_PLAY(FlatEnvWBCConfigV2_PLAY):
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.history.history_obs.history_length = 50

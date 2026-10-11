@@ -232,3 +232,34 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationV3PPORunnerCfg",
     },
 )
+
+# ── 消融臂（2026-10-11）：历史长度 {5,20,50} + 编码器结构 {MLP,GRU}（T=10）──────────
+#   T=10 的两个结构锚点已经存在：TCN（`History-Adaptation-V2-*` = fixV2，正在跑）
+#   与 TCN+逐帧投影（`History-Adaptation-V3-*`）。下面是补齐的 5 条臂，env 都基于 V2 的
+#   （历史窗口 = actor 自身观测、含 commands；非对称 critic），只改"窗口长度"或"编码器结构"。
+_ABLATION_ARMS = {
+    "Len5": ("FlatEnvWBCConfigV2Len5", "FlatEnvWBCConfigV2Len5_PLAY", "HistoryAblLen5PPORunnerCfg"),
+    "Len20": ("FlatEnvWBCConfigV2Len20", "FlatEnvWBCConfigV2Len20_PLAY", "HistoryAblLen20PPORunnerCfg"),
+    "Len50": ("FlatEnvWBCConfigV2Len50", "FlatEnvWBCConfigV2Len50_PLAY", "HistoryAblLen50PPORunnerCfg"),
+    "MLP": ("FlatEnvWBCConfigV2", "FlatEnvWBCConfigV2_PLAY", "HistoryAblMLPPPORunnerCfg"),
+    "GRU": ("FlatEnvWBCConfigV2", "FlatEnvWBCConfigV2_PLAY", "HistoryAblGRUPPORunnerCfg"),
+}
+for _arm_name, (_env_cls, _env_play_cls, _runner_cls) in _ABLATION_ARMS.items():
+    gym.register(
+        id=f"History-Abl-{_arm_name}-Deeprobotics-M20-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:{_env_cls}",
+            "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:{_runner_cls}",
+        },
+    )
+    gym.register(
+        id=f"History-Abl-{_arm_name}-Deeprobotics-M20-play-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:{_env_play_cls}",
+            "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:{_runner_cls}",
+        },
+    )

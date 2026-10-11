@@ -40,7 +40,7 @@ from torch.distributions import Normal
 from typing import Any, NoReturn
 
 from rsl_rl.networks import MLP, EmpiricalNormalization
-from rsl_rl.networks.history_encoder import HistoryEncoder
+from rsl_rl.networks.history_encoder import HistoryEncoder, HistoryEncoderGRU, HistoryEncoderMLP
 from rsl_rl.networks.privileged_encoder import PrivilegedEncoder
 
 
@@ -59,6 +59,10 @@ class ActorCriticHistory(nn.Module):
         history_encoder_kernel_sizes: tuple[int, ...] | list[int] = (4, 3, 2),
         history_encoder_strides: tuple[int, ...] | list[int] = (2, 1, 1),
         history_encoder_projection_dim: int = 0,
+        history_encoder_type: str = "tcn",
+        history_encoder_mlp_hidden_dims: tuple[int, ...] | list[int] = (256, 128),
+        history_encoder_gru_hidden_dim: int = 64,
+        history_encoder_gru_num_layers: int = 1,
         privileged_encoder_hidden_dims: tuple[int, ...] | list[int] = (128, 64),
         # Actor / critic configuration (same semantics as rsl_rl.modules.ActorCritic)
         actor_obs_normalization: bool = False,
@@ -117,16 +121,40 @@ class ActorCriticHistory(nn.Module):
         self.latent_dim = latent_dim
 
         # ---- Encoders ----
-        self.history_encoder = HistoryEncoder(
-            num_single_step_obs=num_single_step_obs,
-            history_length=history_length,
-            latent_dim=latent_dim,
-            hidden_channels=history_encoder_hidden_channels,
-            kernel_sizes=history_encoder_kernel_sizes,
-            strides=history_encoder_strides,
-            activation=activation,
-            projection_dim=history_encoder_projection_dim,
-        )
+        # 历史编码器结构可换：tcn（默认，可选逐帧共享投影）/ mlp（展平后 MLP）/ gru。
+        _enc_type = str(history_encoder_type).lower()
+        if _enc_type == "tcn":
+            self.history_encoder = HistoryEncoder(
+                num_single_step_obs=num_single_step_obs,
+                history_length=history_length,
+                latent_dim=latent_dim,
+                hidden_channels=history_encoder_hidden_channels,
+                kernel_sizes=history_encoder_kernel_sizes,
+                strides=history_encoder_strides,
+                activation=activation,
+                projection_dim=history_encoder_projection_dim,
+            )
+        elif _enc_type == "mlp":
+            self.history_encoder = HistoryEncoderMLP(
+                num_single_step_obs=num_single_step_obs,
+                history_length=history_length,
+                latent_dim=latent_dim,
+                hidden_dims=history_encoder_mlp_hidden_dims,
+                activation=activation,
+            )
+        elif _enc_type == "gru":
+            self.history_encoder = HistoryEncoderGRU(
+                num_single_step_obs=num_single_step_obs,
+                history_length=history_length,
+                latent_dim=latent_dim,
+                hidden_dim=history_encoder_gru_hidden_dim,
+                num_layers=history_encoder_gru_num_layers,
+                activation=activation,
+            )
+        else:
+            raise ValueError(
+                f"Unknown history_encoder_type: {history_encoder_type!r} (expect 'tcn' | 'mlp' | 'gru')"
+            )
         self.privileged_encoder = PrivilegedEncoder(
             num_privileged_obs=num_privileged_obs,
             latent_dim=latent_dim,

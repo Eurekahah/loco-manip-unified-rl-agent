@@ -14,6 +14,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from rsl_rl.networks.mlp import MLP
 from rsl_rl.utils import resolve_nn_activation
 
 
@@ -123,3 +124,74 @@ class HistoryEncoder(nn.Module):
         x = self.conv(x)
         x = x.flatten(1)
         return self.head(x)
+
+
+class HistoryEncoderMLP(nn.Module):
+    """把整个历史窗口**展平**后直接过 MLP（无时间结构先验）。
+
+    为什么要有它：参考实现（vwb/DWL）的 ``StateHistoryEncoder`` 是"逐帧投影 + 时间卷积"，
+    而 TCN 与 MLP 在**参数量随窗口长度**的增长方式上完全不同 ——
+    MLP 的输入维度 = ``T × D``（T=10 时 830 维，T=50 时 4150 维），第一层参数随 T 线性增长；
+    TCN 的参数量与 T 无关（只与通道数/卷积核有关）。所以"历史长度 vs 消耗"的 trade-off
+    在两种结构下结论可能相反 —— 这正是要消融的点之一。
+    """
+
+    def __init__(
+        self,
+        num_single_step_obs: int,
+        history_length: int,
+        latent_dim: int = 32,
+        hidden_dims: tuple[int, ...] | list[int] = (256, 128),
+        activation: str = "elu",
+        **kwargs: dict,
+    ) -> None:
+        super().__init__()
+        self.num_single_step_obs = num_single_step_obs
+        self.history_length = history_length
+        self.latent_dim = latent_dim
+        self.net = MLP(num_single_step_obs * history_length, latent_dim, list(hidden_dims), activation)
+
+    def forward(self, history_obs: torch.Tensor) -> torch.Tensor:
+        return self.net(history_obs)
+
+
+class HistoryEncoderGRU(nn.Module):
+    """GRU over 历史窗口，取**最后一帧的隐状态**过 head 得到 latent。
+
+    与 TCN 的差别：RNN 的隐状态是"递推压缩"，理论上有无限感受野（能记住更早的帧），
+    但训练更慢、也对序列顺序敏感；参数量同样与 T 无关（只与 hidden size 有关）。
+    """
+
+    def __init__(
+        self,
+        num_single_step_obs: int,
+        history_length: int,
+        latent_dim: int = 32,
+        hidden_dim: int = 64,
+        num_layers: int = 1,
+        activation: str = "elu",
+        **kwargs: dict,
+    ) -> None:
+        super().__init__()
+        self.num_single_step_obs = num_single_step_obs
+        self.history_length = history_length
+        self.latent_dim = latent_dim
+        self.hidden_dim = hidden_dim
+        self.gru = nn.GRU(
+            input_size=num_single_step_obs,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+        )
+        act = resolve_nn_activation(activation)
+        self.head = nn.Sequential(
+            nn.Linear(hidden_dim, 2 * latent_dim),
+            act,
+            nn.Linear(2 * latent_dim, latent_dim),
+        )
+
+    def forward(self, history_obs: torch.Tensor) -> torch.Tensor:
+        batch_size = history_obs.shape[0]
+        x = history_obs.view(batch_size, self.history_length, self.num_single_step_obs)
+        out, _ = self.gru(x)
+        return self.head(out[:, -1])

@@ -104,6 +104,25 @@ class RslRlPpoActorCriticHistoryCfg(RslRlPpoActorCriticCfg):
     统一宽度，再做时间聚合。设成正数即启用该结构（例如 30 = 参考实现的 `3 * channel_size(10)`）。
     """
 
+    history_encoder_type: str = "tcn"
+    """历史编码器结构：``"tcn"``（默认，时间卷积，可选 `history_encoder_projection_dim`）、
+    ``"mlp"``（窗口展平后过 MLP）、``"gru"``（GRU 取最后一帧隐状态）。
+
+    trade-off 直觉（见 `docs/` 的消融记录）：
+      * TCN：参数量与窗口长度 T **无关**（只看通道/卷积核），但感受野受层数/卷积核限制；
+      * MLP：输入维度 = T×D，第一层参数随 T **线性增长**（T=50 时首层就是 4150×256）；
+      * GRU：参数量与 T 无关（只看 hidden size），理论感受野无限，但训练更慢、对顺序敏感。
+    """
+
+    history_encoder_mlp_hidden_dims: tuple[int, ...] = (256, 128)
+    """`history_encoder_type="mlp"` 时的隐藏层宽度。"""
+
+    history_encoder_gru_hidden_dim: int = 64
+    """`history_encoder_type="gru"` 时的隐状态宽度。"""
+
+    history_encoder_gru_num_layers: int = 1
+    """`history_encoder_type="gru"` 时的层数（不做消融，默认 1 层）。"""
+
     privileged_encoder_hidden_dims: tuple[int, ...] = MISSING
     """特权信息编码器的隐藏层维度。"""
 
@@ -218,3 +237,81 @@ class HistoryAdaptationV3PPORunnerCfg(HistoryAdaptationV2PPORunnerCfg):
         self.policy.history_encoder_hidden_channels = (20, 10)
         self.policy.history_encoder_kernel_sizes = (4, 2)
         self.policy.history_encoder_strides = (2, 1)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# 消融臂（2026-10-11）：历史长度 {5,10,20,50} × 编码器结构 {TCN, TCN+投影, MLP, GRU}
+#   * 长度档的卷积核用的是参考实现 vwb `StateHistoryEncoder` 按 T 分档的那套
+#     （T=10: k4s2+k2s1 / T=20: k6s2+k4s2 / T=50: k8s4+k5s1+k5s1；T=5 是这里补的 k3s1+k2s1），
+#     投影宽度统一 30（= 参考实现的 `3 * channel_size(10)`），这样"长度"是唯一变量。
+#   * 结构档固定在 T=10：TCN（= 正在跑的 fixV2）、TCN+投影（= V3）、MLP、GRU。
+# ══════════════════════════════════════════════════════════════════════════════════
+def _apply_reference_stack(cfg, t: int) -> None:
+    """把参考实现按 T 分档的卷积配置写到 policy cfg 上。"""
+    cfg.policy.history_length = int(t)
+    cfg.policy.history_encoder_projection_dim = 30
+    if t == 5:
+        cfg.policy.history_encoder_hidden_channels = (20, 10)
+        cfg.policy.history_encoder_kernel_sizes = (3, 2)
+        cfg.policy.history_encoder_strides = (1, 1)
+    elif t == 10:
+        cfg.policy.history_encoder_hidden_channels = (20, 10)
+        cfg.policy.history_encoder_kernel_sizes = (4, 2)
+        cfg.policy.history_encoder_strides = (2, 1)
+    elif t == 20:
+        cfg.policy.history_encoder_hidden_channels = (20, 10)
+        cfg.policy.history_encoder_kernel_sizes = (6, 4)
+        cfg.policy.history_encoder_strides = (2, 2)
+    elif t == 50:
+        cfg.policy.history_encoder_hidden_channels = (20, 10, 10)
+        cfg.policy.history_encoder_kernel_sizes = (8, 5, 5)
+        cfg.policy.history_encoder_strides = (4, 1, 1)
+    else:
+        raise ValueError(f"未定义的历史长度：{t}")
+
+
+@configclass
+class HistoryAblLen5PPORunnerCfg(HistoryAdaptationV2PPORunnerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_abl_len5"
+        _apply_reference_stack(self, 5)
+
+
+@configclass
+class HistoryAblLen20PPORunnerCfg(HistoryAdaptationV2PPORunnerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_abl_len20"
+        _apply_reference_stack(self, 20)
+
+
+@configclass
+class HistoryAblLen50PPORunnerCfg(HistoryAdaptationV2PPORunnerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_abl_len50"
+        _apply_reference_stack(self, 50)
+
+
+@configclass
+class HistoryAblMLPPPORunnerCfg(HistoryAdaptationV2PPORunnerCfg):
+    """结构档：MLP（窗口展平后过 MLP，参数量随 T 线性增长）。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_abl_mlp"
+        self.policy.history_encoder_type = "mlp"
+        self.policy.history_encoder_mlp_hidden_dims = (256, 128)
+
+
+@configclass
+class HistoryAblGRUPPORunnerCfg(HistoryAdaptationV2PPORunnerCfg):
+    """结构档：GRU（取最后一帧隐状态），1 层 64 维隐状态。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_abl_gru"
+        self.policy.history_encoder_type = "gru"
+        self.policy.history_encoder_gru_hidden_dim = 64
+        self.policy.history_encoder_gru_num_layers = 1
