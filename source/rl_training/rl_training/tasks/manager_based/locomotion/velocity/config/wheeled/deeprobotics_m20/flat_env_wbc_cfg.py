@@ -972,6 +972,227 @@ class FlatEnvWBCConfigV2_PLAY(FlatEnvWBCConfig_PLAY):
     observations: WBCObservationsV2Cfg = WBCObservationsV2Cfg()
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════
+# V4 特权向量（2026-10-16）：把特权组换成 `privileged_env_params_v4` —— 单一 term、54 维、
+# 每个通道都按各自域随机化的真实范围映射到 [-1,1]。
+#   动机（真 env 探针实测 + 读参考实现代码）：旧版 89 维里 27 维惯量 Δ 比摩擦小 ~1300 倍
+#   （等于没接进教师）、48 维增益里 4 维结构性恒 0、且把参考实现放在特权向量里的 base COM
+#   注释掉了。参考实现（DWL `widowGo1_config.py` / vwb 低层）的特权向量只有 18~24 维：
+#   [base 附加质量, base COM_xyz, 末端附加质量, 足部摩擦, 电机强度]。
+# 任务/奖励/课程/历史窗口/critic 结构都与 V2 完全一致，**只有特权组不同** ⇒ 可与 fixV2 直接对比。
+# ══════════════════════════════════════════════════════════════════════════════════════
+@configclass
+class WBCObservationsV4Cfg(WBCObservationsCfg):
+    @configclass
+    class PrivilegedCfg(ObsGroup):
+        """V4 特权组：54 维、全通道 O(1)。通道表见 `mdp.observations.privileged_env_params_v4`。"""
+
+        env_params = ObsTerm(
+            func=mdp.privileged_env_params_v4,
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "base_body_name": "base_link",
+                "gripper_body_name": "gripper_base",
+                "foot_body_regex": ".*wheel",
+                "included_actuators": ("joint", "wheel", "piper_arm", "piper_gripper"),
+            },
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    privileged: PrivilegedCfg = PrivilegedCfg()
+
+
+@configclass
+class FlatEnvWBCConfigV4(FlatEnvWBCConfig):
+    """V4 = V2 的历史窗口 + V4 特权向量（其余逐字段一致）。"""
+
+    observations: WBCObservationsV4Cfg = WBCObservationsV4Cfg()
+
+
+@configclass
+class FlatEnvWBCConfigV4_PLAY(FlatEnvWBCConfig_PLAY):
+    observations: WBCObservationsV4Cfg = WBCObservationsV4Cfg()
+
+
+# ── P1-7 无历史对照臂：V4 的一切不变，只把 history 观测整窗置零（同宽）─────────────
+@configclass
+class WBCObservationsV4NoHistCfg(WBCObservationsV4Cfg):
+    @configclass
+    class HistoryCfg(ObsGroup):
+        """history 窗口全零：编码器/参数量/优化器状态与 V4 完全一致，只去掉信息。"""
+
+        history_obs = ObsTerm(
+            func=mdp.history_zero_obs,
+            history_length=10,
+            flatten_history_dim=True,
+            clip=(-100.0, 100.0),
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    history: HistoryCfg = HistoryCfg()
+
+
+@configclass
+class FlatEnvWBCConfigV4NoHist(FlatEnvWBCConfigV4):
+    observations: WBCObservationsV4NoHistCfg = WBCObservationsV4NoHistCfg()
+
+
+@configclass
+class FlatEnvWBCConfigV4NoHist_PLAY(FlatEnvWBCConfigV4_PLAY):
+    observations: WBCObservationsV4NoHistCfg = WBCObservationsV4NoHistCfg()
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# 多地形 + V4/Anchor（2026-10-19）
+#   背景：平地任务上"Aanchor 让教师活着（recon_r2≈0.69），但 NoHist 对比显示历史贡献≈0"
+#   ⇒ 提高任务对环境的敏感度。这里把 `Rough-Slopes`（粗糙 0.01~0.05 + 正反斜坡 + 平地 +
+#   地形课程）与 V4 观测组（54 维归一化特权、700 维旧历史，与平地 Anchor 逐字段一致）组合。
+#   另给一条同地形、**同宽 700 维全零历史**的 NoHist 对照：唯一变量是"历史里有没有信息"。
+# ══════════════════════════════════════════════════════════════════════════════════════
+@configclass
+class WBCObservationsTerrainNoHistCfg(WBCObservationsV4Cfg):
+    """地形 NoHist：V4 观测组 + 700 维全零历史（与 V4/Anchor 同宽）。"""
+
+    @configclass
+    class HistoryCfg(ObsGroup):
+        history_obs = ObsTerm(
+            func=mdp.history_zero_obs_legacy,
+            history_length=10,
+            flatten_history_dim=True,
+            clip=(-100.0, 100.0),
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    history: HistoryCfg = HistoryCfg()
+
+
+@configclass
+class FlatEnvWBCConfigV4NoHistLegacy(FlatEnvWBCConfigV4):
+    """平地 + 700 维全零历史，复用地形 NoHist 检查点做跨场景评测。"""
+
+    observations: WBCObservationsTerrainNoHistCfg = WBCObservationsTerrainNoHistCfg()
+
+
+@configclass
+class FlatEnvWBCConfigV4NoHistLegacy_PLAY(FlatEnvWBCConfigV4_PLAY):
+    """平地 + 700 维全零历史的 play 任务，输入宽度与地形 NoHist 完全一致。"""
+
+    observations: WBCObservationsTerrainNoHistCfg = WBCObservationsTerrainNoHistCfg()
+
+
+@configclass
+class RoughSlopesEnvAnchor(RoughSlopesEnvWBCConfig):
+    """多地形 + V4 观测组（Anchor 臂用；agent 配 `HistoryAnchorTerrainPPORunnerCfg`）。"""
+
+    observations: WBCObservationsV4Cfg = WBCObservationsV4Cfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.__class__.__name__ == "RoughSlopesEnvAnchor":
+            self.disable_zero_weight_rewards()
+
+
+@configclass
+class RoughSlopesEnvAnchor_PLAY(RoughSlopesEnvWBCConfig_PLAY):
+    observations: WBCObservationsV4Cfg = WBCObservationsV4Cfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.__class__.__name__ == "RoughSlopesEnvAnchor_PLAY":
+            self.disable_zero_weight_rewards()
+
+
+@configclass
+class RoughSlopesEnvAnchorLen5(RoughSlopesEnvWBCConfig):
+    observations: WBCObservationsV4Cfg = WBCObservationsV4Cfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.history.history_obs.history_length = 5
+        self.disable_zero_weight_rewards()
+
+
+@configclass
+class RoughSlopesEnvAnchorLen5_PLAY(RoughSlopesEnvWBCConfig_PLAY):
+    observations: WBCObservationsV4Cfg = WBCObservationsV4Cfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.history.history_obs.history_length = 5
+        self.disable_zero_weight_rewards()
+
+
+@configclass
+class RoughSlopesEnvAnchorLen20(RoughSlopesEnvWBCConfig):
+    observations: WBCObservationsV4Cfg = WBCObservationsV4Cfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.history.history_obs.history_length = 20
+        self.disable_zero_weight_rewards()
+
+
+@configclass
+class RoughSlopesEnvAnchorLen20_PLAY(RoughSlopesEnvWBCConfig_PLAY):
+    observations: WBCObservationsV4Cfg = WBCObservationsV4Cfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.history.history_obs.history_length = 20
+        self.disable_zero_weight_rewards()
+
+
+@configclass
+class RoughSlopesEnvAnchorLen50(RoughSlopesEnvWBCConfig):
+    observations: WBCObservationsV4Cfg = WBCObservationsV4Cfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.history.history_obs.history_length = 50
+        self.disable_zero_weight_rewards()
+
+
+@configclass
+class RoughSlopesEnvAnchorLen50_PLAY(RoughSlopesEnvWBCConfig_PLAY):
+    observations: WBCObservationsV4Cfg = WBCObservationsV4Cfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.history.history_obs.history_length = 50
+        self.disable_zero_weight_rewards()
+
+
+@configclass
+class RoughSlopesEnvNoHist(RoughSlopesEnvWBCConfig):
+    """多地形 + V4 观测组 + 700 维全零历史（A/B 对照）。"""
+
+    observations: WBCObservationsTerrainNoHistCfg = WBCObservationsTerrainNoHistCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.__class__.__name__ == "RoughSlopesEnvNoHist":
+            self.disable_zero_weight_rewards()
+
+
+@configclass
+class RoughSlopesEnvNoHist_PLAY(RoughSlopesEnvWBCConfig_PLAY):
+    observations: WBCObservationsTerrainNoHistCfg = WBCObservationsTerrainNoHistCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.__class__.__name__ == "RoughSlopesEnvNoHist_PLAY":
+            self.disable_zero_weight_rewards()
+
+
 # ── 消融：历史长度 5 / 20 / 50（V2 的历史内容不变，只改窗口长度）───────────────
 # 注意：窗口长度**必须与 agent cfg 里的 `policy.history_length` 以及编码器的卷积配置一致**
 # （`ActorCriticHistory` 会按 `num_history_obs // history_length` 反推单步维度）。

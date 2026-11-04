@@ -126,6 +126,14 @@ class RslRlPpoActorCriticHistoryCfg(RslRlPpoActorCriticCfg):
     privileged_encoder_hidden_dims: tuple[int, ...] = MISSING
     """特权信息编码器的隐藏层维度。"""
 
+    teacher_recon_hidden_dims: tuple[int, ...] = ()
+    """教师锚点（P1-6）的重建头隐藏层；**空 tuple = 关闭**（旧臂/旧 checkpoint 行为不变）。
+
+    非空时 `ActorCriticHistory` 会建 `PrivilegedDecoder(z_priv → 归一化特权向量)`，配合
+    `algorithm.teacher_recon_coef>0` 把重建损失加进 PPO 总损失 ⇒ 教师塌成常数不再是优解。
+    理由与实测见 `docs/review/DEFECT_LOG_zh.md` DEF-032/034。
+    """
+
     max_noise_std: float = 0.0
     """探索噪声（动作标准差）的上界；**0（默认）= 不限制**，即旧行为。
 
@@ -148,6 +156,9 @@ class RslRlPpoAlgorithmHistoryCfg(RslRlPpoAlgorithmCfg):
 
     constraint_coef_schedule: tuple[float, float, int, int] = MISSING
     """约束系数的调度参数,格式为 (start_value, end_value, start_iteration, end_iteration)。"""
+
+    teacher_recon_coef: float = 0.0
+    """教师锚点（P1-6）重建损失权重；0 = 关闭。需要 policy.teacher_recon_hidden_dims 非空。"""
 
 @configclass
 class HistoryAdaptationPPORunnerCfg(RslRlOnPolicyRunnerCfg):
@@ -239,6 +250,133 @@ class HistoryAdaptationV3PPORunnerCfg(HistoryAdaptationV2PPORunnerCfg):
         self.policy.history_encoder_strides = (2, 1)
 
 
+@configclass
+class HistoryAdaptationV4PPORunnerCfg(HistoryAdaptationV2PPORunnerCfg):
+    """V4 = V2（历史窗口/奖励/课程/非对称 critic 完全一致）+ V4 特权向量 + 对齐参考实现的探索口径。
+
+    与 V2 只有两处超参差异，都是"复刻参考实现口径"：
+      * ``entropy_coef`` 0.01 → **0.0**。参考实现是 0.0（DWL
+        ``widowGo1_config.py:348``、vwb 低层 ``b1z1_config.py:379``），std 是一个**不动的标量**
+        （初值 1.0、无熵奖励 ⇒ 没有梯度）。我们此前熵奖励把探索 std 顶到 0.9~2.4、并让自适应 KL
+        把学习率反复压到 1e-5 地板（DEF-023）⇒ 教师那条 RL 梯度被高熵冲淡，而"拉向学生"的
+        正则项不受影响（共享 Adam 会抹平 λ 的量级），这是塌陷的放大器之一。
+      * ``max_noise_std`` 0.0（= 无上限）→ **1.2**。``entropy_coef=0`` 时 log_std 没有梯度、
+        std 会一直停在 init 的 1.0，这个上限是"万一以后重开熵奖励"的保险。
+
+    **刻意保留** ``learning_rate=1e-3 + schedule="adaptive"``（参考实现是 2e-4 fixed）：我们的预算
+    （4096 env × 24 step × 20k iter ≈ 2e9 样本）只有 DWL（5000×40×40k ≈ 8e9）的 1/4，
+    直接砍 5 倍学习率会变成"训练不足"，把"教师是否还活着"这个主问题污染掉。等主结论出来
+    再单独做 LR 对照（见 TODO）。
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_adaptation_v4"
+        self.algorithm.entropy_coef = 0.0
+        self.policy.max_noise_std = 1.2
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# 归因臂（2026-10-16）：把 V4 的两个改动**拆开**，做成 2×2，直接回答"哪一项救活了 adaptation"。
+#
+#            特权向量 89 维（旧）      特权向量 54 维（V4，全归一）
+#   探索 0.01/无上限   fixV2（已有 20k）      `History-Abl-PrivV4-*`（本臂）
+#   探索 0 / cap 1.2   `History-Abl-Expl0-*`（本臂）   V4（正在跑）
+#
+# 两条臂都:**只改一个变量**，env 的奖励/课程/历史窗口/critic 结构全部与对应父配置逐字段一致。
+# ══════════════════════════════════════════════════════════════════════════════════
+@configclass
+class HistoryAblExpl0PPORunnerCfg(HistoryAdaptationV2PPORunnerCfg):
+    """归因臂 "Expl0"：**特权向量仍是旧的 89 维**，只把探索口径对齐参考实现。
+
+    用途：若这一臂的 `Latent/teacher_jac` 也活了 ⇒ 说明主因是"熵奖励把探索噪声顶大 + 自适应 KL
+    把学习率压到地板"稀释了教师那条 RL 梯度（DEF-023），而不是特权向量的量级问题。
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_abl_expl0"
+        self.algorithm.entropy_coef = 0.0
+        self.policy.max_noise_std = 1.2
+
+
+@configclass
+class HistoryAblPrivV4PPORunnerCfg(HistoryAdaptationV2PPORunnerCfg):
+    """归因臂 "PrivV4"：**探索口径仍是 V2 的**（entropy 0.01 / 无上限），只换 54 维特权向量。
+
+    用途：若这一臂的教师仍塌 ⇒ 说明"光把特权向量收拾干净"不够，必须在损失侧加锚（第 3 步）。
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_abl_privv4"
+
+
+@configclass
+class HistoryAnchorPPORunnerCfg(HistoryAdaptationV4PPORunnerCfg):
+    """P1-6 锚点臂：V4（54 维归一化特权 + 参考探索口径）**再加教师自编码锚**。
+
+    动机（实测，见 DEF-032/034）：V4 把特权向量的量级/死维修好，但如果 λ 开闸后教师仍被
+    "拉向学生"拉塌，就说明输入口径不够，必须让**塌陷不再是优解**。做法：
+        loss += 1.0 · MSE( decoder(z_priv), normalize(x_priv) )
+    常数 z_priv 只能重建出常数，而 x_priv 跨环境变化 ⇒ 重建误差无法归零 ⇒ 教师必须保留信息。
+    部署侧完全不增加东西（decoder / 特权向量都只在仿真里用）。
+
+    与 V4 的差别**只有**这一条损失（env、探索口径、历史窗口、critic 全同）。
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_anchor"
+        self.policy.teacher_recon_hidden_dims = (128, 128)
+        self.algorithm.teacher_recon_coef = 1.0
+
+
+@configclass
+class HistoryAblNoHistPPORunnerCfg(HistoryAdaptationV4PPORunnerCfg):
+    """P1-7 无历史臂：V4 的 env/agent 完全不变，只把 history 观测**整窗置零**（同宽）。
+
+    用途：等 2×2 告诉我们"哪套配置的 adaptation 活下来"之后，用它回答"历史到底有没有用"。
+    注意：这个臂的 history 编码器仍在、参数仍在、优化器仍在 —— 唯一删掉的是**信息**，
+    所以性能差多少就是 adaptation 的真实贡献。
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_abl_nohist"
+
+
+@configclass
+class HistoryAnchorTerrainPPORunnerCfg(HistoryAnchorPPORunnerCfg):
+    """多地形 Anchor 臂：与平地 Anchor 逐字段相同，只换 env（Rough-Slopes）与实验名。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_anchor_terrain"
+
+
+@configclass
+class HistoryAblNoHistTerrainPPORunnerCfg(HistoryAblNoHistPPORunnerCfg):
+    """多地形 NoHist 对照：与 terrain Anchor 同 env/超参，只把历史换成同宽全零。"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_abl_nohist_terrain"
+
+
+@configclass
+class HistoryAdaptationV4TerrainPPORunnerCfg(HistoryAdaptationV4PPORunnerCfg):
+    """多地形 V4 臂：与 terrain Anchor **只差"没有教师自编码锚"**（教师会塌）。
+
+    用途：地形三臂对照 Anchor / V4 / NoHist —— 直接回答"锚点让教师活着，是否真的换来了
+    地形任务上的性能"。env 与 Anchor 完全相同（V4 观测组 + Rough-Slopes）。
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_adaptation_v4_terrain"
+
+
 # ══════════════════════════════════════════════════════════════════════════════════
 # 消融臂（2026-10-11）：历史长度 {5,10,20,50} × 编码器结构 {TCN, TCN+投影, MLP, GRU}
 #   * 长度档的卷积核用的是参考实现 vwb `StateHistoryEncoder` 按 T 分档的那套
@@ -268,6 +406,30 @@ def _apply_reference_stack(cfg, t: int) -> None:
         cfg.policy.history_encoder_strides = (4, 1, 1)
     else:
         raise ValueError(f"未定义的历史长度：{t}")
+
+
+@configclass
+class HistoryAnchorTerrainLen5PPORunnerCfg(HistoryAnchorTerrainPPORunnerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_anchor_terrain_len5"
+        _apply_reference_stack(self, 5)
+
+
+@configclass
+class HistoryAnchorTerrainLen20PPORunnerCfg(HistoryAnchorTerrainPPORunnerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_anchor_terrain_len20"
+        _apply_reference_stack(self, 20)
+
+
+@configclass
+class HistoryAnchorTerrainLen50PPORunnerCfg(HistoryAnchorTerrainPPORunnerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "history_anchor_terrain_len50"
+        _apply_reference_stack(self, 50)
 
 
 @configclass

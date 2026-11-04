@@ -185,6 +185,97 @@ gym.register(
     },
 )
 
+# ── 多地形 + Anchor / NoHist（2026-10-19）：提高任务对环境的敏感度 ──────────────────
+#   Anchor = Rough-Slopes 地形 + V4 观测组（54 维归一化特权 + 700 维历史）+ 教师自编码锚 + entropy 0
+#   NoHist = 同一 env/超参，历史换 700 维全零 ⇒ 唯一变量是"历史里有没有信息"
+gym.register(
+    id="Rough-Slopes-History-Anchor-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:RoughSlopesEnvAnchor",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAnchorTerrainPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Rough-Slopes-History-Anchor-Deeprobotics-M20-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:RoughSlopesEnvAnchor_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAnchorTerrainPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Rough-Slopes-History-NoHist-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:RoughSlopesEnvNoHist",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAblNoHistTerrainPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Rough-Slopes-History-NoHist-Deeprobotics-M20-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:RoughSlopesEnvNoHist_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAblNoHistTerrainPPORunnerCfg",
+    },
+)
+
+# 第三条臂：同 env（V4 观测组 + Rough-Slopes），但**没有教师锚**（V4 配置原样）
+#   Anchor / V4 / NoHist 三臂对照 ⇒ 锚点是否带来地形性能收益
+gym.register(
+    id="Rough-Slopes-History-V4-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:RoughSlopesEnvAnchor",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationV4TerrainPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Rough-Slopes-History-V4-Deeprobotics-M20-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:RoughSlopesEnvAnchor_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationV4TerrainPPORunnerCfg",
+    },
+)
+
+# 多地形 Anchor 的历史长度消融：T=5/20/50，T=10 使用现有 TerrainAnchor。
+_TERRAIN_HISTORY_LENGTH_ARMS = {
+    5: ("RoughSlopesEnvAnchorLen5", "RoughSlopesEnvAnchorLen5_PLAY", "HistoryAnchorTerrainLen5PPORunnerCfg"),
+    20: ("RoughSlopesEnvAnchorLen20", "RoughSlopesEnvAnchorLen20_PLAY", "HistoryAnchorTerrainLen20PPORunnerCfg"),
+    50: ("RoughSlopesEnvAnchorLen50", "RoughSlopesEnvAnchorLen50_PLAY", "HistoryAnchorTerrainLen50PPORunnerCfg"),
+}
+for _history_length, (_env_cls, _env_play_cls, _runner_cls) in _TERRAIN_HISTORY_LENGTH_ARMS.items():
+    gym.register(
+        id=f"Rough-Slopes-History-Anchor-Len{_history_length}-Deeprobotics-M20-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:{_env_cls}",
+            "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:{_runner_cls}",
+        },
+    )
+    gym.register(
+        id=f"Rough-Slopes-History-Anchor-Len{_history_length}-Deeprobotics-M20-play-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:{_env_play_cls}",
+            "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:{_runner_cls}",
+        },
+    )
+
 # ── V2：对齐参考实现（DWL / visual_wholebody）的历史窗口内容 + 非对称 critic（2026-10-11）──
 #   与 `History-Adaptation-*` 的差别只有两处：
 #     ① 历史窗口每一帧 = actor 自己的观测（含速度指令 / EE 目标 / 体姿指令）—— 参考实现里
@@ -233,7 +324,142 @@ gym.register(
     },
 )
 
+# ── V4：特权向量对齐参考实现（2026-10-16）────────────────────────────────────────
+#   与 V2 的差别只有两处，都是为了回答"adaptation 通路是不是被特权向量 + 探索口径坑死的"：
+#     ① 特权组换成单一 term `privileged_env_params_v4`（54 维、每通道归一到 [-1,1]、
+#        丢掉 27 维惯量 Δ / 4 个恒 0 的轮 stiffness 死维、加回 base COM）；
+#     ② 探索口径对齐参考实现（entropy_coef 0.01 → 0.0、max_noise_std 1.2）。
+#   历史窗口 / 奖励 / 课程 / 非对称 critic 与 V2 逐字段一致 ⇒ 可直接与 fixV2 对比。
+gym.register(
+    id="History-Adaptation-V4-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV4",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationV4PPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="History-Adaptation-V4-Deeprobotics-M20-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV4_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAdaptationV4PPORunnerCfg",
+    },
+)
+
+# ── 归因臂 2×2（2026-10-16）：把 V4 的"特权向量"与"探索口径"两个改动拆开 ──────────────
+#   PrivV4 = **54 维 V4 特权组** + 原探索口径（entropy 0.01 / 无上限）
+#   Expl0  = **旧 89 维特权组** + 参考探索口径（entropy 0.0 / cap 1.2）
+#   与 fixV2（89+0.01）、V4（54+0.0）合起来正好是 2×2 ⇒ 哪一项救活了 teacher 一目了然。
+gym.register(
+    id="History-Abl-PrivV4-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV4",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAblPrivV4PPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="History-Abl-PrivV4-Deeprobotics-M20-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV4_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAblPrivV4PPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="History-Abl-Expl0-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV2",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAblExpl0PPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="History-Abl-Expl0-Deeprobotics-M20-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV2_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAblExpl0PPORunnerCfg",
+    },
+)
+
 # ── 消融臂（2026-10-11）：历史长度 {5,20,50} + 编码器结构 {MLP,GRU}（T=10）──────────
+#   （2026-10-17 追加在上面：P1-6 锚点臂 / P1-7 无历史臂）
+# ── P1-6 / P1-7（2026-10-17）────────────────────────────────────────────────────
+#   Anchor = V4 + 教师自编码锚（decoder(z_priv) 重建归一化特权向量，不可能被常数满足）
+#   NoHist = V4 + history 整窗置零（同宽，只去掉信息）⇒ 回答"历史到底有没有用"
+gym.register(
+    id="History-Anchor-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV4",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAnchorPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="History-Anchor-Deeprobotics-M20-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV4_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAnchorPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="History-Abl-NoHist-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV4NoHist",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAblNoHistPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="History-Abl-NoHist-Deeprobotics-M20-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV4NoHist_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAblNoHistPPORunnerCfg",
+    },
+)
+
+# 平地 + 700 维全零历史：用于把地形 NoHist 检查点迁移到平地时保持输入宽度一致。
+gym.register(
+    id="History-Abl-NoHistLegacy-Deeprobotics-M20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV4NoHistLegacy",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAblNoHistPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="History-Abl-NoHistLegacy-Deeprobotics-M20-play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.flat_env_wbc_cfg:FlatEnvWBCConfigV4NoHistLegacy_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:HistoryAblNoHistPPORunnerCfg",
+    },
+)
+
 #   T=10 的两个结构锚点已经存在：TCN（`History-Adaptation-V2-*` = fixV2，正在跑）
 #   与 TCN+逐帧投影（`History-Adaptation-V3-*`）。下面是补齐的 5 条臂，env 都基于 V2 的
 #   （历史窗口 = actor 自身观测、含 commands；非对称 critic），只改"窗口长度"或"编码器结构"。

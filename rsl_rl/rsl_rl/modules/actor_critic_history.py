@@ -41,7 +41,7 @@ from typing import Any, NoReturn
 
 from rsl_rl.networks import MLP, EmpiricalNormalization
 from rsl_rl.networks.history_encoder import HistoryEncoder, HistoryEncoderGRU, HistoryEncoderMLP
-from rsl_rl.networks.privileged_encoder import PrivilegedEncoder
+from rsl_rl.networks.privileged_encoder import PrivilegedDecoder, PrivilegedEncoder
 
 
 class ActorCriticHistory(nn.Module):
@@ -64,6 +64,9 @@ class ActorCriticHistory(nn.Module):
         history_encoder_gru_hidden_dim: int = 64,
         history_encoder_gru_num_layers: int = 1,
         privileged_encoder_hidden_dims: tuple[int, ...] | list[int] = (128, 64),
+        # Teacher 锚点（P1-6）：非空 = 建一个重建头 decoder(z_priv) -> x_priv，用重建损失防止
+        # 教师塌成常数。默认 () = 关闭（旧臂/旧 checkpoint 完全不受影响）。
+        teacher_recon_hidden_dims: tuple[int, ...] | list[int] = (),
         # Actor / critic configuration (same semantics as rsl_rl.modules.ActorCritic)
         actor_obs_normalization: bool = False,
         critic_obs_normalization: bool = False,
@@ -161,6 +164,18 @@ class ActorCriticHistory(nn.Module):
             hidden_dims=privileged_encoder_hidden_dims,
             activation=activation,
         )
+        self.teacher_recon_hidden_dims = tuple(teacher_recon_hidden_dims)
+        if len(self.teacher_recon_hidden_dims) > 0:
+            self.privileged_decoder: PrivilegedDecoder | None = PrivilegedDecoder(
+                latent_dim=latent_dim,
+                num_privileged_obs=num_privileged_obs,
+                hidden_dims=self.teacher_recon_hidden_dims,
+                activation=activation,
+            )
+            print(f"Privileged decoder (teacher anchor): {self.privileged_decoder}")
+        else:
+            self.privileged_decoder = None
+        self.num_privileged_obs = num_privileged_obs
 
         # ---- Actor (always conditioned on the HISTORY latent -> train/deploy consistent) ----
         self.actor = MLP(num_actor_obs + latent_dim, num_actions, list(actor_hidden_dims), activation)
@@ -402,3 +417,28 @@ class ActorCriticHistory(nn.Module):
         privileged_obs = self.get_privileged_obs(obs)
         privileged_obs = self.privileged_obs_normalizer(privileged_obs)
         return self.privileged_encoder(privileged_obs)
+
+    # --------------------------------------------------------------------------------- #
+    # Teacher 锚点（P1-6）：重建归一化特权向量，防止 z_priv 塌成常数
+    # --------------------------------------------------------------------------------- #
+    def teacher_reconstruction_loss(self, obs: TensorDict) -> torch.Tensor | None:
+        """``MSE(decoder(z_priv), sg(x_priv))`` —— 梯度只进教师/解码器，不被 x 影响。
+
+        `z_priv` 用**带梯度**的重算（不读缓存，避免和 PPO 的 batch 错位）。
+        """
+        if self.privileged_decoder is None:
+            return None
+        x = self.get_privileged_obs(obs)
+        x = self.privileged_obs_normalizer(x)
+        z = self.privileged_encoder(x)
+        return nn.functional.mse_loss(self.privileged_decoder(z), x.detach())
+
+    @torch.no_grad()
+    def teacher_recon_r2(self, z: torch.Tensor, x: torch.Tensor) -> float | None:
+        """重建的"解释方差比" 1 − MSE/Var(x)：塌成常数时 ≈0，正常时 →1。"""
+        if self.privileged_decoder is None:
+            return None
+        x = self.privileged_obs_normalizer(x)
+        mse = nn.functional.mse_loss(self.privileged_decoder(z), x).item()
+        var = x.var(dim=0, unbiased=False).mean().item()
+        return float(1.0 - mse / max(var, 1e-8))
