@@ -25,6 +25,163 @@
 
 # 记录（新→旧）
 
+### DEF-035 `2026-10-19` 多地形 + Anchor/NoHist：把"环境敏感度"提上来（已实现，20k 跑中）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 特性（承接 DEF-034 §7 的结论） |
+| 状态 | 已实现 + 本机 cfg 级验证 + 云端冒烟通过；两条 20k 在跑 |
+| 关联 | `flat_env_wbc_cfg.py`、`mdp/observations.py: history_zero_obs_legacy`、`agents/rsl_rl_ppo_cfg.py` |
+
+**动机**：平地 Anchor 已把教师修活（recon_r2=0.691），但 NoHist 对照显示历史信息贡献≈0 ⇒
+当前任务对"环境辨识"没有需求。**提高任务对环境的敏感度**最省事的方向是现成的多地形任务
+`Rough-Slopes`（随机粗糙 0.01~0.05 + 正/反斜坡 + 平地 + 地形课程）。
+
+**实现**
+
+* `RoughSlopesEnvAnchor(_PLAY)`：`RoughSlopesEnvWBCConfig(_PLAY)` + **V4 观测组**（54 维归一化特权 +
+  700 维旧历史，与平地 Anchor 逐字段一致）；
+* `RoughSlopesEnvNoHist(_PLAY)`：同 env/超参，历史换 `history_zero_obs_legacy`（**700 维全零**，
+  与 Anchor 同宽 ⇒ 唯一变量是"历史里有没有信息"）；
+* agent：`HistoryAnchorTerrainPPORunnerCfg`（= Anchor：recon (128,128)/coef 1.0/entropy 0）
+  与 `HistoryAblNoHistTerrainPPORunnerCfg`（= NoHist，无锚）；
+* 任务 id：`Rough-Slopes-History-{Anchor,NoHist}-Deeprobotics-M20-{v0,play-v0}`。
+
+**验证**
+
+* 本机 **cfg 级**探针（`probe_task_cfg.py`，不建 env，绕开 DEF-031 的本机 terrain 死锁）：
+  4 条任务全部 `TerrainGeneratorCfg curriculum=True`，history/privileged 项与 agent 超参逐项正确；
+* 云端 `--num_envs 64 --max_iterations 2` 冒烟 **EXIT=0**（scene creation 2.6 s）⇒
+  **DEF-031 只在本机复现，云端可正常跑地形任务**；
+* 2026-10-19 00:53（云机时间）启动两条 20k：
+  NEWBOX(802) = TerrainAnchor，BOX2(753) = TerrainNoHist（4096 envs / seed42）。
+### DEF-034 `2026-10-17` 2×2 归因实测：**特权向量与探索口径都不是塌陷的主因**；教师必须加锚
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 设计缺陷（结论性实验） |
+| 状态 | 已定位；修法 **P1-6 锚点臂** 已实现 + 本地验证，20k 已启动 |
+| 关联 | `History-Adaptation-V4-*`、`History-Abl-PrivV4-*`、`History-Abl-Expl0-*`；`privileged_encoder.py: PrivilegedDecoder` |
+
+**实验设计（2×2，去掉"一次改两件事"的混淆）**
+
+| 臂 | 特权向量 | 探索口径 | teacher_jac 末值 | z_priv_spread 末值 |
+|---|---|---|---|---|
+| fixV2（2026-10-12） | 89 维旧 | entropy 0.01 / 无上限 | 0.0276（初值 0.8832） | →0 |
+| **Expl0**（新） | 89 维旧 | entropy 0 / cap 1.2 | **0.0188** | **0.0002** |
+| **PrivV4**（新） | 54 维归一化 | entropy 0.01 / 无上限 | **0.0004** | **0.0000** |
+| **V4**（新） | 54 维归一化 | entropy 0 / cap 1.2 | **0.0120** | →0 |
+
+（四条都跑满 20k / 4096 envs / seed42；`teacher_jac` 初值约 1.29。）
+
+**结论**
+
+1. **"把特权向量洗干净"（89→54、全归一、加回 COM、去死维）单独不够**：PrivV4 的教师反而塌得更彻底
+   （0.0004）。早期 `z_priv_spread` 确实更大（0.34 vs 0.04），说明归一化让 latent 更能动，但撑不到 λ 全开。
+2. **"对齐探索口径"（entropy 0 / cap 1.2）单独也不够**：Expl0 末值 0.0188，与 fixV2 同量级。
+3. **两项一起也不够**：V4 末值 0.0120。⇒ 塌陷不是输入量级/探索噪声导致的，而是**损失结构**：
+   教师唯一的强梯度是"被拉向学生"，学生又只追教师 ⇒ 常数解是全局最优（且 Adam 让 λ 的量级失效）。
+4. 因此必须让**塌陷不再是优解**：P1-6 给 `z_priv` 加自编码锚
+   `MSE(decoder(z_priv), normalize(x_priv))` —— 常数 latent 只能重建常数，而 x 跨环境变化 ⇒ 重建不可能归零。
+   单元测试（纯 torch）：把教师权重清零（z 恒为常数）时 `R² = −0.04`；正常训练 300 步 `R² → +0.997`。
+
+**部署备注**：NEWBOX(802)/BOX2(753) 在跑完 20k 后 `torch.cuda.is_available()==False`（NVML 掉卡），
+需重启动实例才能再用；BOX4(1029) 健康。心跳巡检会提示，但**不会自行重启实例**。
+
+**5. 锚点臂 verdict（2026-10-17 20:32 UTC，it=8419，λ 已在 it=7000 全开）**
+
+| 指标 | λ 爬升前（it≈3000） | it≈4610 | **it=8419** |
+|---|---|---|---|
+| `Latent/teacher_recon_r2` | — | 0.688 | **0.690** |
+| `teacher_jac` | 2.22（it=3090） | 0.83 | **0.221** |
+| `z_priv_spread` | 0.228 | 0.082 | **0.022** |
+| `Mean recon loss` | 0.094 | 0.095 | **0.0956** |
+
+⇒ **锚点有效：自编码锚让"常数解"不再是优解，教师第一次在 20k 尺度上活下来**
+（对比无锚三条臂：jac 0.004~0.027 且 latent 恒为常数）。
+同时要正确解读：`teacher_jac` 从 1.29 掉到 0.22 **不是塌陷**——教师整体被"压缩"（权重变小、
+latent 尺度变小）而由 decoder 补偿，信息仍在（R² 稳定 0.69）。**以后判 adaptation 是否活着，
+主看 `Latent/teacher_recon_r2`，jac/spread 只作辅助。**
+
+**后续（2026-10-17 20:33 UTC）**：NoHist 20k 已在 NEWBOX(802) 启动
+（`History-Abl-NoHist-*`，history 整窗置零，同宽），队列登记 `RUNNING:NEWBOX`；回答"历史到底有没有用"。
+
+**6. Anchor 20k 评测（2026-10-18 20:48 UTC，512 envs / 1100 步 / seed42 / play 任务）**
+
+| 臂（vx=0） | err_vel_xy | 摔倒率 | 回合长度 | 回报 |
+|---|---|---|---|---|
+| fixV2（89 维 / entropy 0.01） | 0.0952 | 10.5% | 910 | 36.5 |
+| PrivV4（54 维 / entropy 0.01） | 0.1037 | 13.5% | 886 | 35.2 |
+| Expl0（89 维 / entropy 0） | 0.1058 | 5.4% | 967 | 38.6 |
+| V4（54 维 / entropy 0） | 0.1129 | 4.5% | 983 | 38.8 |
+| **Anchor（V4 + 自编码锚）** | **0.0922** | 6.1% | 953 | 38.7 |
+
+三档命令（0 / 0.5 / 1.0 m/s）Anchor 的 `err_vel_xy` 分别是 **0.0922 / 0.1095 / 0.1392**，
+**三档都是全部臂里最低**；摔倒率 6.1% / 4.8% / 4.8%（低于 fixV2/PrivV4 的一半，略高于 V4 的 4.5~5.6%）。
+⇒ 这是第一条**既让教师活着、又真正提升跟踪精度**的臂：`recon_r2` 0.691 保持到 it=19999。
+
+**7. NoHist 20k 评测（2026-10-18 22:46 CST）—— 历史信息的真实贡献 ≈ 0**
+
+| 臂（其余全同） | vx=0 err / 摔倒 / 回合 / 回报 | vx=0.5 | vx=1.0 |
+|---|---|---|---|
+| Anchor（有历史，教师 R²=0.691） | 0.0922 / 6.1% / 953 / 38.7 | 0.1095 / 4.8% / 967 / 40.0 | 0.1392 / 4.8% / 967 / 38.9 |
+| **NoHist（history 整窗置零）** | **0.0924 / 2.7% / 991 / 40.1** | 0.1116 / 1.6% / 995 / 41.1 | 0.1576 / 2.1% / 991 / 38.3 |
+
+⇒ **在"历史编码器真的活着"（recon_r2=0.69）的前提下，去掉历史信息也没有损失**：跟踪误差几乎相同
+（0.0922 vs 0.0924），NoHist 的摔倒率反而更低（2.7% vs 6.1%）、回合更长、回报更高。
+**结论：adaptation 通路已被修活，但当前任务/DR 并不需要它**（与早先 armB "无历史基线≈有历史"一致）。
+下一步若要证明 adaptation 的**收益**，必须提高"环境敏感度"：加大 payload/摩擦/电机强度 DR、或换成
+真正需要在线辨识的任务（重载搬运、强扰动、变地形），而不是继续调编码器结构。
+
+### DEF-033 `2026-10-16` 特权观测的缓存闸门是"调用次数"隐式契约（已加固）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 隐患（未触发但会静默失效） |
+| 状态 | **已加固**：`_PrivilegedCachedTerm.__call__` 改为"`env.common_step_counter == 0` 期间每次重算，仿真开跑后才走缓存" |
+| 关联 | `velocity/mdp/observations.py`；探针 `scripts/reinforcement_learning/rsl_rl/probe_privileged_obs.py`（A0/A1/B 三节就是回归判据）；`TODO_zh.md` P1-5 |
+
+**1. 原来的写法**：`if self.count < 2: self._compute()` —— 它依赖"startup 随机化之前恰好调用 1 次"
+（即 `ObservationManager._prepare_terms` 量维度那一次）。实测（2026-10-16，`gym.make()` 之后立刻读 buf）：
+`count=1` 时 buf 里是**随机化之前**的默认值（payload Δ=0、inertia Δ=0、gain=1.0、friction=1.0，
+128 个环境**完全一致**），第一次 `compute()` 之后才被写成随机化后的真值。
+
+**2. 为什么危险**：如果训练在这个窗口里消费过观测（IsaacLab 换版本多调一次、或哪个 startup 事件先
+读一次 obs），教师输入就是"所有环境同一个常数" ⇒ 特权编码器必然塌成常数，而且**不会报任何错**。
+
+**3. 加固后的验证**：探针 A0 段（`count` 与跨环境 std）仍会打印随机化前的默认值，A1 段必须是
+"128/128 环境都变了、跨环境 std > 0"，B 段"缓存 vs 强制重算"必须逐位为 0。
+
+### DEF-032 `2026-10-16` 特权向量（89 维）量级失衡 + 死维 + 漏掉 base COM（已重做，待实测）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 设计缺陷（**直接证据来自真 env 探针**） |
+| 状态 | 已重做为 V4（`privileged_env_params_v4`，54 维），训练实测待跑（P1-5） |
+| 关联 | `velocity/mdp/observations.py`、`flat_env_wbc_cfg.py`（V4 任务）、`history_encoder_loss_cliff_zh.md`、参考实现 DWL/vwb |
+
+**1. 量级失衡（最致命）**：89 维未做归一化，跨环境 `|mean|`：payload 0.92 / gripper 0.45 /
+**inertia 7.56e-4** / gain 1.02 / friction 0.98 ⇒ 27 维惯量比摩擦小 **~1300×**，
+在教师 MLP 首层里贡献可忽略（等价于没接进去）。参考实现的特权向量只有 18~24 维且量级齐平。
+
+**2. 死维**：`gain_scale` 48 维里组内下标 24–27 = 4 个**轮子 stiffness 缩放恒为 0**
+（wheel actuator `stiffness=0` ⇒ `_scale()` 返回 `0/1e-8=0`）。
+
+**3. 漏项（与参考实现对照）**：`randomize_com_positions`（base_link，±3/3/2 cm）**在 cfg 里被注释掉了**，
+而参考实现恰恰把 COM 放进特权向量（DWL `widowGo1.py:455` 的 `mass_params` 5 维 = 附加质量+COM_xyz+
+末端质量）；另外 `randomize_rigid_body_mass`（除 base 外 **26 个 body**）只观测了 `gripper_base`、
+`randomize_rigid_body_material`（**所有 body**、逐 shape 独立采样）只观测了 4 个轮子。
+
+**4. 修法（V4）**：加回 COM(3)；摩擦压成"足均值(3) + 其余连杆均值(2)"；gain 改成
+"20 个非轮关节 k 比 + 24 个关节 d 比"(44，去掉死维)；**惯量不进向量**（对齐参考实现）；
+所有通道按各自 DR 的**实际范围**（从 `env.cfg.events` 现读，不写死）线性映射到 [-1,1]。
+实测：54 维、**0 常量维**、每块 `|mean|max ≤ 0.11`（探针 `run_v4.log`）。
+
+**5. 顺带修掉的两处**：① 旧的摩擦项直接拿 body_id 当 `get_material_properties()`（[N, shapes, 3]）
+的 shape 下标，V4 改成按 `link_paths` 解析 per-body shape 区间；② `privileged_base_com_offset`
+用的 `asset.data.default_com` 在 IsaacLab 5.1 里**不存在**（该项此前一直被注释、从未执行过），
+V4 改为在"随机化前的那次调用"里抓基准并打印（跨环境 std=0.00e+00 验证过）。
+
 ### DEF-031 `2026-09-29` 本机（A4000 / Windows）跑不了 `terrain_type="generator"` 的任务：env 创建期死锁
 
 | 项 | 内容 |

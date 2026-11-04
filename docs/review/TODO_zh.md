@@ -20,6 +20,8 @@
 | 2026-09-20 | **部署基线固化**（`main @ 2d49f47` ↔ run `2026-09-20_00-50-31`，含产物 sha256 + tag `deploy-baseline-2026-09-20`，DONE 第六节 / DEF-022）；新增 `summarize_run.py`（P3 提前做，DEF-023）；**P1-1 改为"口径 + 配置"两条修法**、P1-2 补臂相关证据 | 基线 `2d49f47`；工具 `dc3a5b9`；文档 `eb22401` |
 | 2026-09-20 | P1-1 进入实测：新增**探索噪声上界** `max_noise_std`（默认 0 = 不限制，投影梯度实现，DEF-024），并启动 4000-iter 的 cap=1.2 / entropy_coef=0.002 A/B（结果待回填） | `docs: P1-1 A/B` 提交 |
 | 2026-09-29 | 新分支 `codex/ll-train-detail-fix`：**静止伫立专项**（DEF-026，两项惩罚 + 三条课程）、**镜像符号修复**（DEF-027，"右后腿往右前方撇"）、**扰动加强**（DEF-028）、**多地形任务**（DEF-029）、**遥操 history 任务**（DEF-030）；新增 P1-1'~P1-4 四条待办 | `codex/ll-train-detail-fix` |
+| 2026-10-16 | 历史编码器课题：真 env 探针定位"缓存时序"+ "特权向量量级失衡/死维/漏 COM"（DEF-032/033），实现 V4 特权向量 + 探索口径对齐参考实现 + `Latent/*` 监控；新增 P1-5（待云机实测） | `codex/hl-fix-adaptation`（工作区） |
+| 2026-10-27 | 最新 20k checkpoint 统一按 **0.55 m 高度上限**复核；归档 23 个不重复末 checkpoint 与参数清单；为每个 run 生成 md/png/npz 性能记录；清理 27 个云端 smoke/短测 run。结论迁入 DONE 第九节 | 云端 753/802/1029；`logs/cloud_20k_checkpoints/logs/rsl_rl/perf_summary.md` |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
@@ -91,6 +93,78 @@ P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
   - 做法：给冒烟脚本加"地形类任务跳过 / 超时（如 5 min 无输出即判 SKIP）"的分支，
     并在日志里打印原因；换机器后自动恢复执行。
 
+- [x] **P1-5 V4 实验（特权向量对齐参考实现 + 探索口径）——已启动（2026-10-16 15:0x，BOX4/1029）**
+  - 目的：回答"adaptation 通路是不是被**特权向量（量级/死维/漏项）+ 探索口径**坑死的"，
+    而不是先做结构消融（LOCAL 已确认两个编码器都塌成常数，见 DONE 第八节）。
+  - 任务：`History-Adaptation-V4-Deeprobotics-M20-v0`（= fixV2 的历史窗口/奖励/课程/
+    非对称 critic **逐字段不变**，只换特权组 + 两个探索超参）。
+  - 改动：① 特权组换成单一 term `privileged_env_params_v4`（89 → **54 维、0 常量维、
+    每通道归一到 [-1,1]**、加回 base COM、删掉 27 维惯量 Δ 与 4 个恒 0 的轮 stiffness 死维）；
+    ② `entropy_coef` 0.01 → 0.0、`max_noise_std` 0 → 1.2（对齐参考实现口径，见 DEF-032）；
+    ③ 新增 `Latent/*` TB 指标（z_priv/z_hist 分散度、输入分散度、**教师 jac ‖∂z/∂x‖**）。
+  - **刻意保留** `learning_rate=1e-3 + adaptive`（参考实现是 2e-4 fixed）：本预算 ≈2e9 样本，
+    只有 DWL 的 1/4，砍 5 倍 LR 会把"教师是否还活着"这个主问题污染掉；LR 对照单独做。
+  - 判据：`Latent/teacher_jac` 在 it≈8000（λ 全开）后是否仍 ≥ ~0.3（初值 1.29），
+    `Latent/z_priv_spread` 不塌；然后才是 `eval_fixed_command.py` 的三档误差/摔倒率。
+  - 验收：与 `fixV2`（0.0952/10.5%/910/36.5）、`armB`（0.0997/11.3%/911/35.9）同口径比较。
+  - **进展（2026-10-16）**：7 个文件已推到 BOX4(`10.60.144.11:1029`) 的
+    `/root/autodl-tmp/loco-manip-unified-rl-agent`（NAS 存档 `tools/v4_files.tar.gz.b64`）；
+    冒烟通过（`[privileged-v4]` 54 维 / COM 基准跨环境 std=0.00e+00 / `Latent spread 0.0915|0.0265`）；
+    20k 已 `setsid nohup` 起跑，日志 `logs/rsl_rl/history_adaptation_v4/train_v4_20k.log`，
+    队列已登记 `RUNNING:BOX4`。**下一步：等 it≥8000 看 `Latent/teacher_jac` 是否还 ≥0.3**。
+  - ⚠️ 本机沙箱内 socket 被拦、Jupyter contents API 路径相对 `/root`、云机 python 是
+    `env_isaaclab`（不是 `env_isaac_lab`）—— 三条都是这次踩过的坑，部署脚本 `logs/xfer/{jput,v4_push}.py`。
+  - **2026-10-16 追加：三台实例全用上，做 2×2 归因**（V4 一次改了两件事：特权向量 + 探索口径，
+    所以必须拆开才知道是谁救活的）：
+
+    | 臂 | 特权向量 | 探索口径 | 任务 | 机器 | 状态 |
+    |---|---|---|---|---|---|
+    | fixV2 | 89 维 | entropy 0.01 / 无上限 | `History-Adaptation-V2-*` | NEWBOX | 已有 20k + eval |
+    | **Expl0**（新） | 89 维 | entropy 0 / cap 1.2 | `History-Abl-Expl0-*` | BOX2(753) | **跑中** |
+    | **PrivV4**（新） | 54 维归一 | entropy 0.01 / 无上限 | `History-Abl-PrivV4-*` | NEWBOX 转 NEWBOX(802) | **跑中** |
+    | V4 | 54 维归一 | entropy 0 / cap 1.2 | `History-Adaptation-V4-*` | BOX4(1029) | **跑中** |
+
+    解释规则：`teacher_jac`（it≥8000）与 `z_priv_spread` 在**哪两个臂**活下来 ⇒ 就是那一项起决定作用；
+    若只有 V4 活、两条单变量臂都塌 ⇒ 说明两项是**互补**的（缺一不可）。
+    **早期信号**（it≈13/19）：54 维臂 `z_priv_spread≈0.34`，89 维臂只有 `≈0.04` ⇒ 归一化确实让
+    teacher latent 能"动起来"（与量级失衡的诊断一致）。
+  - **2026-10-17 结果：三条 20k 跑完，四条臂全部塌陷**（DEF-034）：
+    teacher_jac 末值 fixV2 0.0276 / Expl0 0.0188 / PrivV4 0.0004 / V4 0.0120（初值 1.29）
+    ⇒ 特权向量与探索口径都不是主因，损失结构（互相吸引、无锚点）才是；必须上 P1-6。
+  - **P1-6 锚点臂（已实现 + 本地验证，2026-10-17）**：`PrivilegedDecoder` + `teacher_recon_coef`
+    + `Latent/teacher_recon_r2`；任务 `History-Anchor-Deeprobotics-M20-v0`（= V4 全配置，只多一条重建锚）。
+    单元测试：常数教师 R²=−0.04（锚点不可被常数解满足）；训练 300 步 R² −0.04→+0.997。
+    端到端冒烟：`[privileged-v4] 54 维` + `Privileged decoder` + `Mean recon loss 0.3005`。
+    **verdict（it=8419，λ 已于 7000 全开）：`recon_r2 = 0.690` 稳定（4610→8419），teacher_jac 0.221、
+    priv spread 0.022 —— 教师"压缩保信息"，塌陷不再是优解；无锚臂同期 jac 0.004~0.027 且信息为 0。**
+    ⇒ P1-6 的机制成立；NoHist 20k 已于 2026-10-17 20:33 UTC 在 NEWBOX(802) 启动。
+    **20k 完成（it=19999，recon_r2=0.691）：评测 err_vel_xy = 0.0922/0.1095/0.1392（三档全臂最低）、
+    摔倒 6.1%/4.8%/4.8%、回合 953/967/967、回报 38.7/40.0/38.9 ⇒ 既修活通路又提升精度（DEF-034 §6）。**
+  - **P1-7 无历史臂（已实现 + 本地验证，2026-10-17）**：`mdp.history_zero_obs` +
+    `WBCObservationsV4NoHistCfg`；任务 `History-Abl-NoHist-Deeprobotics-M20-v0`；探针实测 history
+    组 830 维 830/830 全零。启动条件：必须等 V4 或 Anchor 确认通路活着。
+    **结果（20k，2026-10-18）**：NoHist 0.0924/2.7%/991/40.1（vx=0），与 Anchor（有历史、
+    recon_r2=0.69）的 0.0922/6.1%/953/38.7 **几乎相同、摔倒更少** ⇒ 历史信息在当前任务上贡献≈0
+    （DEF-034 §7）。**下一步不是继续调结构，而是提高任务对环境的敏感度（更强 DR / 重载搬运 / 变地形）。**
+  - **2026-10-17 机器状态**：NEWBOX(802)/BOX2(753) 跑完 20k 后 CUDA 掉卡
+    （`torch.cuda.is_available()==False`，NVML Unknown Error），需重启动实例；BOX4(1029) 健康。
+  - **2026-10-16 追加：等一台空出来后的队列**（P1-6/P1-7）：
+    * **P1-6 锚点臂**（参考实现没有、我们认为必需）：给 `z_priv` 加监督锚（自编码重建归一化特权向量
+      或 InfoNCE 跨环境对比）+ 教师独立 optimizer(lr/10)，λ 保留；
+    * **P1-7 B 臂**：在**活下来的那套配置**上把历史窗口置零/按时间打乱，回答"历史信息到底有没有用"
+      （在 adaptation 通路是死的时候跑没有意义，见 §"为什么先修锚点"）。
+
+- [ ] **P1-8 多地形环境敏感度实验（Anchor vs NoHist）—— 20k 跑中（2026-10-19）**
+  - 任务：`Rough-Slopes-History-Anchor-*`（粗糙 0.01~0.05 + 正反斜坡 + 平地 + 地形课程，
+    V4 54 维特权 + 教师锚 + entropy 0）vs `Rough-Slopes-History-NoHist-*`（**同宽 700 维全零历史**）。
+  - 本机 cfg 级验证通过（`probe_task_cfg.py`，绕开 DEF-031）；云端 64 envs 冒烟 EXIT=0。
+  - NEWBOX(802)=Anchor、BOX2(753)=NoHist，4096 envs / seed42 / 20k。
+  - 判据：① Anchor 的 `Latent/teacher_recon_r2` 在 it≥8000 仍 ≥0.5；② 评测上 Anchor 是否**显著优于**
+    NoHist（平地上两者相同，若地形上出现差距 ⇒ adaptation 的价值被证明）；③ 地形通过率/摔倒构成。
+  - 验收：`eval_fixed_command.py` 三档（512 envs/1100 步/seed42，play 任务），JSON 写 NAS `eval/`。
+  - **2026-10-27 h055 复核**：地形 history 长度消融（Len5/10/20/50）与平地/地形 h060 checkpoint
+    已统一到 `body_pose.height_range=(0.33, 0.55)`。Len5/Len10 最好（地形摔倒 8.8~11.1%），
+    Len20 明显退化，Len50 居中；平地摔倒 1.0~2.5%。完整数字见 `DONE_zh.md` 第九节。
 
 - [ ] **探明"探索噪声平台 ~1.5"（原"`noise_std`/`error_vel_xy` 长期退化"已归因，见 DEF-023）**
   - **已归因（2026-09-20，用 `summarize_run.py` 做阶段聚合）**：
