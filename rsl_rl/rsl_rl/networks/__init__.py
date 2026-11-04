@@ -9,7 +9,7 @@ from .memory import HiddenState, Memory
 from .mlp import MLP
 from .normalization import EmpiricalDiscountedVariationNormalization, EmpiricalNormalization
 from .history_encoder import HistoryEncoder
-from .privileged_encoder import PrivilegedEncoder
+from .privileged_encoder import PrivilegedDecoder, PrivilegedEncoder
 
 __all__ = [
     "MLP",
@@ -18,5 +18,6 @@ __all__ = [
     "HiddenState",
     "Memory",
     "HistoryEncoder",
-    "PrivilegedEncoder"
+    "PrivilegedEncoder",
+    "PrivilegedDecoder",
 ]

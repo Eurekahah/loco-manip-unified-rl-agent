@@ -140,11 +140,12 @@ class PPO:
             self.device,
         )
 
-    def act(self, obs: TensorDict) -> torch.Tensor:
+    def act(self, obs: TensorDict, **kwargs) -> torch.Tensor:
         if self.policy.is_recurrent:
             self.transition.hidden_states = self.policy.get_hidden_states()
         # Compute the actions and values
-        self.transition.actions = self.policy.act(obs).detach()
+        # kwargs 透传给 policy.act（ActorCriticHistory 用它区分"教师模式/学生模式"）
+        self.transition.actions = self.policy.act(obs, **kwargs).detach()
         self.transition.values = self.policy.evaluate(obs).detach()
         self.transition.actions_log_prob = self.policy.get_actions_log_prob(self.transition.actions).detach()
         self.transition.action_mean = self.policy.action_mean.detach()

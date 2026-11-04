@@ -30,6 +30,160 @@
 | 2026-10-06 | 新增第十八节 **A 组（报告/工具侧）4 条收尾**：臂负载改全 env 口径（A5）、删依赖里的 `[IK DEBUG]`（A6）、`--reset-grace` 剔除复位瞬态（A7）、fig04/fig11 支持 A/B 双 label（A8）；全部本机实测，**未重训** | `codex/ll-train-detail-fix` |
 | 2026-10-06 | 新增第十九节 **B 组开工**：B1 的 20k 已在云端开跑（run `2026-10-06_15-32-05_cloud_ramp20k`，**实测扰动课程首次真正生效**：`step=0` 缩放 0.20×，旧三个 run 的同类打印为 0 次）；B2-②/⑤ **IK 关节保护**做完并 A/B/C/D 消融定稿（位置 clamp 默认开、目标限速默认关） | `codex/ll-train-detail-fix` |
 | 2026-10-08 | 新增第二十节 **B 组第二轮**：B1 收割并验收（前 2000 iter 终止 −49%、但 3× 外推抗扰变差 5.16 vs 2.70）、B2-③ 副作用实证（位置 clamp 无副作用、可达过滤有 ⇒ 默认关）、B2-④ 夹爪 PD 扫描（`286/5`，饱和 88%→0%）、B3 坡面归因（上坡+零速）、B4 SlowVx 落默认；另修掉报告的两个口径 bug（A/B 姿态指令不同、pitch std 是 RMS） | `codex/ll-train-detail-fix` |
+| 2026-10-27 | 新增第二十二节 **最新 20k checkpoint 的 0.55 m 高度上限复核**：平地/地形 h060 重跑 h055，Len5/10/20/50 复用现有 h055 结果；随后归档 23 个不重复 20k 末 checkpoint，为每个 run 生成 `perf/` 记录，并清理 27 个云端 smoke/短测 run | 云端 753/802/1029；`logs/cloud_20k_checkpoints/logs/rsl_rl/perf_summary.md` |
+
+---
+
+## 二十二、最新 20k checkpoint 的 0.55 m 高度上限复核（2026-10-27）
+
+**目的**：把云端三台主机上的最新 20k checkpoint 放到同一个高度命令口径下比较。
+这里的“高度上限”是 `commands.body_pose.height_range` 的上界，不是
+`root_height_below_minimum` 的终止阈值。平地/地形 h060 的旧评测明确用了
+`[0.33, 0.60]`，因此这次用 Hydra 显式覆盖为 `[0.33, 0.55]` 并重跑；
+Len5/10/20/50 的现有评测使用当前 play 配置 `[0.33, 0.55]`，直接复用。
+
+**统一口径**：512 envs、seed 42、每档 1100 control steps、warmup 100、
+固定命令 `0,0,0; 0.5,0,0; 1.0,0,0`，全部使用对应 `-play-v0` 任务。
+平地/地形 h060 重跑命令中的覆盖项为：
+
+```bash
+env.commands.body_pose.height_range="[0.33,0.55]" \
+env.curriculum.body_pose_height_range_s2=null
+```
+
+### 1. 最新 checkpoint 清单
+
+| 主机 | 模型 | run / checkpoint | 任务 | 高度口径 |
+|---|---|---|---|---|
+| 753 | 平地 Anchor h060 | `history_anchor_flat_h060/2026-10-23_13-22-53_height_033_060/model_19999.pt` | `History-Anchor-Deeprobotics-M20-play-v0` | 本次重跑 h055 |
+| 802 | 地形 Anchor h060 | `history_anchor_terrain_h060/2026-10-23_13-21-26_height_033_060/model_19999.pt` | `Rough-Slopes-History-Anchor-Deeprobotics-M20-play-v0` | 本次重跑 h055 |
+| 753 | 地形 Anchor Len20 | `history_anchor_terrain_len20/2026-10-21_01-41-16/model_19999.pt` | `Rough-Slopes-History-Anchor-Len20-Deeprobotics-M20-play-v0` | 现有 h055 |
+| 802 | 地形 Anchor Len5 | `history_anchor_terrain_len5/2026-10-21_01-41-14/model_19999.pt` | `Rough-Slopes-History-Anchor-Len5-Deeprobotics-M20-play-v0` | 现有 h055 |
+| 802 | 地形 Anchor Len10 | `history_anchor_terrain/2026-10-19_00-53-53/model_19999.pt` | `Rough-Slopes-History-Anchor-Deeprobotics-M20-play-v0` | 现有 h055 |
+| 1029 | 地形 Anchor Len50 | `history_anchor_terrain_len50/2026-10-21_01-41-17/model_19999.pt` | `Rough-Slopes-History-Anchor-Len50-Deeprobotics-M20-play-v0` | 现有 h055 |
+
+> 1029 原本关机；为读取日志临时以**无卡模式**启动，取回 Len50 结果后已再次关机。
+
+### 2. h060 checkpoint 在 0.55 m 上限下的结果
+
+| 模型 | 命令 `(vx,vy,wz)` | `err_vel_xy` | 摔倒率 | 回合长度 | 每回合回报 |
+|---|---|---:|---:|---:|---:|
+| 平地 Anchor | `(0,0,0)` | **0.0952** | 2.14% | 987.3 | 41.78 |
+| 平地 Anchor | `(0.5,0,0)` | **0.1031** | 0.97% | 994.1 | 42.17 |
+| 平地 Anchor | `(1.0,0,0)` | **0.1281** | 2.54% | 984.8 | 42.66 |
+| 地形 Anchor | `(0,0,0)` | **0.1016** | 17.65% | 906.9 | 37.30 |
+| 地形 Anchor | `(0.5,0,0)` | **0.1429** | 14.01% | 936.5 | 38.64 |
+| 地形 Anchor | `(1.0,0,0)` | **0.1827** | 16.73% | 906.4 | 35.59 |
+
+**与同 checkpoint 的 h060 旧评测对照**：
+
+| 模型 | `err_vel_xy` 变化 | 摔倒率变化 | 回合长度变化 |
+|---|---|---|---|
+| 平地 Anchor | 三档分别 **−3.4% / −2.8% / −5.2%** | +0.4 / −1.0 / +0.6 个百分点 | 基本持平 |
+| 地形 Anchor | 三档分别 **−5.5% / −3.7% / −6.4%** | **−4.0 / −2.3 / −3.1 个百分点** | +22.7 / +24.5 / +25.5 步 |
+
+⇒ 对同一批 h060 checkpoint，把命令高度上限从 0.60 收紧到 0.55 **没有性能回归**：
+平地略好，地形三档误差和摔倒率都下降，回合也更长。0.55 m 可以作为后续统一口径。
+
+### 3. 地形 history 长度消融（均为 0.55 m 上限）
+
+| 模型 | `vx=0` 误差 / 摔倒 | `vx=0.5` 误差 / 摔倒 | `vx=1.0` 误差 / 摔倒 | 回合长度（三档） |
+|---|---|---|---|---|
+| Len5 | **0.1003 / 11.13%** | **0.1383 / 9.81%** | **0.1674 / 9.52%** | 935.8 / 938.6 / 943.8 |
+| Len10 | **0.0990 / 10.90%** | **0.1367 / 9.60%** | 0.1681 / **8.83%** | 931.5 / 935.3 / 936.2 |
+| Len20 | 0.1226 / 27.29% | 0.1803 / 26.74% | 0.2328 / 24.55% | 841.0 / 858.7 / 858.0 |
+| Len50 | 0.1204 / 13.09% | 0.1747 / 14.26% | 0.2080 / 13.07% | 918.7 / 915.5 / 923.5 |
+
+**结论**：
+
+1. **Len5 与 Len10 是当前最好的两档**，三档速度和摔倒率都接近；Len5 在高速段误差略低，
+   Len10 在高速段摔倒率略低。Len20 明显退化，Len50 也不如 Len5/10。
+2. 地形仍是主要风险：即使在 0.55 m 上限下，最好的地形模型摔倒率仍有 **8.8~11.1%**，
+   而平地模型只有 **1.0~2.5%**。
+3. 结果文件：
+   `logs/smoke/eval_flat_h055_model19999.json`、
+   `logs/smoke/eval_terrain_h055_model19999.json`、
+   `logs/smoke/eval_terrain_len{5,10,20,50}_h055_model19999.json`。
+
+### 4. 20k checkpoint 归档与测试 run 清理
+
+三台云机去重后共有 **23 个训练到 20000 iterations 的 run**（753 8 个、802 新增 6 个、
+1029 新增 9 个；跨主机重复的 3 个只取一份）。每个 run 取末 checkpoint
+`model_19999.pt`，同时保留 `params/env.yaml` 与 `params/agent.yaml`：
+
+| 内容 | 位置 / 数量 |
+|---|---|
+| 本机归档目录 | `logs/cloud_20k_checkpoints/logs/rsl_rl/<experiment>/<run>/` |
+| 原始压缩包 | `logs/cloud_20k_archives/cloud_20k_{753,802,1029}.tar.gz` |
+| 配置清单 | `logs/cloud_20k_manifest.{md,csv,json}` |
+| checkpoint 数量 / 大小 | **23 个 / 129.3 MB** |
+
+所有 20k run 的公共训练配置是 `4096 envs`、`seed=42`、`24 steps per env`、
+`20000 iterations`；差异集中在 terrain、history 长度、entropy/noise cap、
+teacher anchor 和 height range。详细逐 run 配置见 `logs/cloud_20k_manifest.md`。
+
+清理只针对明确的测试 run：名称含 `smoke`，或 checkpoint 数 ≤2 且末迭代 ≤20；
+任何含 `model_19999.pt` 的 run 都不会被删除。
+
+| 位置 | 删除测试 run 数 | 释放空间 |
+|---|---:|---:|
+| 753 | 4 | 27.1 MB |
+| 802 | 9 | 61.8 MB |
+| 1029 | 14 | 94.1 MB |
+| 本机 `logs/rsl_rl` | 69 | 610.8 MB |
+
+清理后 753/802/1029 均不再有 ≤2-checkpoint 的近期 smoke run
+（1029 仅保留一个历史 4999-iter 单 checkpoint run，不属于 smoke）。
+1029 在归档完成后已重新关机。
+
+### 5. 23 个 20k checkpoint 的逐 run 性能记录
+
+统一补测口径：`256 envs`、每档 `1100 steps`、`warmup=100`、`seed=42`、
+固定命令 `0 / 0.5 / 1.0 m/s`、`body_pose.height_range=(0.33, 0.55)`。
+每个 run 目录下新增：
+
+```text
+perf/
+  performance.md    # 表格：误差、摔倒率、回合长度、回报、终止构成
+  performance.png   # 三档 vx 的误差与摔倒率柱状图
+  performance.npz   # 原始数组 + metadata_json
+```
+
+总排名和汇总图：
+
+- `logs/cloud_20k_checkpoints/logs/rsl_rl/perf_summary.md`
+- `logs/cloud_20k_checkpoints/logs/rsl_rl/perf_summary.png`
+
+综合排名分数采用 `0.6 × 归一化平均跟踪误差 + 0.4 × 归一化平均摔倒率`。
+
+**平地最佳**：`history_anchor_flat_h060/2026-10-23_13-22-53_height_033_060`
+
+| 配置 | 值 |
+|---|---|
+| 平均 `err_vel_xy` | **0.1093 m/s** |
+| 平均摔倒率 | **1.56%** |
+| history / terrain | 10 / no |
+| entropy / noise cap | 0.0 / 1.2 |
+| teacher anchor | yes |
+| 训练高度范围 | 0.33–0.60 m；本次按 0.33–0.55 m 评测 |
+
+如果只看平地稳定性，`history_abl_nohist/2026-10-18_04-33-15` 的平均摔倒率更低
+（1.17%），但平均误差略高（0.1212 m/s），综合排名第二。
+
+**多地形最佳**：`history_anchor_terrain_len5/2026-10-21_01-41-14`
+
+| 配置 | 值 |
+|---|---|
+| 平均 `err_vel_xy` | **0.1359 m/s** |
+| 平均摔倒率 | **8.82%** |
+| history / terrain | 5 / yes |
+| entropy / noise cap | 0.0 / 1.2 |
+| teacher anchor | yes |
+| 高度范围 | 0.33–0.55 m |
+
+地形 Len10 的平均误差最低（0.1354 m/s），但摔倒率更高（10.98%）；如果优先看稳定性，
+`history_adaptation/2026-10-02_00-44-42_cloud_slowvx20k` 的平均摔倒率最低（5.01%），
+代价是平均误差升至 0.1672 m/s。按“误差 + 稳定性”综合，Len5 最均衡。
 
 ---
 

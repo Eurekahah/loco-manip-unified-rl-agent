@@ -107,7 +107,9 @@ class OnPolicyRunnerHis:
             with torch.inference_mode():
                 for _ in range(self.num_steps_per_env):
                     # Sample actions
-                    actions = self.alg.act(obs)
+                    # 参考实现（vwb `on_policy_runner.py:132`）：rollout 与 update 用**同一个** hist_encoding，
+                    # 即每 dagger_update_freq 次迭代走一次"学生模式 + 纯模仿更新"，其余走"教师模式 + PPO"。
+                    actions = self.alg.act(obs, hist_encoding=use_dagger_update)
                     # Step the environment
                     obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
                     # Move to device
@@ -224,6 +226,12 @@ class OnPolicyRunnerHis:
         # Log noise std
         self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
 
+        # Latent 健康度：`Loss/constraint` / `Loss/latent_distance` 变好**不能**证明 adaptation 通路是活的
+        # （两边一起塌成常数也能把这两条压到 ~0）。z_priv 的跨样本分散度 + 教师输入敏感度才是判据。
+        latent_metrics = getattr(self.alg, "latent_metrics", {}) or {}
+        for key, value in latent_metrics.items():
+            self.writer.add_scalar(f"Latent/{key}", value, locs["it"])
+
         # Log performance
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
         self.writer.add_scalar("Perf/collection time", locs["collection_time"], locs["it"])
@@ -279,6 +287,14 @@ class OnPolicyRunnerHis:
                 log_string += f"""{f"{key}:":>{pad}} {value:.4f}\n"""
 
         log_string += ep_string
+        if latent_metrics:
+            log_string += (
+                f"""{f"Latent spread (priv/hist):":>{pad}} """
+                f"""{latent_metrics.get('z_priv_spread', float('nan')):.4f} / """
+                f"""{latent_metrics.get('z_hist_spread', float('nan')):.4f}\n"""
+            )
+            if "teacher_jac" in latent_metrics:
+                log_string += f"""{f"Teacher jac ‖dz/dx‖:":>{pad}} {latent_metrics['teacher_jac']:.4f}\n"""
         log_string += (
             f"""{"-" * width}\n"""
             f"""{"Total timesteps:":>{pad}} {self.tot_timesteps}\n"""

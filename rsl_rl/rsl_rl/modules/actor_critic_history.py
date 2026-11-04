@@ -40,8 +40,8 @@ from torch.distributions import Normal
 from typing import Any, NoReturn
 
 from rsl_rl.networks import MLP, EmpiricalNormalization
-from rsl_rl.networks.history_encoder import HistoryEncoder
-from rsl_rl.networks.privileged_encoder import PrivilegedEncoder
+from rsl_rl.networks.history_encoder import HistoryEncoder, HistoryEncoderGRU, HistoryEncoderMLP
+from rsl_rl.networks.privileged_encoder import PrivilegedDecoder, PrivilegedEncoder
 
 
 class ActorCriticHistory(nn.Module):
@@ -58,7 +58,15 @@ class ActorCriticHistory(nn.Module):
         history_encoder_hidden_channels: tuple[int, ...] | list[int] = (32, 32, 32),
         history_encoder_kernel_sizes: tuple[int, ...] | list[int] = (4, 3, 2),
         history_encoder_strides: tuple[int, ...] | list[int] = (2, 1, 1),
+        history_encoder_projection_dim: int = 0,
+        history_encoder_type: str = "tcn",
+        history_encoder_mlp_hidden_dims: tuple[int, ...] | list[int] = (256, 128),
+        history_encoder_gru_hidden_dim: int = 64,
+        history_encoder_gru_num_layers: int = 1,
         privileged_encoder_hidden_dims: tuple[int, ...] | list[int] = (128, 64),
+        # Teacher 锚点（P1-6）：非空 = 建一个重建头 decoder(z_priv) -> x_priv，用重建损失防止
+        # 教师塌成常数。默认 () = 关闭（旧臂/旧 checkpoint 完全不受影响）。
+        teacher_recon_hidden_dims: tuple[int, ...] | list[int] = (),
         # Actor / critic configuration (same semantics as rsl_rl.modules.ActorCritic)
         actor_obs_normalization: bool = False,
         critic_obs_normalization: bool = False,
@@ -116,21 +124,58 @@ class ActorCriticHistory(nn.Module):
         self.latent_dim = latent_dim
 
         # ---- Encoders ----
-        self.history_encoder = HistoryEncoder(
-            num_single_step_obs=num_single_step_obs,
-            history_length=history_length,
-            latent_dim=latent_dim,
-            hidden_channels=history_encoder_hidden_channels,
-            kernel_sizes=history_encoder_kernel_sizes,
-            strides=history_encoder_strides,
-            activation=activation,
-        )
+        # 历史编码器结构可换：tcn（默认，可选逐帧共享投影）/ mlp（展平后 MLP）/ gru。
+        _enc_type = str(history_encoder_type).lower()
+        if _enc_type == "tcn":
+            self.history_encoder = HistoryEncoder(
+                num_single_step_obs=num_single_step_obs,
+                history_length=history_length,
+                latent_dim=latent_dim,
+                hidden_channels=history_encoder_hidden_channels,
+                kernel_sizes=history_encoder_kernel_sizes,
+                strides=history_encoder_strides,
+                activation=activation,
+                projection_dim=history_encoder_projection_dim,
+            )
+        elif _enc_type == "mlp":
+            self.history_encoder = HistoryEncoderMLP(
+                num_single_step_obs=num_single_step_obs,
+                history_length=history_length,
+                latent_dim=latent_dim,
+                hidden_dims=history_encoder_mlp_hidden_dims,
+                activation=activation,
+            )
+        elif _enc_type == "gru":
+            self.history_encoder = HistoryEncoderGRU(
+                num_single_step_obs=num_single_step_obs,
+                history_length=history_length,
+                latent_dim=latent_dim,
+                hidden_dim=history_encoder_gru_hidden_dim,
+                num_layers=history_encoder_gru_num_layers,
+                activation=activation,
+            )
+        else:
+            raise ValueError(
+                f"Unknown history_encoder_type: {history_encoder_type!r} (expect 'tcn' | 'mlp' | 'gru')"
+            )
         self.privileged_encoder = PrivilegedEncoder(
             num_privileged_obs=num_privileged_obs,
             latent_dim=latent_dim,
             hidden_dims=privileged_encoder_hidden_dims,
             activation=activation,
         )
+        self.teacher_recon_hidden_dims = tuple(teacher_recon_hidden_dims)
+        if len(self.teacher_recon_hidden_dims) > 0:
+            self.privileged_decoder: PrivilegedDecoder | None = PrivilegedDecoder(
+                latent_dim=latent_dim,
+                num_privileged_obs=num_privileged_obs,
+                hidden_dims=self.teacher_recon_hidden_dims,
+                activation=activation,
+            )
+            print(f"Privileged decoder (teacher anchor): {self.privileged_decoder}")
+        else:
+            self.privileged_decoder = None
+        self.num_privileged_obs = num_privileged_obs
 
         # ---- Actor (always conditioned on the HISTORY latent -> train/deploy consistent) ----
         self.actor = MLP(num_actor_obs + latent_dim, num_actions, list(actor_hidden_dims), activation)
@@ -254,7 +299,7 @@ class ActorCriticHistory(nn.Module):
         obs_list = [obs[obs_group] for obs_group in self.obs_groups["privileged"]]
         return torch.cat(obs_list, dim=-1)
 
-    def _compute_latents(self, obs: TensorDict) -> torch.Tensor:
+    def _compute_latents(self, obs: TensorDict, hist_encoding: bool = True) -> torch.Tensor:
         """Run both encoders and return the latent that the actor should condition on.
 
         Both latents are cached on `self` (history latent WITH grad, privileged latent WITH
@@ -272,7 +317,14 @@ class ActorCriticHistory(nn.Module):
 
         self._last_history_latent = history_latent
         self._last_privileged_latent = privileged_latent
-        return history_latent
+        # ── 参考实现（MarkFzp/Deep-Whole-Body-Control、Ericonaldo/visual_wholebody）里 actor 有两种模式 ──
+        #   hist_encoding=False → actor 用的是**特权 latent（教师）**，这条路径由 PPO 直接训练 ⇒
+        #                         特权编码器有 RL 梯度锚，不会退化成常数；
+        #   hist_encoding=True  → 用历史 latent（学生，也是部署态）。
+        # 我们此前把开关砍掉了（永远用历史 latent），导致特权编码器唯一的梯度来自
+        # `λ·MSE(priv, sg(hist))` 这条"教师→学生"的正则 ⇒ 教师塌缩成常数（见
+        # docs/history_encoder_loss_cliff_zh.md 的实测）。
+        return history_latent if hist_encoding else privileged_latent
 
     # --------------------------------------------------------------------------------- #
     # Standard ActorCritic-style API consumed by rsl_rl.algorithms.PPO / PPORoA         #
@@ -289,10 +341,10 @@ class ActorCriticHistory(nn.Module):
             raise ValueError(f"Unknown standard deviation type: {self.noise_std_type}. Should be 'scalar' or 'log'")
         self.distribution = Normal(mean, std)
 
-    def act(self, obs: TensorDict, **kwargs: dict[str, Any]) -> torch.Tensor:
+    def act(self, obs: TensorDict, hist_encoding: bool = True, **kwargs: dict[str, Any]) -> torch.Tensor:
         actor_obs = self.get_actor_obs(obs)
         actor_obs = self.actor_obs_normalizer(actor_obs)
-        latent = self._compute_latents(obs)
+        latent = self._compute_latents(obs, hist_encoding=hist_encoding)
         self._update_distribution(torch.cat([actor_obs, latent], dim=-1))
         return self.distribution.sample()
 
@@ -365,3 +417,28 @@ class ActorCriticHistory(nn.Module):
         privileged_obs = self.get_privileged_obs(obs)
         privileged_obs = self.privileged_obs_normalizer(privileged_obs)
         return self.privileged_encoder(privileged_obs)
+
+    # --------------------------------------------------------------------------------- #
+    # Teacher 锚点（P1-6）：重建归一化特权向量，防止 z_priv 塌成常数
+    # --------------------------------------------------------------------------------- #
+    def teacher_reconstruction_loss(self, obs: TensorDict) -> torch.Tensor | None:
+        """``MSE(decoder(z_priv), sg(x_priv))`` —— 梯度只进教师/解码器，不被 x 影响。
+
+        `z_priv` 用**带梯度**的重算（不读缓存，避免和 PPO 的 batch 错位）。
+        """
+        if self.privileged_decoder is None:
+            return None
+        x = self.get_privileged_obs(obs)
+        x = self.privileged_obs_normalizer(x)
+        z = self.privileged_encoder(x)
+        return nn.functional.mse_loss(self.privileged_decoder(z), x.detach())
+
+    @torch.no_grad()
+    def teacher_recon_r2(self, z: torch.Tensor, x: torch.Tensor) -> float | None:
+        """重建的"解释方差比" 1 − MSE/Var(x)：塌成常数时 ≈0，正常时 →1。"""
+        if self.privileged_decoder is None:
+            return None
+        x = self.privileged_obs_normalizer(x)
+        mse = nn.functional.mse_loss(self.privileged_decoder(z), x).item()
+        var = x.var(dim=0, unbiased=False).mean().item()
+        return float(1.0 - mse / max(var, 1e-8))
