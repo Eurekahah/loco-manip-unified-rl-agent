@@ -120,7 +120,7 @@ class LowShelfPlaceSceneCfg(HighLevelSceneCfg):
         prim_path="{ENV_REGEX_NS}/Object",
         spawn=sim_utils.UsdFileCfg(
             usd_path=OBJECT_USD_PATH,
-            activate_contact_sensors=True,
+            activate_contact_sensors=False,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 solver_position_iteration_count=16,
                 solver_velocity_iteration_count=2,

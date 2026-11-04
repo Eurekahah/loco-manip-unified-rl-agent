@@ -271,6 +271,20 @@ class LowShelfPlaceEnvCfg(HighLevelFlatEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.episode_length_s = 20.0
+        # The low-shelf MDP only uses rigid-body poses and velocities. Remove
+        # inherited full-body sensors after the parent post-init has configured
+        # them, otherwise they still run on every physics step.
+        self.scene.height_scanner_base = None
+        self.scene.contact_forces = None
+        self.scene.gripper_link1_contact_forces = None
+        self.scene.gripper_link2_contact_forces = None
+        self.scene.arm_contact_forces = None
+        # Avoid a shutdown-time marker callback after the scene is destroyed.
+        self.actions.pre_trained_pick_action.low_level_ee_actions.debug_vis = False
+        # The high-level controller runs at 5 Hz. Rendering only once per
+        # high-level step makes the GUI look frozen (~0.65 FPS on the current
+        # WBC pipeline), so refresh the viewer at the low-level control rate.
+        self.sim.render_interval = self.actions.pre_trained_pick_action.low_level_decimation
         self.scene.warehouse = None
         self.scene.arm_camera = None
         self.scene.nav_camera = None

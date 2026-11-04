@@ -116,6 +116,21 @@ Isaac-M20-Piper-LowShelf-Place-v0
 - 遥操环境：关闭相机时可创建并运行；启用 `--enable_cameras` 的本地无头测试触发 Isaac Sim Vulkan/相机崩溃，待换图形会话或稳定驱动验证。
 - 已知问题：相机朝向和固定视角画面尚未做视觉检查；HDF5 记录尚未接入。
 
+### 6.1 GUI 帧率诊断（2026-11-05）
+
+- 驱动版本：`580.88`，GPU：`NVIDIA RTX A4000`。
+- 无头模式下新任务约 `24 step / 36 s`，即约 `0.65 high-level step/s`。
+- 原有 `Isaac-Deeprobotics-High-Level-Pick-WBC-Flat-Teacher-v0` 在相同条件下也约 `24 step / 36 s`，说明问题不是新场景或新驱动单独造成的。
+- 高层环境每个 step 推进 `0.2 s` 仿真时间（`sim.dt=0.005`，`decimation=40`），并执行 10 次低层 WBC 策略。无头吞吐本来就是约 `0.65 step/s`。
+- 此前 `HighLevelEnvCfg` 把 `sim.render_interval` 从低层步长 `4` 改成高层步长 `40`，导致 viewer 每个高层 step 只刷新一次；因此 GUI 显示约 `0.65 FPS`，看起来像只有 1 Hz。
+- 本任务现在把 viewer 刷新周期设为低层控制步长 `4`，GUI 刷新率约为环境 step 率的 10 倍；物理语义、控制频率和策略行为不变。
+- 同时关闭本任务未使用的 `contact_forces`、手指/机械臂接触传感器、`height_scanner_base`，避免无意义的逐物理步传感器更新。场景仍保留物体碰撞和静止接触。
+- 关闭低层 IK 的 EE debug marker，避免 GUI 关闭时出现析构后的回调报错。
+- 修复后无头基准：约 `29 s / 24 step`，即约 `0.8 high-level step/s`，相比修复前约 `36 s / 24 step` 提升约 20%。
+- 修复后 4 环境无头基准：约 `31.5 s / iteration`，单轮采集 `96` 个环境步，约 `3.0 env step/s`。
+- 修复后 GUI 冒烟：约 `32.5 s / 24 step`；按每个高层 step 渲染 10 次计算，viewer 约 `7.4 FPS`，不再是约 `0.7 FPS`。
+- 进行正式训练时仍建议使用 `--headless`；GUI 可视化建议 `--num_envs=1`，避免 RTX 同时绘制多个完整工作单元。
+
 ## 7. 复现命令
 
 配置解析：
