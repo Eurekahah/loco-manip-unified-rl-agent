@@ -47,6 +47,8 @@ from scipy.spatial.transform import Rotation as R
 
 from isaaclab.devices import DeviceBase, DeviceCfg
 
+from rl_training.devices.vr_signal_shaping import SlewRateLimiter, shape_stick
+
 # ---------------------------------------------------------------------------
 # Lazy import guard – XLeVR may not be installed in all environments
 # ---------------------------------------------------------------------------
@@ -133,6 +135,24 @@ class Se2VRExtended(DeviceBase):
         self.arm_rot_axis_map    = cfg.arm_rot_axis_map
         # sim/房间系位移 -> EE x/y/z 通道的固定映射表
         self.arm_pos_axis_map    = cfg.arm_pos_axis_map
+
+        # ---- 摇杆整形（死区/曲线/斜率限制）----
+        self._stick_shaping = cfg.stick_shaping_enabled
+        self._stick_deadzone = cfg.stick_deadzone
+        self._stick_expo = cfg.stick_expo
+        self._yaw_expo = cfg.yaw_expo
+        self._stick_timeout = cfg.stick_timeout
+        # 摇杆整形后的"目标速度"（vx, vy, wz），由斜率限制器平滑后才写入 _command[0:3]
+        self._stick_target = np.zeros(3, dtype=np.float64)
+        # 左手（vx, vy）/ 右手（wz）最近一次摇杆数据时间，用于掉线保护
+        self._stick_stamp = {"left": time.monotonic(), "right": time.monotonic()}
+        self._chassis_slew = SlewRateLimiter(
+            max_accel=[cfg.v_x_accel, cfg.v_y_accel, cfg.omega_z_accel],
+            max_decel=[cfg.v_x_decel, cfg.v_y_decel, cfg.omega_z_decel],
+        )
+        # 斜率限制使用的步长：优先用 set_step_dt() 设置的仿真步长，否则用 advance() 间隔的墙钟时间
+        self._step_dt: float | None = None
+        self._last_advance_time = time.monotonic()
 
         # ---- state flags ----
         self._started      = False
@@ -223,6 +243,9 @@ class Se2VRExtended(DeviceBase):
     def reset(self):
         """Reset all buffers and VR origins."""
         self._command[:] = 0.0
+        self._stick_target[:] = 0.0
+        self._chassis_slew.reset()
+        self._last_advance_time = time.monotonic()
         self._body_height_offset = 0.0
         self._vr_origin = {
             "left":  {"pos": None, "rot": None},
@@ -254,7 +277,33 @@ class Se2VRExtended(DeviceBase):
                gripper]``
         """
         self._poll_queue()
+        self._apply_chassis_slew()
         return self._command.copy()
+
+    def set_step_dt(self, dt: float | None) -> None:
+        """设置底盘斜率限制使用的步长（秒）。
+
+        传入仿真环境每步时长（如 ``env.step_dt``）可让加速度限制按"仿真时间"生效，
+        不受仿真实时因子影响；传 ``None`` 则回退为 ``advance()`` 两次调用的墙钟间隔。
+        """
+        self._step_dt = None if dt is None else float(dt)
+
+    def _apply_chassis_slew(self) -> None:
+        """把摇杆目标速度经斜率限制后写入 command[0:3]（含掉线保护）。"""
+        now = time.monotonic()
+        wall_dt = min(max(now - self._last_advance_time, 0.0), 0.1)
+        self._last_advance_time = now
+        if not self._stick_shaping:
+            return
+        dt = self._step_dt if self._step_dt is not None else wall_dt
+
+        target = self._stick_target.copy()
+        # 掉线保护：摇杆数据超时（手柄丢失/断连）就让目标回 0，速度按斜率减到停
+        if now - self._stick_stamp["left"] > self._stick_timeout:
+            target[0:2] = 0.0
+        if now - self._stick_stamp["right"] > self._stick_timeout:
+            target[2] = 0.0
+        self._command[0:3] = self._chassis_slew.update(target, dt)
 
     # ------------------------------------------------------------------
     # Additional convenience: structured dict (optional for callers)
@@ -381,7 +430,12 @@ class Se2VRExtended(DeviceBase):
             return
         stick = goal.metadata["thumbstick"]
         stick_x = -float(stick.get("x", 0.0))
-        self._command[2] = stick_x * self.omega_z_sensitivity
+        if not self._stick_shaping:  # 旧行为：纯线性
+            self._command[2] = stick_x * self.omega_z_sensitivity
+            return
+        shaped = shape_stick(np.array([stick_x, 0.0]), self._stick_deadzone, self._yaw_expo)
+        self._stick_target[2] = shaped[0] * self.omega_z_sensitivity
+        self._stick_stamp["right"] = time.monotonic()
 
     def _update_body(self, delta_pos: np.ndarray, r_diff: R, trigger: float):
         """Write body height / pitch / roll offsets from left controller.
@@ -417,8 +471,15 @@ class Se2VRExtended(DeviceBase):
         stick_x = float(stick.get("x", 0.0))
         stick_y = float(stick.get("y", 0.0))
 
-        self._command[0] = - stick_y * self.v_x_sensitivity
-        self._command[1] = - stick_x * self.v_y_sensitivity
+        if not self._stick_shaping:  # 旧行为：纯线性
+            self._command[0] = - stick_y * self.v_x_sensitivity
+            self._command[1] = - stick_x * self.v_y_sensitivity
+            return
+        # 圆形死区 → 曲线 → 模长限幅 ≤ 1；再乘各轴最大速度，之后由 advance() 做斜率限制
+        shaped = shape_stick(np.array([stick_x, stick_y]), self._stick_deadzone, self._stick_expo)
+        self._stick_target[0] = -shaped[1] * self.v_x_sensitivity
+        self._stick_target[1] = -shaped[0] * self.v_y_sensitivity
+        self._stick_stamp["left"] = time.monotonic()
 
 
     # ------------------------------------------------------------------
@@ -578,6 +639,28 @@ class Se2VRExtendedCfg(DeviceCfg):
     """Lateral velocity scale (left thumbstick X)."""
     omega_z_sensitivity: float = 1.0
     """Yaw rate scale (left thumbstick twist / rotation)."""
+
+    # -- 底盘摇杆整形（死区 → 曲线 → 模长限幅 → 斜率限制）--
+    stick_shaping_enabled: bool = True
+    """False 则回退为旧的纯线性映射（用于 A/B 手感对比）。"""
+    stick_deadzone: float = 0.12
+    """摇杆圆形死区（0~1）。模长小于此值输出 0，超出部分重标定到 [0,1]，边缘连续。"""
+    stick_expo: float = 0.5
+    """平移摇杆曲线：0=线性，1=纯立方。越大小推杆越细腻，推满仍是最大速度。"""
+    yaw_expo: float = 0.4
+    """偏航摇杆曲线，含义同 stick_expo。"""
+    v_x_accel: float = 4.0
+    """前后速度"加速"斜率上限（m/s²）。"""
+    v_x_decel: float = 8.0
+    """前后速度"减速/回零"斜率上限（m/s²），比加速大以便能及时停下。"""
+    v_y_accel: float = 2.0
+    """侧向速度加速斜率上限（m/s²）。"""
+    v_y_decel: float = 4.0
+    omega_z_accel: float = 4.0
+    """偏航角速度加速斜率上限（rad/s²）。"""
+    omega_z_decel: float = 8.0
+    stick_timeout: float = 0.5
+    """摇杆数据超时（s）。超时视为手柄丢失，目标速度回 0。"""
 
     # -- body pose --
     default_body_height: float = 0.513

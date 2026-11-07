@@ -46,6 +46,10 @@ def main():
         # ee_orn_sensitivity=1.0,
     )
     teleop_interface = Se2VRExtended(device_cfg)
+    # 摇杆斜率限制按仿真步长（而非墙钟）计算，不受仿真实时因子影响
+    _step_dt = getattr(env, "step_dt", None)
+    if _step_dt is not None:
+        teleop_interface.set_step_dt(float(_step_dt))
     print(teleop_interface)
 
     # ── 3. 控制标志 ────────────────────────────────────────────────────
