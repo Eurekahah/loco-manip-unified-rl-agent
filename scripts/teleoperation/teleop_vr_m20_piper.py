@@ -25,6 +25,8 @@ def main():
     # ── 1. 创建环境 ────────────────────────────────────────────────────
     env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs)
     env_cfg.terminations.time_out = None
+    env_cfg.actions.pre_trained_pick_action.debug_vis = not args.headless
+    env_cfg.actions.pre_trained_pick_action.debug_vis_ee_target_only = True
     # VR 遥操：执行端采用"绝对目标 = 标定基准 + 手柄偏移"语义（不滚动累加），
     # 避免手柄微小偏差被积分放大到极限；键盘脚本不设置此项，保持增量语义
     env_cfg.actions.pre_trained_pick_action.absolute_commands = True

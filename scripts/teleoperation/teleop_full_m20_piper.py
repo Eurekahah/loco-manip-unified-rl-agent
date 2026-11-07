@@ -25,6 +25,8 @@ def main():
     # ── 1. 创建环境 ────────────────────────────────────────────────────
     env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs)
     env_cfg.terminations.time_out = None
+    env_cfg.actions.pre_trained_pick_action.debug_vis = not args.headless
+    env_cfg.actions.pre_trained_pick_action.debug_vis_ee_target_only = True
     env = gym.make(args.task, cfg=env_cfg).unwrapped
 
     # ── 2. 创建键盘设备 ────────────────────────────────────────────────

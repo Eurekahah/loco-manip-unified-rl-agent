@@ -335,23 +335,25 @@ class TeleopLLAction(LowLevelPolicyActionBase):
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         if debug_vis:
-            if not hasattr(self, "base_vel_goal_visualizer"):
-                marker_cfg = GREEN_ARROW_X_MARKER_CFG.copy()
-                marker_cfg.prim_path = "/Visuals/Actions/velocity_goal"
-                marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
-                self.base_vel_goal_visualizer = VisualizationMarkers(marker_cfg)
-                marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy()
-                marker_cfg.prim_path = "/Visuals/Actions/velocity_current"
-                marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
-                self.base_vel_visualizer = VisualizationMarkers(marker_cfg)
+            if not self.cfg.debug_vis_ee_target_only:
+                if not hasattr(self, "base_vel_goal_visualizer"):
+                    marker_cfg = GREEN_ARROW_X_MARKER_CFG.copy()
+                    marker_cfg.prim_path = "/Visuals/Actions/velocity_goal"
+                    marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
+                    self.base_vel_goal_visualizer = VisualizationMarkers(marker_cfg)
+                    marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy()
+                    marker_cfg.prim_path = "/Visuals/Actions/velocity_current"
+                    marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
+                    self.base_vel_visualizer = VisualizationMarkers(marker_cfg)
             if not hasattr(self, "ee_goal_visualizer"):
                 from isaaclab.markers.config import RED_ARROW_X_MARKER_CFG
                 marker_cfg = RED_ARROW_X_MARKER_CFG.copy()
                 marker_cfg.prim_path = "/Visuals/Actions/ee_goal"
                 marker_cfg.markers["arrow"].scale = (0.3, 0.3, 0.3)
                 self.ee_goal_visualizer = VisualizationMarkers(marker_cfg)
-            self.base_vel_goal_visualizer.set_visibility(True)
-            self.base_vel_visualizer.set_visibility(True)
+            if not self.cfg.debug_vis_ee_target_only:
+                self.base_vel_goal_visualizer.set_visibility(True)
+                self.base_vel_visualizer.set_visibility(True)
             self.ee_goal_visualizer.set_visibility(True)
         else:
             if hasattr(self, "base_vel_goal_visualizer"):
@@ -363,12 +365,15 @@ class TeleopLLAction(LowLevelPolicyActionBase):
     def _debug_vis_callback(self, event):
         if not self.robot.is_initialized:
             return
-        base_pos_w = self.robot.data.root_pos_w.clone()
-        base_pos_w[:, 2] += 0.5
-        vel_des_arrow_scale, vel_des_arrow_quat = self._resolve_xy_velocity_to_arrow(self.ll_command[:, :2])
-        vel_arrow_scale, vel_arrow_quat = self._resolve_xy_velocity_to_arrow(self.robot.data.root_lin_vel_b[:, :2])
-        self.base_vel_goal_visualizer.visualize(base_pos_w, vel_des_arrow_quat, vel_des_arrow_scale)
-        self.base_vel_visualizer.visualize(base_pos_w, vel_arrow_quat, vel_arrow_scale)
+        if not self.cfg.debug_vis_ee_target_only:
+            base_pos_w = self.robot.data.root_pos_w.clone()
+            base_pos_w[:, 2] += 0.5
+            vel_des_arrow_scale, vel_des_arrow_quat = self._resolve_xy_velocity_to_arrow(self.ll_command[:, :2])
+            vel_arrow_scale, vel_arrow_quat = self._resolve_xy_velocity_to_arrow(
+                self.robot.data.root_lin_vel_b[:, :2]
+            )
+            self.base_vel_goal_visualizer.visualize(base_pos_w, vel_des_arrow_quat, vel_des_arrow_scale)
+            self.base_vel_visualizer.visualize(base_pos_w, vel_arrow_quat, vel_arrow_scale)
         ee_goal_pos  = self.ll_command[:, 3:6]
         ee_goal_quat = self.ll_command[:, 6:10]
         valid_mask = torch.norm(ee_goal_quat, dim=-1) > 0.1
@@ -406,6 +411,8 @@ class TeleopLLActionCfg(ActionTermCfg):
     """低层 checkpoint 动作输出里 IK 槽位的数量；``-1`` = 从低层 cfg 推导（L2）。"""
     ee_command_name: str = "ee_pose"
     debug_vis: bool = False
+    debug_vis_ee_target_only: bool = False
+    """Whether to show only the EE target marker and omit base velocity debug arrows."""
     ee_body_name: str = "gripper_base"
     absolute_commands: bool = False
     """True：把 raw_actions 当作"相对标定基准的偏移"，目标 = 标定基准 + 偏移，不滚动累加（VR 遥操用）。
