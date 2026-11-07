@@ -208,7 +208,7 @@ POLICY_REPORT_FONT=/root/fonts/simhei.ttf python scripts/reinforcement_learning/
 ```bat
 :: 遥操（VR）里看新低层策略
 set RL_TRAINING_LOW_LEVEL_POLICY_TELEOP_HISTORY=logs/rsl_rl/history_adaptation/2026-09-30_19-36-00_cloud_cap12_20k/exported_deploy/policy.pt
-python scripts\teleoperation\teleop_vr_m20_piper.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1
+python scripts\teleoperation\teleop_m20_piper_vr.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1
 :: 纯回放（不开 VR）
 python scripts\reinforcement_learning\rsl_rl\play.py --task=Isaac-M20-Piper-Teleop-History-v0 --num_envs=4 --real-time
 :: 重新导出部署态策略（换模型后必做；自检"与 rsl_rl act_inference 的最大误差"应为 0.000e+00）

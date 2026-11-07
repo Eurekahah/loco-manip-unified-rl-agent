@@ -41,8 +41,8 @@ import gymnasium as gym  # noqa: E402
 import torch  # noqa: E402
 
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
-from rl_training.devices.keyboard_full import Se2KeyboardFull, Se2KeyboardFullCfg  # noqa: E402
-from rl_training.devices.vr_extented import Se2VRExtended, Se2VRExtendedCfg  # noqa: E402
+from rl_training.devices.keyboard_loco_manip_teleop import KeyboardLocoManipTeleop, KeyboardLocoManipTeleopCfg  # noqa: E402
+from rl_training.devices.vr_loco_manip_teleop import VRLocoManipTeleop, VRLocoManipTeleopCfg  # noqa: E402
 from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place.scene_cfg import (  # noqa: E402
     make_workcell_camera,
     make_wrist_camera,
@@ -101,13 +101,13 @@ def main() -> None:
         pending_outcome = success
 
     if args_cli.input == "vr":
-        teleop = Se2VRExtended(Se2VRExtendedCfg())
+        teleop = VRLocoManipTeleop(VRLocoManipTeleopCfg())
         teleop.add_callback("R", lambda: request_reset(False))
         teleop.add_callback("N", lambda: request_reset(True))
         teleop.add_callback("S", lambda: action_term.recalibrate())
     else:
-        teleop = Se2KeyboardFull(
-            Se2KeyboardFullCfg(
+        teleop = KeyboardLocoManipTeleop(
+            KeyboardLocoManipTeleopCfg(
                 v_x_sensitivity=0.6,
                 v_y_sensitivity=0.4,
                 omega_z_sensitivity=0.8,

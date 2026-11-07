@@ -1,4 +1,4 @@
-# scripts/teleoperation/teleop_wheeled_legged.py
+# scripts/teleoperation/teleop_m20_loco_keyboard.py
 
 import argparse
 import torch
@@ -17,8 +17,8 @@ simulation_app = app_launcher.app
 # --- 以下在 sim 启动后 import ---
 import gymnasium as gym
 from isaaclab_tasks.utils import parse_env_cfg
-from rl_training.devices.se2_keyboard_extended import (
-    Se2KeyboardExtended, Se2KeyboardExtendedCfg
+from rl_training.devices.keyboard_loco_teleop import (
+    KeyboardLocoTeleop, KeyboardLocoTeleopCfg
 )
 import rl_training.tasks  # noqa: F401
 
@@ -63,7 +63,7 @@ def main():
     env = gym.make(args.task, cfg=env_cfg).unwrapped
 
     # 2. 创建设备
-    device_cfg = Se2KeyboardExtendedCfg(
+    device_cfg = KeyboardLocoTeleopCfg(
         v_x_sensitivity=0.6,
         v_y_sensitivity=0.4,
         omega_z_sensitivity=0.8,
@@ -71,7 +71,7 @@ def main():
         pitch_sensitivity=1.0,
         roll_sensitivity=1.0,
     )
-    teleop_interface = Se2KeyboardExtended(device_cfg)
+    teleop_interface = KeyboardLocoTeleop(device_cfg)
 
     # 3. 注册 reset 回调（按 L 重置环境）
     teleop_interface.add_callback("RESET", lambda: env.reset())

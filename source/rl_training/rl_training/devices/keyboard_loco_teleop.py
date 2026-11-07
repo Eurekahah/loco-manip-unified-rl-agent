@@ -18,7 +18,7 @@ import omni
 from isaaclab.devices import DeviceBase, DeviceCfg
 
 
-class Se2KeyboardExtended(DeviceBase):
+class KeyboardLocoTeleop(DeviceBase):
     r"""A keyboard controller for SE(2) velocity + body pose commands.
 
     Extends the base SE(2) keyboard controller with 3 additional pose dimensions,
@@ -46,7 +46,7 @@ class Se2KeyboardExtended(DeviceBase):
         use C/V/B/N/[/] which have no default IsaacSim viewport bindings.
     """
 
-    def __init__(self, cfg: Se2KeyboardExtendedCfg):
+    def __init__(self, cfg: KeyboardLocoTeleopCfg):
         """Initialize the keyboard layer.
 
         Args:
@@ -166,7 +166,7 @@ class Se2KeyboardExtended(DeviceBase):
                 # 这个没有用，需要获取当前的姿态，计算差值设置
                 # reset only the pose channels (indices 3-5)
                 self._base_command[3:] = 0.0
-                print("[Se2KeyboardExtended] Pose reset to zero")
+                print("[KeyboardLocoTeleop] Pose reset to zero")
             elif event.input.name in self._INPUT_KEY_MAPPING:
                 self._base_command += self._INPUT_KEY_MAPPING[event.input.name]
 
@@ -231,7 +231,7 @@ class Se2KeyboardExtended(DeviceBase):
 
 
 @dataclass
-class Se2KeyboardExtendedCfg(DeviceCfg):
+class KeyboardLocoTeleopCfg(DeviceCfg):
     """Configuration for the extended SE(2) + pose keyboard controller."""
 
     v_x_sensitivity:     float = 0.8
@@ -240,4 +240,4 @@ class Se2KeyboardExtendedCfg(DeviceCfg):
     height_sensitivity:  float = 1.0
     pitch_sensitivity:   float = 1.0
     roll_sensitivity:    float = 1.0
-    class_type: type[DeviceBase] = Se2KeyboardExtended
+    class_type: type[DeviceBase] = KeyboardLocoTeleop

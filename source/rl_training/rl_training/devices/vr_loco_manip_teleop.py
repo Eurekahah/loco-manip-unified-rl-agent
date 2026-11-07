@@ -98,7 +98,7 @@ _R_ALIGN = R.from_euler("x", 90, degrees=True)
 # Main device class
 # ---------------------------------------------------------------------------
 
-class Se2VRExtended(DeviceBase):
+class VRLocoManipTeleop(DeviceBase):
     r"""VR controller for quadruped robot with arm.
 
     Outputs a 13-D command:
@@ -112,10 +112,10 @@ class Se2VRExtended(DeviceBase):
     # Construction
     # ------------------------------------------------------------------
 
-    def __init__(self, cfg: Se2VRExtendedCfg):
+    def __init__(self, cfg: VRLocoManipTeleopCfg):
         if not _XLEVR_AVAILABLE:
             raise RuntimeError(
-                "XLeVR package not found. Please install it before using Se2VRExtended."
+                "XLeVR package not found. Please install it before using VRLocoManipTeleop."
             )
 
         self._cfg = cfg
@@ -601,7 +601,7 @@ class Se2VRExtended(DeviceBase):
         except Exception:
             ip = "localhost"
         print("\n" + "=" * 50)
-        print("🎧  Se2VRExtended ready!")
+        print("🎧  VRLocoManipTeleop ready!")
         print(f"👉  https://{ip}:{self._xlevr_cfg.https_port}")
         print("=" * 50 + "\n")
 
@@ -625,8 +625,8 @@ class _SimpleFileHandler(http.server.SimpleHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 @dataclass
-class Se2VRExtendedCfg(DeviceCfg):
-    """Configuration for :class:`Se2VRExtended`.
+class VRLocoManipTeleopCfg(DeviceCfg):
+    """Configuration for :class:`VRLocoManipTeleop`.
 
     All sensitivity values are simple linear scales applied to the raw
     delta before it is written into the command vector.
@@ -709,4 +709,4 @@ class Se2VRExtendedCfg(DeviceCfg):
     """手柄旋转偏移死区（rad），小于该值的旋转视为 0，抑制抖动。"""
 
     # Required by DeviceCfg
-    class_type: type[DeviceBase] = Se2VRExtended
+    class_type: type[DeviceBase] = VRLocoManipTeleop

@@ -195,9 +195,9 @@ def _load_device_module():
     mod("rl_training.xtrainer_utils.XLeVR.xlevr.inputs.vr_ws_server",
         VRWebSocketServer=type("VRWebSocketServer", (), {"__init__": lambda self, **k: None}))
     sys.modules["rl_training.devices.vr_signal_shaping"] = shaping
-    m = _load("vr_extented_under_test", DEV_DIR / "vr_extented.py")
-    m.Se2VRExtended._run_vr_services = lambda self: None
-    m.Se2VRExtended._display_info = lambda self: None
+    m = _load("vr_loco_manip_teleop_under_test", DEV_DIR / "vr_loco_manip_teleop.py")
+    m.VRLocoManipTeleop._run_vr_services = lambda self: None
+    m.VRLocoManipTeleop._display_info = lambda self: None
     m.time.sleep = lambda s: None  # 跳过构造里的 sleep(1)
     return m
 
@@ -214,7 +214,7 @@ class TestDeviceChassis(unittest.TestCase):
         cls.m = _load_device_module()
 
     def make(self, **cfg):
-        dev = self.m.Se2VRExtended(self.m.Se2VRExtendedCfg(**cfg))
+        dev = self.m.VRLocoManipTeleop(self.m.VRLocoManipTeleopCfg(**cfg))
         dev.set_step_dt(0.02)
         return dev
 
