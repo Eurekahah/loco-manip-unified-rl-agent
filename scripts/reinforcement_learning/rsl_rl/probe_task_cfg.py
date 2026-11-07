@@ -31,6 +31,7 @@ app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 from isaaclab.managers import ObservationTermCfg as ObsTerm  # noqa: E402
+from isaaclab.sensors import TiledCameraCfg  # noqa: E402
 from isaaclab_tasks.utils.hydra import hydra_task_config  # noqa: E402
 
 import rl_training.tasks  # noqa: F401,E402
@@ -60,6 +61,24 @@ def main(env_cfg, agent_cfg):
                 terms.append(f"{n}={_fn_name(t.func)}" + (f"[h={t.history_length}]" if t.history_length else ""))
         print(f"obs[{gname:<10}]: {', '.join(terms)}")
     print(f"agent_cfg    : {type(agent_cfg).__name__}  experiment={agent_cfg.experiment_name}")
+    camera_names = [
+        name for name, value in vars(env_cfg.scene).items() if isinstance(value, TiledCameraCfg)
+    ]
+    recorder_names = [
+        name
+        for name, value in vars(env_cfg.recorders).items()
+        if name not in {
+            "dataset_file_handler_class_type",
+            "dataset_filename",
+            "dataset_export_dir_path",
+            "dataset_export_mode",
+            "export_in_record_pre_reset",
+            "export_in_close",
+        }
+        and value is not None
+    ]
+    print(f"cameras      : {camera_names}")
+    print(f"recorders    : {recorder_names}")
     p, a = agent_cfg.policy, agent_cfg.algorithm
     print(f"  teacher_recon_hidden_dims={getattr(p, 'teacher_recon_hidden_dims', None)}"
           f"  teacher_recon_coef={getattr(a, 'teacher_recon_coef', None)}")

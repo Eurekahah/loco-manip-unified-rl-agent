@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import math
+
 import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.sensors import TiledCameraCfg
@@ -20,6 +22,67 @@ SHELF_BACK_X = 1.05
 OBJECT_USD_PATH = f"{ISAAC_NUCLEUS_DIR}/Props/YCB/Axis_Aligned_Physics/004_sugar_box.usd"
 
 
+def _look_at_quat_world(
+    eye: tuple[float, float, float],
+    target: tuple[float, float, float],
+    up: tuple[float, float, float] = (0.0, 0.0, 1.0),
+) -> tuple[float, float, float, float]:
+    """Return a world-convention camera quaternion (+X forward, +Z up)."""
+    eye_np = [float(value) for value in eye]
+    target_np = [float(value) for value in target]
+    forward = [target_np[i] - eye_np[i] for i in range(3)]
+    forward_norm = math.sqrt(sum(value * value for value in forward))
+    if forward_norm < 1e-9:
+        return (1.0, 0.0, 0.0, 0.0)
+    forward = [value / forward_norm for value in forward]
+    up_np = [float(value) for value in up]
+    right = [
+        up_np[1] * forward[2] - up_np[2] * forward[1],
+        up_np[2] * forward[0] - up_np[0] * forward[2],
+        up_np[0] * forward[1] - up_np[1] * forward[0],
+    ]
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if right_norm < 1e-9:
+        up_np = (1.0, 0.0, 0.0)
+        right = [
+            up_np[1] * forward[2] - up_np[2] * forward[1],
+            up_np[2] * forward[0] - up_np[0] * forward[2],
+            up_np[0] * forward[1] - up_np[1] * forward[0],
+        ]
+        right_norm = math.sqrt(sum(value * value for value in right))
+    right = [value / right_norm for value in right]
+    camera_up = [
+        forward[1] * right[2] - forward[2] * right[1],
+        forward[2] * right[0] - forward[0] * right[2],
+        forward[0] * right[1] - forward[1] * right[0],
+    ]
+    # World convention: camera +X is forward and +Z is up. The rotation
+    # columns are [forward, up x forward, up].
+    rotation = (
+        (forward[0], right[0], camera_up[0]),
+        (forward[1], right[1], camera_up[1]),
+        (forward[2], right[2], camera_up[2]),
+    )
+    m00, m01, m02 = rotation[0]
+    m10, m11, m12 = rotation[1]
+    m20, m21, m22 = rotation[2]
+    trace = m00 + m11 + m22
+    if trace > 0.0:
+        s = math.sqrt(trace + 1.0) * 2.0
+        quat = (0.25 * s, (m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s)
+    elif m00 > m11 and m00 > m22:
+        s = math.sqrt(1.0 + m00 - m11 - m22) * 2.0
+        quat = ((m21 - m12) / s, 0.25 * s, (m01 + m10) / s, (m02 + m20) / s)
+    elif m11 > m22:
+        s = math.sqrt(1.0 + m11 - m00 - m22) * 2.0
+        quat = ((m02 - m20) / s, (m01 + m10) / s, 0.25 * s, (m12 + m21) / s)
+    else:
+        s = math.sqrt(1.0 + m22 - m00 - m11) * 2.0
+        quat = ((m10 - m01) / s, (m02 + m20) / s, (m12 + m21) / s, 0.25 * s)
+    norm = math.sqrt(sum(value * value for value in quat))
+    return tuple(float(value / norm) for value in quat)
+
+
 def _static_material() -> sim_utils.RigidBodyMaterialCfg:
     return sim_utils.RigidBodyMaterialCfg(
         static_friction=1.0,
@@ -30,25 +93,75 @@ def _static_material() -> sim_utils.RigidBodyMaterialCfg:
     )
 
 
-def make_workcell_camera() -> TiledCameraCfg:
+def make_workcell_camera(
+    *,
+    width: int = 224,
+    height: int = 224,
+    update_period: float = 0.1,
+    pos: tuple[float, float, float] = (0.10, -1.05, 0.75),
+    target: tuple[float, float, float] = (0.78, 0.0, 0.45),
+    rot: tuple[float, float, float, float] | None = None,
+    clipping_range: tuple[float, float] = (0.1, 5.0),
+) -> TiledCameraCfg:
+    """Create the static scene camera used by data collection."""
+    camera_rot = rot if rot is not None else _look_at_quat_world(pos, target)
     return TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/WorkcellCamera",
-        update_period=0.1,
-        height=224,
-        width=224,
+        update_period=update_period,
+        height=height,
+        width=width,
         data_types=["rgb", "depth"],
         debug_vis=False,
+        depth_clipping_behavior="zero",
+        update_latest_camera_pose=False,
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=24.0,
             focus_distance=400.0,
             f_stop=0.0,
             horizontal_aperture=20.955,
-            clipping_range=(0.1, 5.0),
+            clipping_range=clipping_range,
         ),
         offset=TiledCameraCfg.OffsetCfg(
-            pos=(0.20, -1.10, 1.20),
-            rot=(0.5, -0.5, 0.5, -0.5),
-            convention="ros",
+            pos=pos,
+            rot=camera_rot,
+            convention="world",
+        ),
+    )
+
+
+def make_wrist_camera(
+    *,
+    width: int = 224,
+    height: int = 224,
+    update_period: float = 0.1,
+    pos: tuple[float, float, float] = (-0.10, 0.0, 0.08),
+    # In the Piper gripper frame, +Z points forward and +X points down. Look
+    # 30 degrees down while keeping image-up aligned with world +Z.
+    rot: tuple[float, float, float, float] = (0.8660254, 0.0, -0.5, 0.0),
+    clipping_range: tuple[float, float] = (0.03, 2.0),
+) -> TiledCameraCfg:
+    """Create an RGB-D camera rigidly attached to the Piper gripper base."""
+    return TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/gripper_base/WristCamera",
+        update_period=update_period,
+        height=height,
+        width=width,
+        data_types=["rgb", "depth"],
+        debug_vis=False,
+        depth_clipping_behavior="zero",
+        # The wrist camera moves with the arm, so extrinsics must be refreshed.
+        update_latest_camera_pose=True,
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=18.0,
+            focus_distance=400.0,
+            f_stop=0.0,
+            horizontal_aperture=20.955,
+            clipping_range=clipping_range,
+        ),
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=pos,
+            rot=rot,
+            convention="world",
         ),
     )
 
@@ -141,5 +254,8 @@ class LowShelfPlaceSceneCfg(HighLevelSceneCfg):
         ),
     )
 
-    workcell_camera = make_workcell_camera()
+    # Cameras are intentionally opt-in. The training and plain teleop configs
+    # therefore keep the same headless performance as the state-only task.
+    workcell_camera: TiledCameraCfg | None = None
+    wrist_camera: TiledCameraCfg | None = None
 

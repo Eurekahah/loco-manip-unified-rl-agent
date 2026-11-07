@@ -27,7 +27,8 @@ from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg imp
 )
 
 from . import mdp
-from .scene_cfg import LowShelfPlaceSceneCfg, make_workcell_camera
+from .recording import LowShelfHDF5RecorderManagerCfg
+from .scene_cfg import LowShelfPlaceSceneCfg, make_workcell_camera, make_wrist_camera
 
 
 @configclass
@@ -289,21 +290,39 @@ class LowShelfPlaceEnvCfg(HighLevelFlatEnvCfg):
         self.scene.arm_camera = None
         self.scene.nav_camera = None
         self.scene.workcell_camera = None
+        self.scene.wrist_camera = None
         self.disable_zero_weight_rewards()
 
 
 @configclass
 class LowShelfPlaceTeleopEnvCfg(LowShelfPlaceEnvCfg):
-    """VR-friendly variant with the same scene and task semantics."""
+    """Interactive teleoperation variant without cameras or data recording."""
 
     actions: TeleopActionsCfg = TeleopActionsCfg()
     language_instruction: str = "把下层托盘里的糖盒放到上层桌面。"
 
     def __post_init__(self):
         super().__post_init__()
-        self.scene.workcell_camera = make_workcell_camera()
+        # Teleop itself must remain lightweight. Cameraized data collection is a
+        # separate task (LowShelfPlaceCollectEnvCfg).
+        self.scene.workcell_camera = None
+        self.scene.wrist_camera = None
         self.decimation = 4
         self.sim.render_interval = self.decimation
         self.episode_length_s = 60.0
         self.disable_zero_weight_rewards()
+
+
+@configclass
+class LowShelfPlaceCollectEnvCfg(LowShelfPlaceTeleopEnvCfg):
+    """Explicit RGB-D collection task for keyboard tests and VR demonstrations."""
+
+    recorders: LowShelfHDF5RecorderManagerCfg = LowShelfHDF5RecorderManagerCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.workcell_camera = make_workcell_camera()
+        self.scene.wrist_camera = make_wrist_camera()
+        self.recorders.record_hdf5.language_instruction = self.language_instruction
+        self.recorders.record_hdf5.task = "Isaac-M20-Piper-LowShelf-Collect-v0"
 
