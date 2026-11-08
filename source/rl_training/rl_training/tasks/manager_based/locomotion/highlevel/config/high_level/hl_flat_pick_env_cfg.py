@@ -606,6 +606,9 @@ class TeleopEnvCfg(HLFlatPickTeacherEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.decimation = 4  # 设置为和底层控制器相同的decimation, 去掉延迟
+        # 父类把 render_interval 设成了当时的 decimation(=40)；这里把 decimation 改成 4 后必须同步，
+        # 否则每 40 个物理步(0.2s)才渲染一次，GUI/VR 画面只有 ~5Hz。
+        self.sim.render_interval = self.decimation
         if self.__class__.__name__ == "TeleopEnvCfg":
             self.disable_zero_weight_rewards()
 
