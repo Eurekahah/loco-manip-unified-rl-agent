@@ -197,6 +197,7 @@ def _load_device_module():
     sys.modules["rl_training.devices.vr_signal_shaping"] = shaping
     m = _load("vr_loco_manip_teleop_under_test", DEV_DIR / "vr_loco_manip_teleop.py")
     m.VRLocoManipTeleop._run_vr_services = lambda self: None
+    m._orig_display_info = m.VRLocoManipTeleop._display_info
     m.VRLocoManipTeleop._display_info = lambda self: None
     m.time.sleep = lambda s: None  # 跳过构造里的 sleep(1)
     return m
@@ -293,6 +294,29 @@ class TestDeviceChassis(unittest.TestCase):
         dev._update_chassis_from_thumbstick(_Goal(0.0, 0.02))  # 死区内的小抖动也会输出（旧行为）
         out = dev.advance()
         self.assertAlmostEqual(out[0], -0.02 * dev.v_x_sensitivity)
+
+
+class TestConnectInfo(unittest.TestCase):
+    def test_display_info_prints_urls_and_adb_hint(self):
+        import contextlib, io
+        m = _load_device_module()
+        dev = object.__new__(m.VRLocoManipTeleop)
+        dev._xlevr_cfg = types.SimpleNamespace(https_port=8443, websocket_port=8442)
+        m._list_local_ipv4 = lambda: [("192.168.137.1", False), ("192.168.3.193", True)]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            m._orig_display_info(dev)
+        out = buf.getvalue()
+        self.assertIn("https://192.168.137.1:8443", out)
+        self.assertIn("https://192.168.3.193:8443", out)
+        self.assertIn("adb reverse tcp:8443 tcp:8443", out)
+        self.assertIn("adb reverse tcp:8442 tcp:8442", out)
+        self.assertIn("https://localhost:8443", out)
+
+    def test_list_local_ipv4_filters_loopback(self):
+        m = _load_device_module()
+        for ip, _ in m._list_local_ipv4():
+            self.assertFalse(ip.startswith("127.") or ip.startswith("169.254."))
 
 
 if __name__ == "__main__":

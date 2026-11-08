@@ -593,17 +593,51 @@ class VRLocoManipTeleop(DeviceBase):
             print(f"❌ VR loop failed: {exc}")
 
     def _display_info(self):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-        except Exception:
-            ip = "localhost"
-        print("\n" + "=" * 50)
+        https_port = self._xlevr_cfg.https_port
+        ws_port = self._xlevr_cfg.websocket_port
+        ips = _list_local_ipv4()
+        print("\n" + "=" * 60)
         print("🎧  VRLocoManipTeleop ready!")
-        print(f"👉  https://{ip}:{self._xlevr_cfg.https_port}")
-        print("=" * 50 + "\n")
+        print("  在 Quest 浏览器里打开下面【其中一个】地址（接受一次证书警告）：")
+        print("  ── 无线（Quest 与本机须在同一网段，选与 Quest IP 前三段相同的那个）──")
+        if ips:
+            for ip, is_default in ips:
+                tag = "  ← 默认出口网卡" if is_default else ""
+                print(f"  👉  https://{ip}:{https_port}{tag}")
+        else:
+            print(f"  👉  https://localhost:{https_port}   （未探测到局域网 IP）")
+        print("  ── USB 线直连（延迟最低最稳，推荐）──")
+        print(f"  1) 主机运行: adb reverse tcp:{https_port} tcp:{https_port} && "
+              f"adb reverse tcp:{ws_port} tcp:{ws_port}")
+        print(f"  2) Quest 打开: 👉  https://localhost:{https_port}")
+        print("=" * 60 + "\n")
+
+
+def _list_local_ipv4() -> list[tuple[str, bool]]:
+    """列出本机所有可用 IPv4（排除回环/链路本地）。返回 [(ip, 是否默认出口)]，默认出口排第一。"""
+    default_ip = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))  # UDP connect 不发包，只用来取默认路由的本机地址
+        default_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        pass
+    found: list[str] = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            found.append(info[4][0])
+    except Exception:
+        pass
+    if default_ip:
+        found.append(default_ip)
+    out: list[tuple[str, bool]] = []
+    for ip in dict.fromkeys(found):  # 去重保序
+        if ip.startswith("127.") or ip.startswith("169.254.") or ip == "0.0.0.0":
+            continue
+        out.append((ip, ip == default_ip))
+    out.sort(key=lambda t: not t[1])
+    return out
 
 
 # ---------------------------------------------------------------------------
