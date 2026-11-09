@@ -319,5 +319,57 @@ class TestConnectInfo(unittest.TestCase):
             self.assertFalse(ip.startswith("127.") or ip.startswith("169.254."))
 
 
+class _FakeRot:
+    """最小 Rotation 桩：只提供 as_euler，返回预设欧拉角。"""
+    def __init__(self, euler):
+        self._e = np.asarray(euler, dtype=np.float64)
+
+    def as_euler(self, *a, **k):
+        return self._e
+
+
+class TestArmFilter(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.m = _load_device_module()
+
+    def make(self, **cfg):
+        return self.m.VRLocoManipTeleop(self.m.VRLocoManipTeleopCfg(**cfg))
+
+    def feed(self, dev, pos, euler, n=1, dt=0.02):
+        for _ in range(n):
+            dev._hand_dt["right"] = dt
+            dev._update_arm(np.asarray(pos, float), _FakeRot(euler), 0.0)
+        return dev._command.copy()
+
+    def test_gate_off_matches_legacy_hard_deadzone(self):
+        dev = self.make()
+        out = self.feed(dev, [0.0, 0.01, 0.0], [0, 0, 0])
+        # 默认轴映射: command[3]=delta.y, [4]=-delta.x, [5]=delta.z；0.01 > 0.004 死区 → 原值输出
+        self.assertAlmostEqual(out[3], 0.01)
+        out = self.feed(dev, [0.0, 0.003, 0.0], [0, 0, 0])
+        self.assertEqual(out[3], 0.0)
+
+    def test_gate_on_deadzone_continuous(self):
+        dev = self.make(arm_filter_enabled=True, arm_pos_tau=0.0)
+        out = self.feed(dev, [0.0, 0.0041, 0.0], [0, 0, 0])
+        self.assertAlmostEqual(out[3], 0.0001, places=6)  # 边缘不跳变
+
+    def test_gate_on_smooths_step(self):
+        dev = self.make(arm_filter_enabled=True, arm_pos_tau=0.1)
+        self.feed(dev, [0, 0, 0], [0, 0, 0])
+        out = self.feed(dev, [0.0, 0.1, 0.0], [0, 0, 0])
+        self.assertTrue(0.0 < out[3] < 0.1 - 0.004)  # 阶跃被平滑，首步只走一部分
+        out = self.feed(dev, [0.0, 0.1, 0.0], [0, 0, 0], n=300)
+        self.assertAlmostEqual(out[3], 0.1 - 0.004, places=3)  # 最终收敛
+
+    def test_reset_clears_filter(self):
+        dev = self.make(arm_filter_enabled=True, arm_pos_tau=0.1)
+        self.feed(dev, [0.0, 0.1, 0.0], [0, 0, 0], n=50)
+        dev.reset()
+        out = self.feed(dev, [0, 0, 0], [0, 0, 0])
+        self.assertEqual(out[3], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -47,7 +47,12 @@ from scipy.spatial.transform import Rotation as R
 
 from isaaclab.devices import DeviceBase, DeviceCfg
 
-from rl_training.devices.vr_signal_shaping import SlewRateLimiter, shape_stick
+from rl_training.devices.vr_signal_shaping import (
+    LowPass,
+    SlewRateLimiter,
+    continuous_deadzone,
+    shape_stick,
+)
 
 # ---------------------------------------------------------------------------
 # Lazy import guard – XLeVR may not be installed in all environments
@@ -154,6 +159,11 @@ class VRLocoManipTeleop(DeviceBase):
         self._step_dt: float | None = None
         self._last_advance_time = time.monotonic()
 
+        # ---- 机械臂手柄信号：连续死区 + 低通（步骤2门控，默认关）----
+        self._arm_filter = cfg.arm_filter_enabled
+        self._arm_pos_lp = LowPass(cfg.arm_pos_tau)
+        self._arm_rot_lp = LowPass(cfg.arm_rot_tau)
+
         # ---- state flags ----
         self._started      = False
         self._reset_state  = False
@@ -191,6 +201,9 @@ class VRLocoManipTeleop(DeviceBase):
         # 相邻 VR 数据包间隔，用于把扳机"速度"积分成高度偏移
         self._dt = 0.0
         self._last_packet_time = time.time()
+        # 每只手各自的相邻包间隔（滤波器按各自采样间隔工作，左右包交错时 _dt 会偏小）
+        self._hand_dt = {"left": 0.0, "right": 0.0}
+        self._hand_last_time: dict[str, float | None] = {"left": None, "right": None}
 
         # ---- previous calibrated pose for delta computation ----
         self._prev_arm_pos:  np.ndarray | None = None
@@ -245,6 +258,7 @@ class VRLocoManipTeleop(DeviceBase):
         self._command[:] = 0.0
         self._stick_target[:] = 0.0
         self._chassis_slew.reset()
+        self._reset_arm_state()
         self._last_advance_time = time.monotonic()
         self._body_height_offset = 0.0
         self._vr_origin = {
@@ -256,6 +270,12 @@ class VRLocoManipTeleop(DeviceBase):
         self._prev_arm_rot  = None
         self._prev_body_rot = None
         self._last_packet_time = time.time()
+
+    def _reset_arm_state(self) -> None:
+        """清空机械臂手柄滤波器状态（reset / 重新标定时调用）。"""
+        self._arm_pos_lp.reset()
+        self._arm_rot_lp.reset()
+        self._hand_last_time["right"] = None
 
     def add_callback(self, key: str, func: Callable):
         """Register a zero-argument callable for a named event key.
@@ -345,6 +365,10 @@ class VRLocoManipTeleop(DeviceBase):
             now = time.time()
             self._dt = min(max(now - self._last_packet_time, 0.0), 0.1)
             self._last_packet_time = now
+            last = self._hand_last_time.get(goal.arm)
+            if last is not None and goal.arm in self._hand_dt:
+                self._hand_dt[goal.arm] = min(max(now - last, 0.0), 0.1)
+            self._hand_last_time[goal.arm] = now
 
             # --- buttons ---
             if goal.metadata and "buttons" in goal.metadata:
@@ -364,6 +388,8 @@ class VRLocoManipTeleop(DeviceBase):
                 self._vr_origin[hand]["pos"] = sim_pos.copy()
                 self._vr_origin[hand]["rot"] = r_sim
                 self._calibration_triggered[hand] = False
+                if hand == "right":
+                    self._reset_arm_state()
 
             if self._vr_origin[hand]["pos"] is None:
                 continue
@@ -403,23 +429,22 @@ class VRLocoManipTeleop(DeviceBase):
         # 注意：执行端把该增量加到 body 系基准上，因此实际手感是“相对机器人
         # 当前朝向”；若以后想改成“相对房间方向”，需先把增量按机身偏航旋转。
         # ------------------------------------------------------------------
-        for i, (src, sgn) in enumerate(self.arm_pos_axis_map):
-            v = self._apply_deadzone(sgn * delta_pos[src], self.pos_deadzone)
-            self._command[3 + i] = v * self.arm_pos_sensitivity
-
-        # ------------------------------------------------------------------
-        # Rotation：使用“手柄局部系”的相对旋转（r_diff_local），而不是世界系
-        # 的 r_diff。世界系分解会把“纯俯仰”拆成 roll+pitch 多个分量（耦合），
-        # 且耦合方式随 B 标定时手势变化；局部系则“俯仰就是俯仰”，与标定手势无关。
-        #
-        # 局部系欧拉角 -> EE 通道的轴映射由 self.arm_rot_axis_map 决定，
-        # 每项 (src, sgn) 表示 command[6+i] = sgn * euler_local[src]。
-        # ------------------------------------------------------------------
+        # 旋转：用“手柄局部系”的相对旋转（r_diff_local），纯俯仰不会拆成多轴分量；
+        # 局部系欧拉角 -> EE 通道的映射由 arm_rot_axis_map 决定：command[6+i] = sgn * euler_local[src]。
         euler_local = r_diff_local.as_euler("XYZ", degrees=False)
+        raw_pos = np.array([sgn * delta_pos[src] for src, sgn in self.arm_pos_axis_map], dtype=np.float64)
+        raw_rot = np.array([sgn * euler_local[src] for src, sgn in self.arm_rot_axis_map], dtype=np.float64)
 
-        for i, (src, sgn) in enumerate(self.arm_rot_axis_map):
-            v = self._apply_deadzone(sgn * euler_local[src], self.rot_deadzone)
-            self._command[6 + i] = v * self.arm_rot_sensitivity
+        if self._arm_filter:
+            # 步骤2：连续死区（边缘不跳变）+ 一阶低通（抑制手抖，代价是少量延迟）
+            pos = self._arm_pos_lp.update(continuous_deadzone(raw_pos, self.pos_deadzone), self._hand_dt["right"])
+            rot = self._arm_rot_lp.update(continuous_deadzone(raw_rot, self.rot_deadzone), self._hand_dt["right"])
+        else:  # 旧行为：硬阈值死区，无滤波
+            pos = np.array([self._apply_deadzone(v, self.pos_deadzone) for v in raw_pos])
+            rot = np.array([self._apply_deadzone(v, self.rot_deadzone) for v in raw_rot])
+
+        self._command[3:6] = pos * self.arm_pos_sensitivity
+        self._command[6:9] = rot * self.arm_rot_sensitivity
 
         # --- gripper ---
         self._command[12] = 1.0 if trigger > 0.5 else -1.0
@@ -695,6 +720,14 @@ class VRLocoManipTeleopCfg(DeviceCfg):
     omega_z_decel: float = 8.0
     stick_timeout: float = 0.5
     """摇杆数据超时（s）。超时视为手柄丢失，目标速度回 0。"""
+
+    # -- 机械臂手柄信号滤波（步骤2，默认关，便于单独 A/B）--
+    arm_filter_enabled: bool = False
+    """True：用连续死区 + 一阶低通处理右手位姿；False：旧的硬阈值死区、无滤波。"""
+    arm_pos_tau: float = 0.05
+    """位置低通时间常数（s）。越大越顺但越有延迟；0 = 不滤波。"""
+    arm_rot_tau: float = 0.08
+    """旋转低通时间常数（s）。"""
 
     # -- body pose --
     default_body_height: float = 0.513
