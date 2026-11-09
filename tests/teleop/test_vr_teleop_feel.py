@@ -371,5 +371,90 @@ class TestArmFilter(unittest.TestCase):
         self.assertEqual(out[3], 0.0)
 
 
+class TestClutchOffset(unittest.TestCase):
+    def test_follows_only_while_engaged_and_freezes(self):
+        c = shaping.ClutchOffset(1)
+        self.assertEqual(c.update([5.0], False)[0], 0.0)      # 未按：不动，与手位置无关
+        c.update([5.0], True)
+        self.assertAlmostEqual(c.update([5.3], True)[0], 0.3)  # 相对按下瞬间的位移
+        self.assertAlmostEqual(c.update([5.3], False)[0], 0.3) # 松开：冻结
+        self.assertAlmostEqual(c.update([9.0], False)[0], 0.3) # 松开后手随便动
+        c.update([1.0], True)                                  # 再按：从冻结值继续
+        self.assertAlmostEqual(c.update([1.2], True)[0], 0.5)
+
+    def test_limit_absorbs_overshoot_no_dead_travel(self):
+        c = shaping.ClutchOffset(1, limit=0.1)
+        c.update([0.0], True)
+        self.assertAlmostEqual(c.update([0.5], True)[0], 0.1)  # 撞限位
+        self.assertAlmostEqual(c.update([0.45], True)[0], 0.05)  # 回手立刻反向跟随
+
+    def test_reset(self):
+        c = shaping.ClutchOffset(2)
+        c.update([0, 0], True); c.update([1, 1], True); c.reset()
+        np.testing.assert_allclose(c.update([3, 3], False), 0.0)
+
+
+class TestArmBodyGates(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.m = _load_device_module()
+
+    def make(self, **cfg):
+        return self.m.VRLocoManipTeleop(self.m.VRLocoManipTeleopCfg(**cfg))
+
+    def test_arm_clutch_gate(self):
+        dev = self.make(arm_clutch_enabled=True)
+        rot = _FakeRot([0, 0, 0])
+        dev._hand_dt["right"] = 0.02
+        dev._grip["right"] = False
+        dev._update_arm(np.array([0.0, 0.2, 0.0]), rot, 0.0)
+        self.assertEqual(dev._command[3], 0.0)                 # 没按握持键：不跟随
+        dev._grip["right"] = True
+        dev._update_arm(np.array([0.0, 0.2, 0.0]), rot, 0.0)   # 按下瞬间锚定
+        dev._update_arm(np.array([0.0, 0.3, 0.0]), rot, 0.0)
+        self.assertAlmostEqual(dev._command[3], 0.1)
+        dev._grip["right"] = False
+        dev._update_arm(np.array([0.0, 0.3, 0.0]), rot, 0.0)
+        dev._update_arm(np.array([0.0, 0.9, 0.0]), rot, 0.0)  # 松开后手随便动
+        self.assertAlmostEqual(dev._command[3], 0.1)   # 冻结
+
+    def test_arm_gates_off_ignores_grip(self):
+        dev = self.make()
+        dev._grip["right"] = False
+        dev._update_arm(np.array([0.0, 0.2, 0.0]), _FakeRot([0, 0, 0]), 0.0)
+        self.assertAlmostEqual(dev._command[3], 0.2)
+
+    def test_body_default_matches_legacy(self):
+        dev = self.make()
+        dev._update_body(np.array([0.0, 0.0, 0.1]), _FakeRot([0.2, 0.3, 0]), 0.0)
+        self.assertAlmostEqual(dev._command[9], 0.1 * dev.height_sensitivity)
+        self.assertAlmostEqual(dev._command[10], -0.2 * dev.pitch_sensitivity)
+        self.assertAlmostEqual(dev._command[11], 0.3 * dev.roll_sensitivity)
+
+    def test_body_clutch_ignores_wrist_tilt_when_not_gripping(self):
+        dev = self.make(body_clutch_enabled=True)
+        dev._update_body(np.zeros(3), _FakeRot([0.3, 0.3, 0]), 0.0)  # 推摇杆导致手柄倾斜
+        np.testing.assert_allclose(dev._command[9:12], 0.0)
+
+    def test_body_filter_smooths(self):
+        dev = self.make(body_filter_enabled=True, body_tau=0.1)
+        dev._hand_dt["left"] = 0.02
+        dev._update_body(np.zeros(3), _FakeRot([0, 0, 0]), 0.0)
+        dev._update_body(np.zeros(3), _FakeRot([0.3, 0, 0]), 0.0)
+        self.assertTrue(0.0 < abs(dev._command[10]) < 0.3 * dev.pitch_sensitivity)
+
+    def test_grip_state_parsed_from_queue(self):
+        dev = self.make()
+        g = types.SimpleNamespace(arm="right", target_position=None,
+                                  metadata={"grip_active": True})
+        dev._command_queue.put_nowait(g)
+        dev._poll_queue()
+        self.assertTrue(dev._grip["right"])
+        dev._command_queue.put_nowait(types.SimpleNamespace(
+            arm="right", target_position=None, metadata={"source": "vr_grip_release"}))
+        dev._poll_queue()
+        self.assertFalse(dev._grip["right"])
+
+
 if __name__ == "__main__":
     unittest.main()

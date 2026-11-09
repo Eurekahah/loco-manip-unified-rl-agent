@@ -30,6 +30,7 @@ __all__ = [
     "shape_stick",
     "continuous_deadzone",
     "SlewRateLimiter",
+    "ClutchOffset",
     "LowPass",
     "QuatSlerpFilter",
     "quat_mul",
@@ -230,3 +231,52 @@ class QuatSlerpFilter:
         alpha = 1.0 - np.exp(-max(float(dt), 0.0) / self.tau)
         self._q = quat_slerp(self._q, q, alpha)
         return self._q.copy()
+
+
+# ---------------------------------------------------------------------------
+# 离合键（clutch）
+# ---------------------------------------------------------------------------
+
+class ClutchOffset:
+    """握持键离合：按住时输出随手柄相对位移变化，松开后冻结，再按从当前输出继续。
+
+    输出 = held + (raw - raw_at_engage)，其中 held 为松开时冻结的输出。
+    若给了 limit（逐轴上限），输出被钳在 ±limit 内，且超出的部分被"吸收"（调整 held），
+    手柄回退时立刻反向跟随，不会出现"空行程"（类似鼠标撞到屏幕边缘）。
+    """
+
+    def __init__(self, dim: int, limit=None):
+        self.dim = int(dim)
+        self.limit = None if limit is None else np.broadcast_to(
+            np.asarray(limit, dtype=np.float64), (self.dim,)).copy()
+        self.held = np.zeros(self.dim)
+        self._anchor: np.ndarray | None = None  # 按下瞬间的 raw
+        self.engaged = False
+
+    def reset(self) -> None:
+        self.held[:] = 0.0
+        self._anchor = None
+        self.engaged = False
+
+    def update(self, raw, engaged: bool) -> np.ndarray:
+        raw = np.asarray(raw, dtype=np.float64)
+        if engaged and not self.engaged:
+            self._anchor = raw.copy()
+        elif not engaged and self.engaged:
+            # 松开：把当前输出冻结为 held
+            self.held = self._clipped(self._current(raw))
+            self._anchor = None
+        self.engaged = bool(engaged)
+        if not self.engaged:
+            return self.held.copy()
+        out = self._current(raw)
+        clipped = self._clipped(out)
+        # 吸收超出部分：把锚点平移，使输出恰好等于限幅值
+        self._anchor = self._anchor + (out - clipped)
+        return clipped
+
+    def _current(self, raw) -> np.ndarray:
+        return self.held + (raw - self._anchor)
+
+    def _clipped(self, v) -> np.ndarray:
+        return v if self.limit is None else np.clip(v, -self.limit, self.limit)

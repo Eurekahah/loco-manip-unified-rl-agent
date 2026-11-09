@@ -8,6 +8,14 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser()
 parser.add_argument("--task", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=1)
+# ── 手感门控：每项独立开关，便于真机逐项 A/B（默认只有 stick 整形开，其余全关 = 旧手感）──
+g = parser.add_argument_group("VR 手感门控")
+g.add_argument("--no-stick-shaping", action="store_true", help="关闭步骤1：摇杆死区/曲线/斜率限制（回到纯线性）")
+g.add_argument("--arm-filter", action="store_true", help="步骤2：机械臂手柄信号连续死区 + 低通")
+g.add_argument("--arm-clutch", action="store_true", help="步骤3：机械臂离合键（按住右 grip 才跟随，松开冻结）")
+g.add_argument("--body-filter", action="store_true", help="步骤4a：机体姿态连续死区 + 低通")
+g.add_argument("--body-clutch", action="store_true", help="步骤4b：机体姿态离合键（按住左 grip 才跟手）")
+g.add_argument("--all-feel", action="store_true", help="一次打开步骤 2/3/4 全部门控")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 
@@ -36,6 +44,11 @@ def main():
 
     # ── 2. 创建 VR 设备 ────────────────────────────────────────────────
     device_cfg = VRLocoManipTeleopCfg(
+        stick_shaping_enabled=not args.no_stick_shaping,
+        arm_filter_enabled=args.arm_filter or args.all_feel,
+        arm_clutch_enabled=args.arm_clutch or args.all_feel,
+        body_filter_enabled=args.body_filter or args.all_feel,
+        body_clutch_enabled=args.body_clutch or args.all_feel,
         # v_x_sensitivity=0.6,
         # v_y_sensitivity=0.4,
         # omega_z_sensitivity=0.8,
@@ -44,6 +57,12 @@ def main():
         # roll_sensitivity=1.0,
         # ee_pos_sensitivity=1.0,
         # ee_orn_sensitivity=1.0,
+    )
+    print(
+        "[VR feel gates] "
+        f"stick_shaping={device_cfg.stick_shaping_enabled} arm_filter={device_cfg.arm_filter_enabled} "
+        f"arm_clutch={device_cfg.arm_clutch_enabled} body_filter={device_cfg.body_filter_enabled} "
+        f"body_clutch={device_cfg.body_clutch_enabled}"
     )
     teleop_interface = VRLocoManipTeleop(device_cfg)
     # 摇杆斜率限制按仿真步长（而非墙钟）计算，不受仿真实时因子影响

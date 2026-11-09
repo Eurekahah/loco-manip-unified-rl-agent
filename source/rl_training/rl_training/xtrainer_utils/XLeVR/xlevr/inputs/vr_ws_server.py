@@ -345,6 +345,7 @@ class VRWebSocketServer(BaseInputProvider):
                     "scaled_position": absolute_position.tolist(),
                     "trigger": trigger,
                     "trigger_active": trigger_active,
+                    "grip_active": bool(grip_active),
                     "thumbstick": thumbstick,
                     "buttons": buttons,
                     "quaternion": quaternion,
