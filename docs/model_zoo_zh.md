@@ -209,6 +209,19 @@ POLICY_REPORT_FONT=/root/fonts/simhei.ttf python scripts/reinforcement_learning/
 :: 遥操（VR）里看新低层策略
 set RL_TRAINING_LOW_LEVEL_POLICY_TELEOP_HISTORY=logs/rsl_rl/history_adaptation/2026-09-30_19-36-00_cloud_cap12_20k/exported_deploy/policy.pt
 python scripts\teleoperation\teleop_m20_piper_vr.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1
+:: IK 对比：默认绝对目标 IK；加 --relative-ik 改为每步相对位姿 IK
+python scripts\teleoperation\teleop_m20_piper_vr.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 --relative-ik
+:: 当前延迟测量和瓶颈记录见 docs/teleop_vr_latency_zh.md
+:: 默认 render-interval=4（每个 env step 渲染一次，性能渲染模式）
+:: 若只关心控制、接受更低画面刷新率，可增大该值：
+python scripts\teleoperation\teleop_m20_piper_vr.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 --render-interval 8
+:: GUI 视角：free=自由，chest=胸前，wrist=腕部，both=胸前主视口+腕部独立视口
+python scripts\teleoperation\teleop_m20_piper_vr.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 --camera-view chest
+python scripts\teleoperation\teleop_m20_piper_vr.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 --camera-view wrist
+python scripts\teleoperation\teleop_m20_piper_vr.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 --camera-view both
+:: 键盘遥操同样支持 free / chest / wrist / both
+python scripts\teleoperation\teleop_m20_piper_keyboard.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 --camera-view both
+:: 判读：advance_ms 很小但 step_ms/slow_step_pct 很大 = 瓶颈在 env.step 渲染
 :: 纯回放（不开 VR）
 python scripts\reinforcement_learning\rsl_rl\play.py --task=Isaac-M20-Piper-Teleop-History-v0 --num_envs=4 --real-time
 :: 重新导出部署态策略（换模型后必做；自检"与 rsl_rl act_inference 的最大误差"应为 0.000e+00）
