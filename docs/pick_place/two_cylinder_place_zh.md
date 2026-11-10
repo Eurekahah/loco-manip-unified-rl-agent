@@ -333,6 +333,7 @@ python scripts/data/collect_low_shelf_hdf5.py `
 
 - 不传 `--output` 时默认写到 `recordings/two_cylinder_place/<YYYYMMDD_HHMMSS>_vr.hdf5`。
 - 默认三路 RGB、`224 x 224`、`10 Hz`；控制频率约 `50 Hz`。
+- 想更接近 `smolvla_base` 的原始 `256 x 256` 输入，可加 `--camera_width 256 --camera_height 256`；转换和训练命令不用改。`224 x 224` 也已经过完整链路验证。
 - 右 B 开始并重新标定；左 Y 保存成功并 reset；左 X 保存失败并 reset；直接退出会把当前 episode 以 `shutdown_manual_stop` 保存。
 - 只采两路用于快速验证时可加 `--no-top_camera`；需要深度调试时再加 `--record_depth`。
 
