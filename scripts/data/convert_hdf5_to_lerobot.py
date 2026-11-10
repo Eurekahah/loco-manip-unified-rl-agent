@@ -177,8 +177,8 @@ def convert(args: argparse.Namespace) -> None:
         if action_semantics != ACTION_SEMANTICS:
             raise ValueError(
                 f"Unsupported action_semantics '{action_semantics}'. "
-                f"Expected '{ACTION_SEMANTICS}'. HDF5 files recorded with the old "
-                "keyboard rolling-delta semantics must be re-collected."
+                f"Expected '{ACTION_SEMANTICS}'. HDF5 files without an explicit "
+                "action_semantics are ambiguous; re-collect them with the current pipeline."
             )
 
         episode_names = sorted(source["episodes"].keys())
