@@ -7,9 +7,9 @@ can be read by ``lerobot-train`` without a custom loader.
 
 Default mapping:
 
-    HDF5 camera/workcell_camera/rgb -> observation.images.camera1
+    HDF5 camera/top_camera/rgb      -> observation.images.camera1
     HDF5 camera/wrist_camera/rgb    -> observation.images.camera2
-    HDF5 camera/top_camera/rgb      -> observation.images.camera3
+    HDF5 camera/workcell_camera/rgb -> observation.images.camera3
     HDF5 robot/joint_pos            -> observation.state
     HDF5 action                     -> action
 
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -55,10 +56,26 @@ DEFAULT_ACTION_LAYOUT = (
 ACTION_SEMANTICS = "absolute_offset_from_recalibrated_anchor"
 
 DEFAULT_CAMERA_MAP = {
-    "workcell_camera": "camera1",
+    "top_camera": "camera1",
     "wrist_camera": "camera2",
-    "top_camera": "camera3",
+    "workcell_camera": "camera3",
 }
+
+
+def _camera_suffix_key(name: str) -> tuple[int, int, str]:
+    match = re.fullmatch(r"camera(\d+)", name)
+    if match is not None:
+        return (0, int(match.group(1)), "")
+    return (1, -1, name)
+
+
+def _canonical_camera_map(mapping: dict[str, str]) -> dict[str, str]:
+    """Sort image keys the same way SmolVLA's base config lists them."""
+    suffixes = list(mapping.values())
+    duplicates = sorted({suffix for suffix in suffixes if suffixes.count(suffix) > 1})
+    if duplicates:
+        raise ValueError(f"Camera map assigns duplicate LeRobot suffixes: {duplicates}")
+    return dict(sorted(mapping.items(), key=lambda item: _camera_suffix_key(item[1])))
 
 
 def _decode(value) -> str:
@@ -133,7 +150,7 @@ def _resolve_camera_map(source: h5py.File, episode_name: str, override: str | No
         missing = sorted(set(mapping) - set(available))
         if missing:
             raise ValueError(f"--camera-map references missing HDF5 cameras: {missing}")
-        return {str(key): str(value) for key, value in mapping.items()}
+        return _canonical_camera_map({str(key): str(value) for key, value in mapping.items()})
 
     mapping = {}
     for name in available:
@@ -146,7 +163,7 @@ def _resolve_camera_map(source: h5py.File, episode_name: str, override: str | No
                 f"No default LeRobot name for HDF5 camera '{name}'. "
                 f"Pass --camera-map with one of: {available}"
             )
-    return mapping
+    return _canonical_camera_map(mapping)
 
 
 def _instruction(episode: h5py.Group, source: h5py.File) -> str:
@@ -390,7 +407,7 @@ def main() -> None:
         default=None,
         help=(
             'JSON object mapping HDF5 camera groups to LeRobot suffixes, e.g. '
-            '\'{"workcell_camera":"camera1","wrist_camera":"camera2","top_camera":"camera3"}\'.'
+            '\'{"top_camera":"camera1","wrist_camera":"camera2","workcell_camera":"camera3"}\'.'
         ),
     )
     parser.add_argument(

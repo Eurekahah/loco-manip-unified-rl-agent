@@ -16,7 +16,7 @@
 | 纯遥操调试 | `Isaac-M20-Piper-LowShelf-Teleop-v0` | `TeleopLLAction` | 默认关闭 | 默认关闭 |
 | 相机化数据采集 | `Isaac-M20-Piper-LowShelf-Collect-v0` | `TeleopLLAction` | 默认场景相机 + 腕部相机 + 顶部相机 | 默认启用 |
 
-训练配置 `LowShelfPlaceEnvCfg` 明确把 `workcell_camera`、`wrist_camera`、`top_camera`、`arm_camera`、`nav_camera` 置空，`RecorderManager` 保持 0 个 term。采集配置 `LowShelfPlaceCollectEnvCfg` 才显式创建三路 RGB-D 相机和 HDF5 recorder。这样不会把相机更新或数据落盘带回无头训练。
+训练配置 `LowShelfPlaceEnvCfg` 明确把 `workcell_camera`、`wrist_camera`、`top_camera`、`arm_camera`、`nav_camera` 置空，`RecorderManager` 保持 0 个 term。采集配置 `LowShelfPlaceCollectEnvCfg` 才显式创建三路 RGB 相机和 HDF5 recorder。这样不会把相机更新或数据落盘带回无头训练。
 
 任务 ID：
 
@@ -93,7 +93,8 @@ Isaac-M20-Piper-LowShelf-Collect-v0
 - `make_workcell_camera(...)`：固定场景相机，默认位于工作单元前左侧，使用世界系 look-at 朝向工作台。
 - `make_wrist_camera(...)`：挂在 `{ENV_REGEX_NS}/Robot/gripper_base/WristCamera`，沿 Piper 工具轴向前下视。
 - `make_top_camera(...)`：固定顶部相机，默认位于上层板上方 `(0.80, 0.0, 1.45)`，垂直向下看向 `(0.80, 0.0, 0.35)`，用于观察上层放置板和蓝色目标区。
-- 三路都输出 `rgb` 和 `depth`，默认 `224 x 224`、`10 Hz`。
+- 三路默认只输出 `rgb`，`224 x 224`、`10 Hz`。SmolVLA 预训练和微调都只使用 RGB，深度不会进入策略输入；默认关闭深度可省掉一次 GPU readback 和 HDF5 体积。需要几何调试时再加 `--record_depth`。
+- 相机到 SmolVLA 键名的映射固定为：`top_camera -> camera1`、`wrist_camera -> camera2`、`workcell_camera -> camera3`。官方 SmolVLA/LeRobot 示例就是这么定义 `camera1/camera2` 的；`camera3` 是额外的前左全局视角。
 - 采集控制频率由 `control_dt` 决定（当前约 `50 Hz`），因此原始 HDF5 中相机帧会按 10 Hz 更新，转换为 LeRobot 时可用 `--fps 10` 按整数 stride 下采样，得到无重复帧的 10 Hz 数据集。
 - 相机外参通过 `TiledCamera.data` 读取。腕部相机设置 `update_latest_camera_pose=True`，随机械臂更新。
 - 采集脚本自动设置 `--enable_cameras`，并允许用 `--scene_camera/--no-scene_camera`、`--wrist_camera/--no-wrist_camera`、`--top_camera/--no-top_camera` 选择相机。
@@ -111,7 +112,7 @@ Isaac-M20-Piper-LowShelf-Collect-v0
 
 使用 Isaac Lab 原生 `RecorderManager` + 自定义 `LowShelfHDF5Recorder`，不重写环境架构：
 
-- `record_pre_step`：在物理推进前记录当前状态、相机 RGB-D、内外参、时间戳和本步高层动作。
+- `record_pre_step`：在物理推进前记录当前状态、相机 RGB（可选深度）、内外参、时间戳和本步高层动作。
 - `record_post_step`：在环境自动 reset 前写入各终止项布尔值、`terminated`、`truncated` 和 `place_success`。
 - `record_pre_reset`：在 Isaac Lab 清空 terminated env 前写出完整 episode，避免状态被 reset 覆盖。
 - `close`：用户直接退出或到达 `--max_steps` 时保存当前未完成 episode，标签为 `shutdown_manual_stop`。
@@ -506,7 +507,9 @@ python scripts/data/collect_low_shelf_hdf5.py `
 ```
 
 - 结果写到 `recordings/low_shelf_place/vr_task.hdf5`（相对仓库根目录）。不传 `--output` 时默认是 `recordings/low_shelf_place/<YYYYMMDD_HHMMSS>_vr.hdf5`。
-- 默认三路相机 `224 x 224`、`10 Hz`；控制频率约 `50 Hz`。需要 25 Hz 相机时加 `--camera_update_period 0.04`，转换时对应使用 `--fps 25`。如果临时设备不足，可加 `--no-top_camera` 只采集两路。
+- 默认三路 RGB 相机 `224 x 224`、`10 Hz`；控制频率约 `50 Hz`。需要 25 Hz 相机时加 `--camera_update_period 0.04`，转换时对应使用 `--fps 25`。如果临时设备不足，可加 `--no-top_camera` 只采集两路。
+- 默认不记录深度；需要 RGB-D 时加 `--record_depth`。SmolVLA 不使用深度，开启后只会增加采集 I/O 和 HDF5 大小。
+- HDF5 相机组顺序固定为 `top_camera, wrist_camera, workcell_camera`，转换器再规范为 `camera1, camera2, camera3`。不要手工把 `workcell_camera` 当成 `camera1`。
 - 一个 HDF5 可以包含多个 episode。右 B 开始并重新标定；左 Y 保存成功并 reset；左 X 保存失败并 reset；直接退出会把当前 episode 以 `shutdown_manual_stop` 保存。
 - `--overwrite` 会覆盖同名 HDF5；正式采集不要误加。
 
@@ -598,7 +601,7 @@ resize_imgs_with_padding       512 x 512（沿用 base）
 
 所以相机数量现在已经和 base 对齐，但分辨率和 state/action 维度仍不同。微调是兼容的：SmolVLA 会根据数据集重建 `input_features`/`output_features`，视觉预处理器仍把每路图像等比缩放并 padding 到 `512 x 512`。预训练声明里的 6 维 state/action 是 base checkpoint 的原始机器人配置，不是微调硬约束。相机键名必须保持 `camera1`/`camera2`/`camera3`，并且训练和部署使用相同的相机位置、分辨率和内参。
 
-两路相机也能训练，因为 SmolVLA 不强制相机数量；但三路更接近 base 的多视角配置，顶部全局视角对上层放置和有遮挡时的空间定位通常有帮助，尤其适合当前“下层取料、上层放置”的任务。第一版建议保留三路。
+两路相机也能训练，因为 SmolVLA 不强制相机数量。官方 SO100 参考数据集 `lerobot/svla_so100_pickplace` 实际就是 `top` + `wrist` 两路，对应 `camera1` + `camera2`。但三路更接近 base 的多视角配置，顶部全局视角对上层放置和有遮挡时的空间定位通常有帮助，尤其适合当前“下层取料、上层放置”的任务。第一版建议保留三路。
 
 参考 SO100 数据集 `svla_so100_pickplace` 是 `480 x 640`、30 Hz；当前数据是 `224 x 224`、10 Hz。能训练，但视觉细节和时间分辨率都更低。想更接近 base 配置，可在采集时加 `--camera_width 256 --camera_height 256`；如果更看重动作时间分辨率，可用 25/50 Hz 相机设置。
 

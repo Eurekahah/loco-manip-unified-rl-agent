@@ -88,25 +88,21 @@ class LowShelfHDF5Recorder(RecorderTerm):
         data = sensor.data
         rgb = data.output.get("rgb")
         depth = data.output.get("depth")
-        if rgb is None or depth is None:
+        if rgb is None:
             raise RuntimeError(
-                f"Camera '{sensor.cfg.prim_path}' has no RGB-D output. "
+                f"Camera '{sensor.cfg.prim_path}' has no RGB output. "
                 "Create the collection env with cameras enabled and wait for one rendered reset/step."
             )
 
         rgb_np = _to_numpy(rgb[env_id]).astype(np.uint8)
-        depth_np = _to_numpy(depth[env_id]).astype(np.float32)
-        if depth_np.ndim == 3 and depth_np.shape[-1] == 1:
-            depth_np = depth_np[..., 0]
         intrinsics = _to_numpy(data.intrinsic_matrices[env_id]).astype(np.float32)
         pos_w = _to_numpy(data.pos_w[env_id]).astype(np.float32)
         quat_world = _to_numpy(data.quat_w_world[env_id]).astype(np.float32)
         quat_ros = _to_numpy(data.quat_w_ros[env_id]).astype(np.float32)
         transform_world = pose_to_matrix(pos_w, quat_world).astype(np.float32)
         transform_ros = pose_to_matrix(pos_w, quat_ros).astype(np.float32)
-        return {
+        output = {
             "rgb": rgb_np,
-            "depth": depth_np,
             "intrinsics": intrinsics,
             "pos_w": pos_w,
             "quat_w_world": quat_world,
@@ -117,6 +113,12 @@ class LowShelfHDF5Recorder(RecorderTerm):
             "T_camera_ros_world": invert_transform(transform_ros).astype(np.float32),
             "sensor_frame": np.int64(_to_numpy(sensor.frame).item()),
         }
+        if depth is not None:
+            depth_np = _to_numpy(depth[env_id]).astype(np.float32)
+            if depth_np.ndim == 3 and depth_np.shape[-1] == 1:
+                depth_np = depth_np[..., 0]
+            output["depth"] = depth_np
+        return output
 
     def record_pre_step(self):
         """Capture the observation/action pair before physics advances."""
@@ -273,7 +275,9 @@ class LowShelfHDF5RecorderCfg(RecorderTermCfg):
     task: str = "Isaac-M20-Piper-LowShelf-Collect-v0"
     language_instruction: str = "把下层托盘里的糖盒放到上层桌面。"
     source: str = "unknown"
-    camera_names: tuple[str, ...] = ("workcell_camera", "wrist_camera", "top_camera")
+    # Keep the HDF5 source order aligned with the SmolVLA camera suffixes:
+    # top -> camera1, wrist -> camera2, workcell -> camera3.
+    camera_names: tuple[str, ...] = ("top_camera", "wrist_camera", "workcell_camera")
     overwrite: bool = False
 
 

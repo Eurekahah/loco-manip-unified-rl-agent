@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect low-shelf RGB-D demonstrations with keyboard or VR teleoperation."""
+"""Collect low-shelf or two-cylinder RGB demonstrations with keyboard or VR teleoperation."""
 
 from __future__ import annotations
 
@@ -21,6 +21,12 @@ parser.add_argument("--max_steps", type=int, default=0, help="Stop after N envir
 parser.add_argument("--camera_width", type=int, default=224)
 parser.add_argument("--camera_height", type=int, default=224)
 parser.add_argument("--camera_update_period", type=float, default=0.1)
+parser.add_argument(
+    "--record_depth",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help="Record depth maps in HDF5. SmolVLA training only uses RGB, so this is off by default.",
+)
 parser.add_argument("--scene_camera", action=argparse.BooleanOptionalAction, default=True)
 parser.add_argument("--wrist_camera", action=argparse.BooleanOptionalAction, default=True)
 parser.add_argument("--top_camera", action=argparse.BooleanOptionalAction, default=True)
@@ -47,9 +53,14 @@ from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 from rl_training.devices.keyboard_loco_manip_teleop import KeyboardLocoManipTeleop, KeyboardLocoManipTeleopCfg  # noqa: E402
 from rl_training.devices.vr_loco_manip_teleop import VRLocoManipTeleop, VRLocoManipTeleopCfg  # noqa: E402
 from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place.scene_cfg import (  # noqa: E402
-    make_top_camera,
-    make_workcell_camera,
-    make_wrist_camera,
+    make_top_camera as make_low_shelf_top_camera,
+    make_workcell_camera as make_low_shelf_workcell_camera,
+    make_wrist_camera as make_low_shelf_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.two_cylinder_place.scene_cfg import (  # noqa: E402
+    make_two_cylinder_top_camera,
+    make_two_cylinder_workcell_camera,
+    make_two_cylinder_wrist_camera,
 )
 import rl_training.tasks  # noqa: F401, E402
 
@@ -91,42 +102,57 @@ class _KeyboardAbsoluteAdapter:
         return cmd13
 
 
-def _default_output_path(source: str) -> str:
+def _default_output_path(task: str, source: str) -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return os.path.join("recordings", "low_shelf_place", f"{stamp}_{source}.hdf5")
+    task_dir = "two_cylinder_place" if "TwoCylinder" in task else "low_shelf_place"
+    return os.path.join("recordings", task_dir, f"{stamp}_{source}.hdf5")
 
 
 def main() -> None:
-    output_path = args_cli.output or _default_output_path(args_cli.input)
+    output_path = args_cli.output or _default_output_path(args_cli.task, args_cli.input)
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.seed = args_cli.seed
     env_cfg.scene.num_envs = 1
+
+    is_two_cylinder = "TwoCylinder" in args_cli.task
+    make_workcell_camera = (
+        make_two_cylinder_workcell_camera if is_two_cylinder else make_low_shelf_workcell_camera
+    )
+    make_wrist_camera = (
+        make_two_cylinder_wrist_camera if is_two_cylinder else make_low_shelf_wrist_camera
+    )
+    make_top_camera = make_two_cylinder_top_camera if is_two_cylinder else make_low_shelf_top_camera
 
     camera_names: list[str] = []
     env_cfg.scene.workcell_camera = None
     env_cfg.scene.wrist_camera = None
     env_cfg.scene.top_camera = None
-    if args_cli.scene_camera:
-        env_cfg.scene.workcell_camera = make_workcell_camera(
-            width=args_cli.camera_width,
-            height=args_cli.camera_height,
-            update_period=args_cli.camera_update_period,
-        )
-        camera_names.append("workcell_camera")
-    if args_cli.wrist_camera:
-        env_cfg.scene.wrist_camera = make_wrist_camera(
-            width=args_cli.camera_width,
-            height=args_cli.camera_height,
-            update_period=args_cli.camera_update_period,
-        )
-        camera_names.append("wrist_camera")
+    # Keep the source order aligned with SmolVLA: camera1/top, camera2/wrist,
+    # camera3/workcell. The converter also enforces this order.
     if args_cli.top_camera:
         env_cfg.scene.top_camera = make_top_camera(
             width=args_cli.camera_width,
             height=args_cli.camera_height,
             update_period=args_cli.camera_update_period,
+            with_depth=args_cli.record_depth,
         )
         camera_names.append("top_camera")
+    if args_cli.wrist_camera:
+        env_cfg.scene.wrist_camera = make_wrist_camera(
+            width=args_cli.camera_width,
+            height=args_cli.camera_height,
+            update_period=args_cli.camera_update_period,
+            with_depth=args_cli.record_depth,
+        )
+        camera_names.append("wrist_camera")
+    if args_cli.scene_camera:
+        env_cfg.scene.workcell_camera = make_workcell_camera(
+            width=args_cli.camera_width,
+            height=args_cli.camera_height,
+            update_period=args_cli.camera_update_period,
+            with_depth=args_cli.record_depth,
+        )
+        camera_names.append("workcell_camera")
 
     recorder_cfg = env_cfg.recorders.record_hdf5
     recorder_cfg.output_path = output_path
@@ -180,6 +206,7 @@ def main() -> None:
     print(f"  task       : {args_cli.task}")
     print(f"  input      : {args_cli.input}")
     print(f"  cameras    : {', '.join(camera_names)}")
+    print(f"  depth      : {'rgb+depth' if args_cli.record_depth else 'rgb only'}")
     print(f"  HDF5       : {os.path.abspath(output_path)}")
     print("  action     : absolute offsets from the recalibrated anchor")
     if args_cli.input == "vr":

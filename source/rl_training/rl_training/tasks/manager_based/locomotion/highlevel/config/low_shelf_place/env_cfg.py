@@ -317,15 +317,17 @@ class LowShelfPlaceTeleopEnvCfg(LowShelfPlaceEnvCfg):
 
 @configclass
 class LowShelfPlaceCollectEnvCfg(LowShelfPlaceTeleopEnvCfg):
-    """Explicit RGB-D collection task for keyboard tests and VR demonstrations."""
+    """Explicit RGB collection task for keyboard tests and VR demonstrations."""
 
     recorders: LowShelfHDF5RecorderManagerCfg = LowShelfHDF5RecorderManagerCfg()
 
     def __post_init__(self):
         super().__post_init__()
-        self.scene.workcell_camera = make_workcell_camera()
-        self.scene.wrist_camera = make_wrist_camera()
-        self.scene.top_camera = make_top_camera()
+        # SmolVLA is trained on RGB only. Depth rendering and readback add
+        # latency and HDF5 size without changing the policy input.
+        self.scene.workcell_camera = make_workcell_camera(with_depth=False)
+        self.scene.wrist_camera = make_wrist_camera(with_depth=False)
+        self.scene.top_camera = make_top_camera(with_depth=False)
         self.recorders.record_hdf5.language_instruction = self.language_instruction
         self.recorders.record_hdf5.task = "Isaac-M20-Piper-LowShelf-Collect-v0"
 

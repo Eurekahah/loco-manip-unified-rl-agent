@@ -86,17 +86,19 @@ def _print_summary(file: h5py.File, episode: h5py.Group) -> None:
         print(f"timestamp dt  : median={np.median(dt):.4f}s min={dt.min():.4f}s max={dt.max():.4f}s")
     for camera_name, camera in episode["camera"].items():
         rgb = camera["rgb"]
-        depth = camera["depth"]
+        depth = camera.get("depth")
+        depth_text = f" depth={depth.shape}" if depth is not None else " depth=not-recorded"
         print(
-            f"camera {camera_name:<16}: rgb={rgb.shape} depth={depth.shape} "
+            f"camera {camera_name:<16}: rgb={rgb.shape}{depth_text} "
             f"K={camera['intrinsics'].shape} extrinsics={camera['T_world_camera_ros'].shape}"
         )
-        depth_sample = depth[0]
-        finite = depth_sample[np.isfinite(depth_sample)]
-        if finite.size:
-            print(
-                f"  depth[0] m  : min={finite.min():.4f} median={np.median(finite):.4f} max={finite.max():.4f}"
-            )
+        if depth is not None:
+            depth_sample = depth[0]
+            finite = depth_sample[np.isfinite(depth_sample)]
+            if finite.size:
+                print(
+                    f"  depth[0] m  : min={finite.min():.4f} median={np.median(finite):.4f} max={finite.max():.4f}"
+                )
     print("=" * 78)
 
 
@@ -109,7 +111,7 @@ def _depth_preview(depth: np.ndarray, lo: float, hi: float) -> np.ndarray:
 def _render_replay(episode: h5py.Group, camera_name: str) -> str:
     camera = episode["camera"][camera_name]
     rgb_data = camera["rgb"]
-    depth_data = camera["depth"] if not args.no_depth else None
+    depth_data = camera.get("depth") if not args.no_depth else None
     num_frames = len(rgb_data)
     if args.max_frames > 0:
         num_frames = min(num_frames, args.max_frames)

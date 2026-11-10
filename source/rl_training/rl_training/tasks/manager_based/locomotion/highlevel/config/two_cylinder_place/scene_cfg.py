@@ -12,6 +12,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place.scene_cfg import (
+    make_top_camera,
     make_workcell_camera,
     make_wrist_camera,
 )
@@ -132,6 +133,7 @@ class TwoCylinderPlaceSceneCfg(HighLevelSceneCfg):
     # these fields empty so headless performance is unchanged.
     workcell_camera: TiledCameraCfg | None = None
     wrist_camera: TiledCameraCfg | None = None
+    top_camera: TiledCameraCfg | None = None
 
 
 def make_two_cylinder_workcell_camera(
@@ -139,12 +141,14 @@ def make_two_cylinder_workcell_camera(
     width: int = 224,
     height: int = 224,
     update_period: float = 0.1,
+    with_depth: bool = True,
 ) -> TiledCameraCfg:
     """Frame both platforms from the front-left side of the workcell."""
     return make_workcell_camera(
         width=width,
         height=height,
         update_period=update_period,
+        with_depth=with_depth,
         pos=(0.12, -1.08, 0.80),
         target=(0.72, 0.0, 0.42),
         clipping_range=(0.1, 4.0),
@@ -156,6 +160,32 @@ def make_two_cylinder_wrist_camera(
     width: int = 224,
     height: int = 224,
     update_period: float = 0.1,
+    with_depth: bool = True,
 ) -> TiledCameraCfg:
     """Use the same calibrated Piper wrist-camera mount as the low-shelf task."""
-    return make_wrist_camera(width=width, height=height, update_period=update_period)
+    return make_wrist_camera(
+        width=width,
+        height=height,
+        update_period=update_period,
+        with_depth=with_depth,
+    )
+
+
+def make_two_cylinder_top_camera(
+    *,
+    width: int = 224,
+    height: int = 224,
+    update_period: float = 0.1,
+    with_depth: bool = True,
+) -> TiledCameraCfg:
+    """Frame both cylinder platforms from above for global placement context."""
+    return make_top_camera(
+        width=width,
+        height=height,
+        update_period=update_period,
+        with_depth=with_depth,
+        focal_length=18.0,
+        pos=(0.66, 0.08, 1.50),
+        target=(0.66, 0.08, 0.34),
+        clipping_range=(0.1, 4.0),
+    )

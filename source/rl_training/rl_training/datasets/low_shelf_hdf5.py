@@ -240,7 +240,7 @@ class LowShelfHDF5Writer:
                 camera_group.attrs["width"] = int(rgb_shape[2])
                 camera_group.attrs["num_frames"] = int(rgb_shape[0])
             camera_group.attrs["rgb_dtype"] = "uint8"
-            camera_group.attrs["depth_unit"] = "m"
+            camera_group.attrs["depth_unit"] = "m" if "depth" in camera_frames[0] else "none"
             camera_group.attrs["extrinsics"] = "T_world_camera_world and T_world_camera_ros"
 
         self._episode_count += 1

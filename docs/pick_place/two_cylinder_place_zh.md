@@ -6,13 +6,15 @@
 
 **目标**：在低层货架任务之外，增加一个更简单、可语言描述、可被 M20 + Piper 执行的单物体 pick-and-place 场景。矮圆柱台放 YCB 糖盒，高圆柱台放目标垫；两平台横向错开，搬运阶段需要底盘侧移，取料阶段需要降低机身并轻微前俯，放置阶段需要抬升机身。
 
+**下一步数据采集基准**：以本任务的“矮圆柱台取糖盒 -> 高圆柱台目标垫”为唯一示例任务，先采 VR 成功 episode，再走 LeRobot v3 转换和 SmolVLA 微调。低层货架数据只作为后续扩展，不与本基准混在同一数据集里。
+
 ## 1. 任务与配置分离
 
 | 用途 | Gym task | 控制接口 | 相机 | HDF5 |
 |---|---|---|---|---|
 | RL 训练/状态教师 | `Isaac-M20-Piper-TwoCylinder-Place-v0` | `PreTrainedPickWBCAction` | 默认关闭 | 默认关闭 |
 | 纯遥操调试 | `Isaac-M20-Piper-TwoCylinder-Teleop-v0` | `TeleopLLAction` | 默认关闭 | 默认关闭 |
-| 相机化数据采集 | `Isaac-M20-Piper-TwoCylinder-Collect-v0` | `TeleopLLAction` | 场景 + 腕部 RGB-D | 默认启用 |
+| 相机化数据采集 | `Isaac-M20-Piper-TwoCylinder-Collect-v0` | `TeleopLLAction` | 顶部 + 腕部 + 场景 RGB | 默认启用 |
 
 配置继承关系：
 
@@ -30,7 +32,19 @@ HighLevelFlatEnvCfg
 - `PreTrainedPickWBCAction` 与现有 WBC checkpoint。
 - `TeleopLLAction` 的统一绝对偏移语义：键盘增量由采集脚本累积成与 VR 相同的“标定锚点 + 偏移”，每次 reset 重新标定。
 - 低层货架任务的教师观测、目标垫相对位姿、机身姿态和夹爪状态观测。
-- 现有 `LowShelfHDF5Recorder`、RGB-D 相机工厂和 HDF5 检查/回放脚本。
+- 现有 `LowShelfHDF5Recorder`、RGB 相机工厂和 HDF5 检查/回放脚本。
+
+三路相机固定映射到 SmolVLA 的键名，顺序不能按 HDF5 组的字母序推导：
+
+| HDF5 相机组 | LeRobot 键 | 位置 | 作用 |
+|---|---|---|---|
+| `top_camera` | `observation.images.camera1` | 顶部 `(0.66, 0.08, 1.50)` 向下看 `(0.66, 0.08, 0.34)` | 两个圆柱台、糖盒和目标垫的全局俯视 |
+| `wrist_camera` | `observation.images.camera2` | `gripper_base/WristCamera`，向前下约 30° | 抓取阶段的近距离视角 |
+| `workcell_camera` | `observation.images.camera3` | 前左 `(0.12, -1.08, 0.80)` 看向 `(0.72, 0.0, 0.42)` | 机器人、两圆柱台和工作区的全局视角 |
+
+官方 SO100 参考数据集只有 `top` + `wrist` 两路（对应 `camera1` + `camera2`），第三路是可选的额外视角，不是 SmolVLA 的硬性要求。当前两圆柱台任务默认采三路，目的是给放置阶段提供顶部全局上下文。
+
+三路默认只采 RGB，不采深度。SmolVLA 的预训练和微调都只接收 RGB，深度不会成为策略输入；`--record_depth` 仅用于几何调试，会增加 GPU readback 和 HDF5 体积。
 
 没有修改低层货架任务本身的训练、遥操或采集语义。
 
@@ -279,6 +293,124 @@ python scripts/data/smoke_two_cylinder_grasp.py --headless --max_move_steps 70
 ```powershell
 python scripts/data/replay_low_shelf_hdf5.py --input recordings/two_cylinder_smoke/keyboard_gui.hdf5 --check-only
 ```
+
+### 8.9 三路相机目标可见截图
+
+该脚本会把机身降低并移动到矮台预抓取位姿，然后在同一时刻保存三路画面：
+
+```powershell
+conda activate env_isaac_lab
+python scripts/data/capture_two_cylinder_views.py `
+  --headless `
+  --num_envs 1 `
+  --output_dir recordings/two_cylinder_target_views
+```
+
+输出：
+
+```text
+recordings/two_cylinder_target_views/camera1_top_rgb.png
+recordings/two_cylinder_target_views/camera2_wrist_rgb.png
+recordings/two_cylinder_target_views/camera3_workcell_rgb.png
+recordings/two_cylinder_target_views/three_view_target_visible.png
+```
+
+三联图中三路都能看到糖盒。腕部视角是近距离特写，顶部和前左场景相机负责展示两个圆柱台与目标垫的相对位置。
+
+### 8.10 两圆柱台 VR 采集 -> LeRobot v3
+
+VR 采集（Windows 本机，仓库根目录）：
+
+```powershell
+conda activate env_isaac_lab
+python scripts/data/collect_low_shelf_hdf5.py `
+  --task Isaac-M20-Piper-TwoCylinder-Collect-v0 `
+  --input vr `
+  --num_envs 1 `
+  --output recordings/two_cylinder_place/vr_task.hdf5 `
+  --overwrite
+```
+
+- 不传 `--output` 时默认写到 `recordings/two_cylinder_place/<YYYYMMDD_HHMMSS>_vr.hdf5`。
+- 默认三路 RGB、`224 x 224`、`10 Hz`；控制频率约 `50 Hz`。
+- 右 B 开始并重新标定；左 Y 保存成功并 reset；左 X 保存失败并 reset；直接退出会把当前 episode 以 `shutdown_manual_stop` 保存。
+- 只采两路用于快速验证时可加 `--no-top_camera`；需要深度调试时再加 `--record_depth`。
+
+把 HDF5 拷到远程训练机：
+
+```powershell
+scp -P 558 recordings/two_cylinder_place/vr_task.hdf5 `
+  root@10.60.144.11:/root/tievnas/hjx/smolvla/datasets/raw/
+```
+
+远程转换：
+
+```bash
+cd /root/loco-manip-unified-rl-agent
+/data/smolvla/venv/bin/python scripts/data/convert_hdf5_to_lerobot.py \
+  --input /root/tievnas/hjx/smolvla/datasets/raw/vr_task.hdf5 \
+  --output /root/tievnas/hjx/smolvla/datasets/two_cylinder_vr_10hz \
+  --repo-id local/two_cylinder_vr_10hz \
+  --fps 10 \
+  --successful-only \
+  --overwrite
+```
+
+- `--fps 10` 用 stride=5 取第 `0,5,10,...` 行，去掉 50 Hz 控制循环里重复的相机帧，同时让 action/state/video 对齐。
+- `--successful-only` 只保留人工标成成功的 episode；做失败恢复数据时去掉。
+- 转换后检查 `meta/info.json` 的特征顺序应为 `camera1, camera2, camera3`，`meta/conversion_info.json` 应记录 `camera_map` 和 `stride=5`。
+
+### 8.11 两圆柱台 SmolVLA 微调
+
+远程新建 `/root/tievnas/hjx/smolvla/train_two_cylinder_vr.yaml`：
+
+```yaml
+dataset:
+  repo_id: local/two_cylinder_vr_10hz
+  root: /root/tievnas/hjx/smolvla/datasets/two_cylinder_vr_10hz
+  video_backend: pyav
+policy:
+  type: smolvla
+  pretrained_path: lerobot/smolvla_base
+  repo_id: local/smolvla_two_cylinder_vr
+  push_to_hub: false
+  load_vlm_weights: true
+  train_expert_only: true
+  train_state_proj: true
+  chunk_size: 20
+  n_action_steps: 20
+output_dir: /root/tievnas/hjx/smolvla/outputs/two_cylinder_vr
+job_name: two_cylinder_vr
+steps: 20000
+batch_size: 1
+num_workers: 0
+log_freq: 10
+eval_steps: 0
+save_freq: 1000
+wandb:
+  enable: false
+```
+
+无卡 CPU 先跑 2 步验证数据与训练链路：
+
+```bash
+cd /root/tievnas/hjx/smolvla
+HF_HOME=/root/tievnas/hjx/smolvla/hf-cache \
+HF_HUB_OFFLINE=1 \
+TRANSFORMERS_OFFLINE=1 \
+/data/smolvla/venv/bin/lerobot-train \
+  --config_path=/root/tievnas/hjx/smolvla/train_two_cylinder_vr.yaml \
+  --steps=2
+```
+
+正式训练时去掉 `--steps=2`，或把 YAML 里的 `steps` 改大。输出在 `output_dir/checkpoints/last/pretrained_model`；中断后可加 `--resume=true`。
+
+注意：
+
+- 不要加 `rename_map`；转换器已经直接输出 `camera1/camera2/camera3`。
+- 同一个 LeRobot 数据集必须保持相同的相机集合和键名，不要混用两路旧 HDF5 与三路新 HDF5。
+- `push_to_hub: false` 是离线训练必须项。
+- 原始 50 Hz HDF5 不要直接按 50 fps 训练；那会让 SmolVLA 看到 5 帧重复画面配不同 action。微调使用 `--fps 10` 去重后的数据即可。
 
 ## 9. 后续优先级
 

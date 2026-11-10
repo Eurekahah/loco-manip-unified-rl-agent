@@ -29,6 +29,7 @@ from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place
 from . import mdp
 from .scene_cfg import (
     TwoCylinderPlaceSceneCfg,
+    make_two_cylinder_top_camera,
     make_two_cylinder_workcell_camera,
     make_two_cylinder_wrist_camera,
 )
@@ -197,6 +198,7 @@ class TwoCylinderPlaceEnvCfg(LowShelfPlaceEnvCfg):
         self.scene.nav_camera = None
         self.scene.workcell_camera = None
         self.scene.wrist_camera = None
+        self.scene.top_camera = None
         self.disable_zero_weight_rewards()
 
 
@@ -211,6 +213,7 @@ class TwoCylinderPlaceTeleopEnvCfg(TwoCylinderPlaceEnvCfg):
         super().__post_init__()
         self.scene.workcell_camera = None
         self.scene.wrist_camera = None
+        self.scene.top_camera = None
         self.decimation = 4
         self.sim.render_interval = self.decimation
         self.episode_length_s = 60.0
@@ -219,13 +222,14 @@ class TwoCylinderPlaceTeleopEnvCfg(TwoCylinderPlaceEnvCfg):
 
 @configclass
 class TwoCylinderPlaceCollectEnvCfg(TwoCylinderPlaceTeleopEnvCfg):
-    """Explicit RGB-D collection variant for keyboard tests and VR demos."""
+    """Explicit RGB collection variant for keyboard tests and VR demos."""
 
     recorders: LowShelfHDF5RecorderManagerCfg = LowShelfHDF5RecorderManagerCfg()
 
     def __post_init__(self):
         super().__post_init__()
-        self.scene.workcell_camera = make_two_cylinder_workcell_camera()
-        self.scene.wrist_camera = make_two_cylinder_wrist_camera()
+        self.scene.workcell_camera = make_two_cylinder_workcell_camera(with_depth=False)
+        self.scene.wrist_camera = make_two_cylinder_wrist_camera(with_depth=False)
+        self.scene.top_camera = make_two_cylinder_top_camera(with_depth=False)
         self.recorders.record_hdf5.language_instruction = self.language_instruction
         self.recorders.record_hdf5.task = "Isaac-M20-Piper-TwoCylinder-Collect-v0"
