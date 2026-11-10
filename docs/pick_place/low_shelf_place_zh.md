@@ -514,10 +514,13 @@ cd /root/loco-manip-unified-rl-agent
   --output /root/tievnas/hjx/smolvla/datasets/low_shelf_vr_10hz \
   --repo-id local/low_shelf_vr_10hz \
   --fps 10 \
+  --successful-only \
   --overwrite
 ```
 
 输出目录是标准 LeRobot v3：`data/`、`videos/observation.images.camera1`、`videos/observation.images.camera2`、`meta/`。`meta/source_episodes.json` 保留每个 HDF5 episode 的成功/失败标签，`meta/conversion_info.json` 记录 `source_fps`、输出 `fps` 和 `stride`。
+
+`--successful-only` 只保留 `success=True` 的 episode，适合第一版任务微调；如果要做失败恢复/纠错数据，可以去掉该参数，再在训练侧按自己的策略筛选。转换器默认保留所有 episode。
 
 #### 8.9.3 SmolVLA 微调
 

@@ -260,6 +260,9 @@ def convert(args: argparse.Namespace) -> None:
         source_episodes = []
         for episode_name in episode_names:
             episode = source[f"episodes/{episode_name}"]
+            if args.successful_only and not bool(episode.attrs.get("success", False)):
+                print(f"[convert] skip non-successful episode {episode_name}")
+                continue
             actions = np.asarray(episode["action"][:], dtype=np.float32)
             joint_pos = np.asarray(episode["robot/joint_pos"][:], dtype=np.float32)
             num_steps = int(actions.shape[0])
@@ -342,6 +345,7 @@ def convert(args: argparse.Namespace) -> None:
                 "fps": fps,
                 "stride": stride,
                 "action_semantics": action_semantics,
+                "successful_only": bool(args.successful_only),
                 "camera_map": camera_map,
                 "action_layout": action_layout,
                 "state_layout": state_names,
@@ -392,6 +396,11 @@ def main() -> None:
         type=int,
         default=0,
         help="Only convert the first N episodes (0 converts all).",
+    )
+    parser.add_argument(
+        "--successful-only",
+        action="store_true",
+        help="Only convert episodes whose HDF5 success attribute is true.",
     )
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing output dataset.")
     parser.add_argument(
