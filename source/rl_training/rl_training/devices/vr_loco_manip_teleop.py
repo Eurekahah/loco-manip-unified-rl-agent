@@ -38,14 +38,19 @@ import socket
 import ssl
 import threading
 import time
-import weakref
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 from isaaclab.devices import DeviceBase, DeviceCfg
+
+from rl_training.devices.vr_signal_shaping import (
+    ClutchOffset,
+    SlewRateLimiter,
+    shape_stick,
+)
 
 # ---------------------------------------------------------------------------
 # Lazy import guard – XLeVR may not be installed in all environments
@@ -96,7 +101,7 @@ _R_ALIGN = R.from_euler("x", 90, degrees=True)
 # Main device class
 # ---------------------------------------------------------------------------
 
-class Se2VRExtended(DeviceBase):
+class VRLocoManipTeleop(DeviceBase):
     r"""VR controller for quadruped robot with arm.
 
     Outputs a 13-D command:
@@ -110,10 +115,10 @@ class Se2VRExtended(DeviceBase):
     # Construction
     # ------------------------------------------------------------------
 
-    def __init__(self, cfg: Se2VRExtendedCfg):
+    def __init__(self, cfg: VRLocoManipTeleopCfg):
         if not _XLEVR_AVAILABLE:
             raise RuntimeError(
-                "XLeVR package not found. Please install it before using Se2VRExtended."
+                "XLeVR package not found. Please install it before using VRLocoManipTeleop."
             )
 
         self._cfg = cfg
@@ -133,6 +138,36 @@ class Se2VRExtended(DeviceBase):
         self.arm_rot_axis_map    = cfg.arm_rot_axis_map
         # sim/房间系位移 -> EE x/y/z 通道的固定映射表
         self.arm_pos_axis_map    = cfg.arm_pos_axis_map
+
+        # ---- 摇杆整形（死区/曲线/斜率限制）----
+        self._stick_shaping = cfg.stick_shaping_enabled
+        self._stick_deadzone = cfg.stick_deadzone
+        self._stick_expo = cfg.stick_expo
+        self._yaw_expo = cfg.yaw_expo
+        self._stick_timeout = cfg.stick_timeout
+        # 摇杆整形后的"目标速度"（vx, vy, wz），由斜率限制器平滑后才写入 _command[0:3]
+        self._stick_target = np.zeros(3, dtype=np.float64)
+        # 左手（vx, vy）/ 右手（wz）最近一次摇杆数据时间，用于掉线保护
+        self._stick_stamp = {"left": time.monotonic(), "right": time.monotonic()}
+        self._chassis_slew = SlewRateLimiter(
+            max_accel=[cfg.v_x_accel, cfg.v_y_accel, cfg.omega_z_accel],
+            max_decel=[cfg.v_x_decel, cfg.v_y_decel, cfg.omega_z_decel],
+        )
+        # 斜率限制使用的步长：优先用 set_step_dt() 设置的仿真步长，否则用 advance() 间隔的墙钟时间
+        self._step_dt: float | None = None
+        self._last_advance_time = time.monotonic()
+
+        # ---- 机械臂离合键（默认开）：按住右握持键才跟随，松开冻结 ----
+        self._arm_clutch_on = cfg.arm_clutch_enabled
+        self._arm_pos_clutch = ClutchOffset(3, limit=cfg.arm_clutch_pos_limit)
+        self._arm_rot_clutch = ClutchOffset(3, limit=cfg.arm_clutch_rot_limit)
+
+        # ---- 机体姿态：左握持键离合（默认开）----
+        self._body_clutch_on = cfg.body_clutch_enabled
+        self._body_clutch = ClutchOffset(3, limit=cfg.body_clutch_limit)
+
+        # 每只手握持键状态（来自 XLeVR goal.metadata["grip_active"]）
+        self._grip = {"left": False, "right": False}
 
         # ---- state flags ----
         self._started      = False
@@ -168,15 +203,9 @@ class Se2VRExtended(DeviceBase):
         self._command = np.zeros(13, dtype=np.float64)
         # 扳机积分出的机身高度偏移（按住 trigger 持续升高），标定/reset 时归零
         self._body_height_offset = 0.0
-        # 相邻 VR 数据包间隔，用于把扳机"速度"积分成高度偏移
-        self._dt = 0.0
-        self._last_packet_time = time.time()
-
-        # ---- previous calibrated pose for delta computation ----
-        self._prev_arm_pos:  np.ndarray | None = None
-        self._prev_arm_rot:  R          | None = None
-        self._prev_body_rot: R          | None = None
-
+        # 左手相邻 VR 数据包间隔，用于把扳机"速度"积分成高度偏移
+        self._body_dt = 0.0
+        self._body_last_packet_time: float | None = None
         # ---- XLeVR setup ----
         self._xlevr_cfg = XLeVRConfig()
         self._xlevr_cfg.enable_vr   = True
@@ -223,16 +252,24 @@ class Se2VRExtended(DeviceBase):
     def reset(self):
         """Reset all buffers and VR origins."""
         self._command[:] = 0.0
+        self._stick_target[:] = 0.0
+        self._chassis_slew.reset()
+        self._reset_arm_state()
+        self._last_advance_time = time.monotonic()
         self._body_height_offset = 0.0
         self._vr_origin = {
             "left":  {"pos": None, "rot": None},
             "right": {"pos": None, "rot": None},
         }
         self._calibration_triggered = {"left": False, "right": False}
-        self._prev_arm_pos  = None
-        self._prev_arm_rot  = None
-        self._prev_body_rot = None
-        self._last_packet_time = time.time()
+        self._body_last_packet_time = None
+        self._body_dt = 0.0
+
+    def _reset_arm_state(self) -> None:
+        """清空离合/采样状态（reset / 重新标定时调用）。"""
+        self._arm_pos_clutch.reset()
+        self._arm_rot_clutch.reset()
+        self._body_clutch.reset()
 
     def add_callback(self, key: str, func: Callable):
         """Register a zero-argument callable for a named event key.
@@ -254,7 +291,33 @@ class Se2VRExtended(DeviceBase):
                gripper]``
         """
         self._poll_queue()
+        self._apply_chassis_slew()
         return self._command.copy()
+
+    def set_step_dt(self, dt: float | None) -> None:
+        """设置底盘斜率限制使用的步长（秒）。
+
+        传入仿真环境每步时长（如 ``env.step_dt``）可让加速度限制按"仿真时间"生效，
+        不受仿真实时因子影响；传 ``None`` 则回退为 ``advance()`` 两次调用的墙钟间隔。
+        """
+        self._step_dt = None if dt is None else float(dt)
+
+    def _apply_chassis_slew(self) -> None:
+        """把摇杆目标速度经斜率限制后写入 command[0:3]（含掉线保护）。"""
+        now = time.monotonic()
+        wall_dt = min(max(now - self._last_advance_time, 0.0), 0.1)
+        self._last_advance_time = now
+        if not self._stick_shaping:
+            return
+        dt = self._step_dt if self._step_dt is not None else wall_dt
+
+        target = self._stick_target.copy()
+        # 掉线保护：摇杆数据超时（手柄丢失/断连）就让目标回 0，速度按斜率减到停
+        if now - self._stick_stamp["left"] > self._stick_timeout:
+            target[0:2] = 0.0
+        if now - self._stick_stamp["right"] > self._stick_timeout:
+            target[2] = 0.0
+        self._command[0:3] = self._chassis_slew.update(target, dt)
 
     # ------------------------------------------------------------------
     # Additional convenience: structured dict (optional for callers)
@@ -282,7 +345,8 @@ class Se2VRExtended(DeviceBase):
     # ------------------------------------------------------------------
 
     def _poll_queue(self):
-        """Drain the async queue and update _command."""
+        """Drain the async queue, coalescing stale poses, and update ``_command``."""
+        goals = []
         while not self._command_queue.empty():
             try:
                 goal = self._command_queue.get_nowait()
@@ -291,50 +355,108 @@ class Se2VRExtended(DeviceBase):
 
             if goal.arm == "headset":
                 continue
+            goals.append(goal)
 
-            # 记录相邻包间隔，供扳机高度积分使用
+        if not goals:
+            return
+
+        # 先按到达顺序处理元数据和按钮，保留所有按键边沿；位姿稍后按手合并。
+        grip_state = dict(self._grip)
+        for goal in goals:
             now = time.time()
-            self._dt = min(max(now - self._last_packet_time, 0.0), 0.1)
-            self._last_packet_time = now
+            setattr(goal, "_vr_read_wall", now)
+
+            if goal.metadata:
+                if "grip_active" in goal.metadata:
+                    grip_state[goal.arm] = bool(goal.metadata["grip_active"])
+                elif goal.metadata.get("source") == "vr_grip_release":
+                    grip_state[goal.arm] = False
+            setattr(goal, "_vr_grip_state", grip_state.get(goal.arm, False))
 
             # --- buttons ---
             if goal.metadata and "buttons" in goal.metadata:
                 self._check_buttons(goal.metadata["buttons"], goal.metadata.get("hand", goal.arm))
 
-            if not self._started or goal.target_position is None:
+        # 同一只手、同一握持状态只保留最后一个位姿；握持状态切换时保留切换前最后一帧，
+        # 这样松开 grip 时离合仍能冻结在最后位置。
+        batches: dict[str, list[tuple[object, bool]]] = {}
+        for goal in goals:
+            if goal.target_position is None:
                 continue
-
-            # --- pose update ---
-            sim_pos, r_sim = self._vr_to_sim_pose(goal)
             hand = goal.arm
+            engaged = bool(getattr(goal, "_vr_grip_state", False))
+            hand_batches = batches.setdefault(hand, [])
+            if hand_batches and hand_batches[-1][1] == engaged:
+                hand_batches[-1] = (goal, engaged)
+            else:
+                hand_batches.append((goal, engaged))
 
-            # calibration (triggered once on button-B press)
-            # 按B键设置当前位姿为 origin，后续计算增量
-            if self._calibration_triggered.get(hand, False):
-                print(f"[VR Device] Calibrating {hand} controller origin...")
-                self._vr_origin[hand]["pos"] = sim_pos.copy()
-                self._vr_origin[hand]["rot"] = r_sim
-                self._calibration_triggered[hand] = False
+        if self._started:
+            for hand in ("left", "right"):
+                for goal, engaged in batches.get(hand, []):
+                    self._grip[hand] = engaged
+                    self._process_goal_pose(goal)
 
-            if self._vr_origin[hand]["pos"] is None:
-                continue
+        # grip release 包可能没有 target_position；此时用最后输出冻结，避免下一帧跳到新位姿。
+        for hand in ("left", "right"):
+            if self._grip[hand] and not grip_state.get(hand, False):
+                if hand == "right":
+                    self._arm_pos_clutch.release()
+                    self._arm_rot_clutch.release()
+                else:
+                    self._body_clutch.release()
 
-            delta_pos = sim_pos - self._vr_origin[hand]["pos"]
-            r_diff    = r_sim * self._vr_origin[hand]["rot"].inv()
-            # 手柄自身坐标系下的相对旋转：转轴固定在手柄上，不随标定时手势漂移
-            # （r_diff 是世界/sim 系的，纯俯仰会投影成多个轴的分量）
-            r_diff_local = self._vr_origin[hand]["rot"].inv() * r_sim
+        # 最后状态以队列中最新包为准（包括 target_position=None 的 grip release 包）。
+        self._grip = grip_state
 
-            trigger = 0.0
-            if goal.metadata and "trigger" in goal.metadata:
-                trigger = float(goal.metadata["trigger"])
+    def _process_goal_pose(self, goal) -> None:
+        """把单个（已合并到最新的）位姿包写入命令。"""
+        hand = goal.arm
+        now = float(getattr(goal, "_vr_read_wall", time.time()))
 
+        # 记录左手相邻包间隔，供扳机高度积分使用
+        if hand == "left":
+            if self._body_last_packet_time is not None:
+                self._body_dt = min(
+                    max(now - self._body_last_packet_time, 0.0), 0.1
+                )
+            self._body_last_packet_time = now
+
+        sim_pos, r_sim = self._vr_to_sim_pose(goal)
+
+        # calibration (triggered once on button-B press)
+        # 按B键设置当前位姿为 origin，后续计算增量
+        if self._calibration_triggered.get(hand, False):
+            print(f"[VR Device] Calibrating {hand} controller origin...")
+            self._vr_origin[hand]["pos"] = sim_pos.copy()
+            self._vr_origin[hand]["rot"] = r_sim
+            self._calibration_triggered[hand] = False
             if hand == "right":
-                self._update_arm(delta_pos, r_diff_local, trigger)
-                self._update_yaw_from_thumbstick(goal)
-            elif hand == "left":
-                self._update_body(delta_pos, r_diff, trigger)
-                self._update_chassis_from_thumbstick(goal)
+                self._reset_arm_state()
+            else:
+                self._body_clutch.reset()
+
+        if self._vr_origin[hand]["pos"] is None:
+            return
+
+        delta_pos = sim_pos - self._vr_origin[hand]["pos"]
+        r_diff = r_sim * self._vr_origin[hand]["rot"].inv()
+        # 手柄自身坐标系下的相对旋转：转轴固定在手柄上，不随标定时手势漂移
+        # 用四元数旋转向量而不是欧拉角，避免 pitch=±90° 的万向锁。
+        r_diff_local = self._vr_origin[hand]["rot"].inv() * r_sim
+        delta_rotvec = r_diff.as_rotvec()
+        delta_rotvec_local = r_diff_local.as_rotvec()
+
+        trigger = 0.0
+        if goal.metadata and "trigger" in goal.metadata:
+            trigger = float(goal.metadata["trigger"])
+
+        if hand == "right":
+            self._update_arm(delta_pos, delta_rotvec_local, trigger)
+            self._update_yaw_from_thumbstick(goal)
+        elif hand == "left":
+            self._update_body(delta_pos, delta_rotvec, trigger)
+            self._update_chassis_from_thumbstick(goal)
 
     # ------------------------------------------------------------------
     # Command updaters
@@ -342,7 +464,7 @@ class Se2VRExtended(DeviceBase):
 
     def _update_arm(self,
                 delta_pos: np.ndarray,
-                r_diff_local: R,
+                delta_rotvec_local: np.ndarray,
                 trigger: float):
         # ------------------------------------------------------------------
         # 位置增量：sim/房间系位移 -> EE x/y/z 通道
@@ -354,23 +476,25 @@ class Se2VRExtended(DeviceBase):
         # 注意：执行端把该增量加到 body 系基准上，因此实际手感是“相对机器人
         # 当前朝向”；若以后想改成“相对房间方向”，需先把增量按机身偏航旋转。
         # ------------------------------------------------------------------
-        for i, (src, sgn) in enumerate(self.arm_pos_axis_map):
-            v = self._apply_deadzone(sgn * delta_pos[src], self.pos_deadzone)
-            self._command[3 + i] = v * self.arm_pos_sensitivity
+        # 旋转：用手柄局部系的相对旋转向量。旋转向量由四元数直接得到，
+        # 不经过欧拉角分解，因此没有 pitch=±90° 的万向锁/跳变。
+        raw_pos = np.array([sgn * delta_pos[src] for src, sgn in self.arm_pos_axis_map], dtype=np.float64)
+        raw_rot = np.array(
+            [sgn * delta_rotvec_local[src] for src, sgn in self.arm_rot_axis_map],
+            dtype=np.float64,
+        )
 
-        # ------------------------------------------------------------------
-        # Rotation：使用“手柄局部系”的相对旋转（r_diff_local），而不是世界系
-        # 的 r_diff。世界系分解会把“纯俯仰”拆成 roll+pitch 多个分量（耦合），
-        # 且耦合方式随 B 标定时手势变化；局部系则“俯仰就是俯仰”，与标定手势无关。
-        #
-        # 局部系欧拉角 -> EE 通道的轴映射由 self.arm_rot_axis_map 决定，
-        # 每项 (src, sgn) 表示 command[6+i] = sgn * euler_local[src]。
-        # ------------------------------------------------------------------
-        euler_local = r_diff_local.as_euler("XYZ", degrees=False)
+        if self._arm_clutch_on:
+            # 步骤3：按住右握持键才跟随手柄相对位移，松开冻结；目标被限幅并吸收超出部分
+            g = self._grip["right"]
+            raw_pos = self._arm_pos_clutch.update(raw_pos, g)
+            raw_rot = self._arm_rot_clutch.update(raw_rot, g)
 
-        for i, (src, sgn) in enumerate(self.arm_rot_axis_map):
-            v = self._apply_deadzone(sgn * euler_local[src], self.rot_deadzone)
-            self._command[6 + i] = v * self.arm_rot_sensitivity
+        pos = np.array([self._apply_deadzone(v, self.pos_deadzone) for v in raw_pos])
+        rot = np.array([self._apply_deadzone(v, self.rot_deadzone) for v in raw_rot])
+
+        self._command[3:6] = pos * self.arm_pos_sensitivity
+        self._command[6:9] = rot * self.arm_rot_sensitivity
 
         # --- gripper ---
         self._command[12] = 1.0 if trigger > 0.5 else -1.0
@@ -381,27 +505,38 @@ class Se2VRExtended(DeviceBase):
             return
         stick = goal.metadata["thumbstick"]
         stick_x = -float(stick.get("x", 0.0))
-        self._command[2] = stick_x * self.omega_z_sensitivity
+        if not self._stick_shaping:  # 旧行为：纯线性
+            self._command[2] = stick_x * self.omega_z_sensitivity
+            return
+        shaped = shape_stick(np.array([stick_x, 0.0]), self._stick_deadzone, self._yaw_expo)
+        self._stick_target[2] = shaped[0] * self.omega_z_sensitivity
+        self._stick_stamp["right"] = time.monotonic()
 
-    def _update_body(self, delta_pos: np.ndarray, r_diff: R, trigger: float):
+    def _update_body(self, delta_pos: np.ndarray, delta_rotvec: np.ndarray, trigger: float):
         """Write body height / pitch / roll offsets from left controller.
 
         输出的是"相对标定原点"的纯偏移（不再混入 default_body_height 绝对量），
         由执行端在 absolute_commands 模式下叠加到标定基准上。
         """
+        # 旋转向量同样避免欧拉角奇异；小角度下与原来的 pitch/roll 映射一致。
+        # 原始三通道：[高度偏移(m), pitch(rad), roll(rad)]（符号沿用旧映射）
+        raw = np.array([delta_pos[2], -delta_rotvec[0], delta_rotvec[1]], dtype=np.float64)
+
+        if self._body_clutch_on:
+            # 步骤4b：按住左握持键，机体高度/俯仰/横滚才跟手；松开保持
+            raw = self._body_clutch.update(raw, self._grip["left"])
+
+        body = np.array([self._apply_deadzone(raw[0], self.pos_deadzone),
+                         self._apply_deadzone(raw[1], self.rot_deadzone),
+                         self._apply_deadzone(raw[2], self.rot_deadzone)])
+
         # height: Z 偏移 + 扳机积分（按住持续升高，松手保持，标定/reset 归零）
         if trigger > 0.5:
-            self._body_height_offset += self.height_sensitivity * self._dt
+            self._body_height_offset += self.height_sensitivity * self._body_dt
             self._body_height_offset = float(np.clip(self._body_height_offset, -0.5, 0.5))
-        self._command[9] = (
-            self._apply_deadzone(delta_pos[2], self.pos_deadzone) * self.height_sensitivity
-            + self._body_height_offset
-        )
-
-        # pitch / roll from rotation delta (Euler XYZ in sim frame)
-        euler = r_diff.as_euler("XYZ", degrees=False)
-        self._command[10] = -self._apply_deadzone(euler[0], self.rot_deadzone) * self.pitch_sensitivity
-        self._command[11] =  self._apply_deadzone(euler[1], self.rot_deadzone) * self.roll_sensitivity
+        self._command[9] = body[0] * self.height_sensitivity + self._body_height_offset
+        self._command[10] = body[1] * self.pitch_sensitivity
+        self._command[11] = body[2] * self.roll_sensitivity
 
     @staticmethod
     def _apply_deadzone(v: float, threshold: float) -> float:
@@ -417,9 +552,15 @@ class Se2VRExtended(DeviceBase):
         stick_x = float(stick.get("x", 0.0))
         stick_y = float(stick.get("y", 0.0))
 
-        self._command[0] = - stick_y * self.v_x_sensitivity
-        self._command[1] = - stick_x * self.v_y_sensitivity
-
+        if not self._stick_shaping:  # 旧行为：纯线性
+            self._command[0] = - stick_y * self.v_x_sensitivity
+            self._command[1] = - stick_x * self.v_y_sensitivity
+            return
+        # 圆形死区 → 曲线 → 模长限幅 ≤ 1；再乘各轴最大速度，之后由 advance() 做斜率限制
+        shaped = shape_stick(np.array([stick_x, stick_y]), self._stick_deadzone, self._stick_expo)
+        self._stick_target[0] = -shaped[1] * self.v_x_sensitivity
+        self._stick_target[1] = -shaped[0] * self.v_y_sensitivity
+        self._stick_stamp["left"] = time.monotonic()
 
     # ------------------------------------------------------------------
     # Coordinate conversion  (identical to XTrainerVR._convert_goal_to_pose)
@@ -532,17 +673,51 @@ class Se2VRExtended(DeviceBase):
             print(f"❌ VR loop failed: {exc}")
 
     def _display_info(self):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-        except Exception:
-            ip = "localhost"
-        print("\n" + "=" * 50)
-        print("🎧  Se2VRExtended ready!")
-        print(f"👉  https://{ip}:{self._xlevr_cfg.https_port}")
-        print("=" * 50 + "\n")
+        https_port = self._xlevr_cfg.https_port
+        ws_port = self._xlevr_cfg.websocket_port
+        ips = _list_local_ipv4()
+        print("\n" + "=" * 60)
+        print("🎧  VRLocoManipTeleop ready!")
+        print("  在 Quest 浏览器里打开下面【其中一个】地址（接受一次证书警告）：")
+        print("  ── 无线（Quest 与本机须在同一网段，选与 Quest IP 前三段相同的那个）──")
+        if ips:
+            for ip, is_default in ips:
+                tag = "  ← 默认出口网卡" if is_default else ""
+                print(f"  👉  https://{ip}:{https_port}{tag}")
+        else:
+            print(f"  👉  https://localhost:{https_port}   （未探测到局域网 IP）")
+        print("  ── USB 线直连（延迟最低最稳，推荐）──")
+        print(f"  1) 主机运行: adb reverse tcp:{https_port} tcp:{https_port} && "
+              f"adb reverse tcp:{ws_port} tcp:{ws_port}")
+        print(f"  2) Quest 打开: 👉  https://localhost:{https_port}")
+        print("=" * 60 + "\n")
+
+
+def _list_local_ipv4() -> list[tuple[str, bool]]:
+    """列出本机所有可用 IPv4（排除回环/链路本地）。返回 [(ip, 是否默认出口)]，默认出口排第一。"""
+    default_ip = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))  # UDP connect 不发包，只用来取默认路由的本机地址
+        default_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        pass
+    found: list[str] = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            found.append(info[4][0])
+    except Exception:
+        pass
+    if default_ip:
+        found.append(default_ip)
+    out: list[tuple[str, bool]] = []
+    for ip in dict.fromkeys(found):  # 去重保序
+        if ip.startswith("127.") or ip.startswith("169.254.") or ip == "0.0.0.0":
+            continue
+        out.append((ip, ip == default_ip))
+    out.sort(key=lambda t: not t[1])
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -564,8 +739,8 @@ class _SimpleFileHandler(http.server.SimpleHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 @dataclass
-class Se2VRExtendedCfg(DeviceCfg):
-    """Configuration for :class:`Se2VRExtended`.
+class VRLocoManipTeleopCfg(DeviceCfg):
+    """Configuration for :class:`VRLocoManipTeleop`.
 
     All sensitivity values are simple linear scales applied to the raw
     delta before it is written into the command vector.
@@ -578,6 +753,42 @@ class Se2VRExtendedCfg(DeviceCfg):
     """Lateral velocity scale (left thumbstick X)."""
     omega_z_sensitivity: float = 1.0
     """Yaw rate scale (left thumbstick twist / rotation)."""
+
+    # -- 底盘摇杆整形（死区 → 曲线 → 模长限幅 → 斜率限制）--
+    stick_shaping_enabled: bool = False
+    """False 则回退为旧的纯线性映射（用于 A/B 手感对比）。"""
+    stick_deadzone: float = 0.12
+    """摇杆圆形死区（0~1）。模长小于此值输出 0，超出部分重标定到 [0,1]，边缘连续。"""
+    stick_expo: float = 0.5
+    """平移摇杆曲线：0=线性，1=纯立方。越大小推杆越细腻，推满仍是最大速度。"""
+    yaw_expo: float = 0.4
+    """偏航摇杆曲线，含义同 stick_expo。"""
+    v_x_accel: float = 4.0
+    """前后速度"加速"斜率上限（m/s²）。"""
+    v_x_decel: float = 8.0
+    """前后速度"减速/回零"斜率上限（m/s²），比加速大以便能及时停下。"""
+    v_y_accel: float = 2.0
+    """侧向速度加速斜率上限（m/s²）。"""
+    v_y_decel: float = 4.0
+    omega_z_accel: float = 4.0
+    """偏航角速度加速斜率上限（rad/s²）。"""
+    omega_z_decel: float = 8.0
+    stick_timeout: float = 0.5
+    """摇杆数据超时（s）。超时视为手柄丢失，目标速度回 0。"""
+
+    # -- 机械臂离合键（默认开）--
+    arm_clutch_enabled: bool = True
+    """True：按住右握持键(grip)才让机械臂跟随手柄，松开冻结，再按从当前位置继续（无需重新标定）。"""
+    arm_clutch_pos_limit: float = 0.4
+    """离合模式下末端位置偏移上限(m)，逐轴；超出部分被吸收，手一回退立刻反向跟随，没有空行程。"""
+    arm_clutch_rot_limit: float = 1.0
+    """离合模式下末端姿态偏移上限(rad)，逐轴。"""
+
+    # -- 机体姿态离合键（默认开）--
+    body_clutch_enabled: bool = True
+    """按住左握持键才让机体高度/俯仰/横滚跟手，避免推摇杆时手腕倾斜串扰机体。"""
+    body_clutch_limit: float = 0.5
+    """机体离合偏移上限（高度 m / 角度 rad，逐轴同值，最终仍受执行端 clamp）。"""
 
     # -- body pose --
     default_body_height: float = 0.513
@@ -600,11 +811,11 @@ class Se2VRExtendedCfg(DeviceCfg):
         (0, -1.0),  # command[7] = EE pitch <- 手柄局部 roll（初始猜测，实验后改）
         (2, +1.0),  # command[8] = EE yaw   <- 手柄局部 yaw
     )
-    """手柄局部轴 -> EE roll/pitch/yaw 通道映射，每项 (euler_local下标, 符号)。
+    """手柄局部旋转向量 -> EE roll/pitch/yaw 通道映射，每项 (rotvec下标, 符号)。
 
-    下标含义：0=手柄局部 roll(x)，1=手柄局部 pitch(y)，2=手柄局部 yaw(z)。
+    下标含义：0=绕手柄局部 x 轴，1=绕 y 轴，2=绕 z 轴。
     单轴实验方法：按 B 标定后，每次只做一种纯旋转（俯仰/偏航/滚转），
-    看 euler_local 哪个分量被激活、末端实际绕哪根轴转，再把 (下标, 符号)
+    看 rotvec_local 哪个分量被激活、末端实际绕哪根轴转，再把 (下标, 符号)
     填到对应 command 通道。初始值是按位置通道的 (x,y,z)->(y,-x,z) 映射猜的。
     """
 
@@ -626,4 +837,4 @@ class Se2VRExtendedCfg(DeviceCfg):
     """手柄旋转偏移死区（rad），小于该值的旋转视为 0，抑制抖动。"""
 
     # Required by DeviceCfg
-    class_type: type[DeviceBase] = Se2VRExtended
+    class_type: type[DeviceBase] = VRLocoManipTeleop

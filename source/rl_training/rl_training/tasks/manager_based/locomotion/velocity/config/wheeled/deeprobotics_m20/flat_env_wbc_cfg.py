@@ -930,7 +930,7 @@ class AblLegacyAllEnvWBCConfig(FlatEnvWBCConfig):
 
     注意：本变体与 `main` 的差别**不止 ⑫** —— 分支上还有若干与训练无关的改动
     （删死代码 ⑧、加报错提示 ⑩、加启动打印 ⑱、`setup.py` 打包、视觉编码器本地权重、
-    `vr_extented` 调试开关等），它们对低层训练是惰性的，但严格说这条轴测的是
+    `vr_loco_manip_teleop` 调试开关等），它们对低层训练是惰性的，但严格说这条轴测的是
     "⑫ + 这些惰性改动"。见 `docs/review/DEFECT_LOG_zh.md` DEF-040 §3。
     """
 

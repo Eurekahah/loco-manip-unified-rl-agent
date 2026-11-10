@@ -29,8 +29,11 @@ if TYPE_CHECKING:
 class TeleopLLAction(LowLevelPolicyActionBase):
     r"""Pre-trained policy action term.
 
-    raw_actions 直接对应 ll_command，每维都是绝对目标值（无增量累积）：
-        [vx, vy, wz,  ee_x_b, ee_y_b, ee_z_b,  ee_roll_b, ee_pitch_b, ee_yaw_b,  body_height, body_pitch, body_roll]
+    raw_actions 对应 ll_command：
+        [vx, vy, wz,  ee_dx_b, ee_dy_b, ee_dz_b,  ee_drx_b, ee_dry_b, ee_drz_b,
+         body_height, body_pitch, body_roll]
+
+    其中 EE 旋转三项是**旋转向量**（axis-angle），不是欧拉角。
 
     处理流程：
       1. tanh + range mapping → 将原始动作映射到目标物理范围
@@ -70,7 +73,7 @@ class TeleopLLAction(LowLevelPolicyActionBase):
 
     def __init__(self, cfg: TeleopLLActionCfg, env: ManagerBasedRLEnv) -> None:
         # `_raw_actions` 必须在 super().__init__ 之前分配：基类构造低层观测时会用到它
-        # raw_actions: 12 维绝对目标值
+        # raw_actions: 12 维（速度 + EE 位置偏移 + EE 旋转向量 + 机体姿态偏移）
         self._raw_actions = torch.zeros(env.num_envs, self.action_dim, device=env.device)
         super().__init__(cfg, env)
 
@@ -90,6 +93,28 @@ class TeleopLLAction(LowLevelPolicyActionBase):
         self._default_body_pose[:, 0] = 0.51  # height 默认 0.51，pitch/roll 默认 0
         
         self.arm_link_ids = self.robot.find_bodies(["arm.*"])[0]
+
+        # ---- IK 对比门控：绝对 7D 目标 vs 每步相对 6D 增量 ----
+        self._relative_ik = bool(getattr(self.cfg, "relative_ik_commands", False))
+        ik_dim = 6 if self._relative_ik else 7
+        self._ik_command_b = torch.zeros(self.num_envs, ik_dim, device=self.device)
+        self._last_ik_target_pos_b = torch.zeros(self.num_envs, 3, device=self.device)
+        self._last_ik_target_quat_b = torch.zeros(self.num_envs, 4, device=self.device)
+        self._last_ik_target_quat_b[:, 0] = 1.0
+        if self._relative_ik:
+            controller_cfg = getattr(self.cfg.low_level_ee_actions, "controller", None)
+            if controller_cfg is None or not bool(getattr(controller_cfg, "use_relative_mode", False)):
+                raise ValueError(
+                    "[TeleopLLAction] relative_ik_commands=True 时，"
+                    "low_level_ee_actions.controller.use_relative_mode 也必须为 True。"
+                )
+            if self._ee_ik_action_term is None:
+                raise ValueError("[TeleopLLAction] relative_ik_commands=True 但低层没有 ee_ik action term。")
+            if not hasattr(self._ee_ik_action_term, "set_command_override"):
+                raise ValueError(
+                    "[TeleopLLAction] relative_ik_commands=True 需要 CommandDrivenIKAction "
+                    "提供 set_command_override()。"
+                )
     
 
     # ------------------------------------------------------------------
@@ -155,6 +180,9 @@ class TeleopLLAction(LowLevelPolicyActionBase):
         self._default_ee_pos_b[env_ids]  = ee_pos_b
         self._default_ee_quat_b[env_ids] = ee_quat_b
         self._default_ee_pose_initialized[env_ids] = True
+        # 相对 IK 的“上一步目标”必须从同一个标定基准起步，避免首步产生大跳变。
+        self._last_ik_target_pos_b[env_ids] = ee_pos_b
+        self._last_ik_target_quat_b[env_ids] = ee_quat_b
 
     def recalibrate(self, env_ids: torch.Tensor | None = None):
         """把标定基准重锚到机器人当前状态（EE 位姿 + 机身高度/pitch/roll）。
@@ -182,6 +210,8 @@ class TeleopLLAction(LowLevelPolicyActionBase):
         roll, pitch, _ = math_utils.euler_xyz_from_quat(
             self.robot.data.root_quat_w[env_ids]
         )
+        roll = math_utils.wrap_to_pi(roll)
+        pitch = math_utils.wrap_to_pi(pitch)
         self._default_body_pose[env_ids, 0] = height
         self._default_body_pose[env_ids, 1] = pitch
         self._default_body_pose[env_ids, 2] = roll
@@ -259,12 +289,13 @@ class TeleopLLAction(LowLevelPolicyActionBase):
         ], dim=-1)  # (N, 3) 对结果 clamp，保证真正意义上的工作空间限制
         self._ll_command[:, 3:6] = ee_pos_b
 
-        # ── 3. EE 姿态：四元数乘法叠加（相对标定基准/上一步 default）──
-        ee_droll_b  = -actions[:, 6]
-        ee_dpitch_b = actions[:, 7]
-        ee_dyaw_b   = actions[:, 8]
-
-        delta_quat_b = math_utils.quat_from_euler_xyz(ee_droll_b, ee_dpitch_b, ee_dyaw_b)
+        # ── 3. EE 姿态：旋转向量 -> 四元数增量（不经过欧拉角，无万向锁）──
+        ee_rotvec_b = torch.stack(
+            [-actions[:, 6], actions[:, 7], actions[:, 8]], dim=-1
+        )
+        ee_angle_b = torch.linalg.vector_norm(ee_rotvec_b, dim=-1)
+        ee_axis_b = ee_rotvec_b / ee_angle_b.clamp_min(1.0e-8).unsqueeze(-1)
+        delta_quat_b = math_utils.quat_from_angle_axis(ee_angle_b, ee_axis_b)
         ee_quat_b = math_utils.quat_mul(self._default_ee_quat_b, delta_quat_b)
         self._ll_command[:, 6:10] = ee_quat_b
 
@@ -299,11 +330,28 @@ class TeleopLLAction(LowLevelPolicyActionBase):
     def _on_low_level_tick(self) -> None:
         """低层 tick（跑策略之前）把高层 EE 目标写给 IK。
 
-        目标写 ``pose_command_b``（root 系）：IK 读的就是这个字段（清单 ②）。
+        默认：``pose_command_b``（root 系绝对 7D）直接给 IK。
+        相对 IK 门控：另注入 6D 目标变化量，``pose_command_b`` 仍保留绝对目标供观测/奖励使用。
         """
         push_ee_target_to_ik(
             self._ee_command_term, self._ll_command[:, 3:10], tag=type(self).__name__
         )
+        if self._ee_ik_action_term is not None and hasattr(
+            self._ee_ik_action_term, "set_command_override"
+        ):
+            if self._relative_ik:
+                # 在 IK 真正消费目标的 tick 才差分，保证每个增量都被 IK 看到。
+                target_pos_b = self._ll_command[:, 3:6]
+                target_quat_b = self._ll_command[:, 6:10]
+                self._ik_command_b[:, 0:3] = target_pos_b - self._last_ik_target_pos_b
+                self._ik_command_b[:, 3:6] = math_utils.quat_box_minus(
+                    target_quat_b, self._last_ik_target_quat_b
+                )
+                self._last_ik_target_pos_b[:] = target_pos_b
+                self._last_ik_target_quat_b[:] = target_quat_b
+            self._ee_ik_action_term.set_command_override(
+                self._ik_command_b if self._relative_ik else None
+            )
 
     def _on_reset(self, env_ids) -> None:
         """episode 复位时重锚工作空间基准（低层动作缓存的清空由 replay state 负责）。
@@ -417,6 +465,9 @@ class TeleopLLActionCfg(ActionTermCfg):
     absolute_commands: bool = False
     """True：把 raw_actions 当作"相对标定基准的偏移"，目标 = 标定基准 + 偏移，不滚动累加（VR 遥操用）。
     False：保持"相对上一步"的滚动积分增量语义（键盘遥操用）。"""
+
+    relative_ik_commands: bool = False
+    """True：把目标变化量差分成每步 6D 相对位姿送 IK，用于和绝对目标 IK 对比。"""
 
     # delta_* 字段全部移除
 

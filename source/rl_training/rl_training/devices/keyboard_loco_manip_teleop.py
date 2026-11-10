@@ -18,7 +18,7 @@ import omni
 from isaaclab.devices import DeviceBase, DeviceCfg
 
 
-class Se2KeyboardFull(DeviceBase):
+class KeyboardLocoManipTeleop(DeviceBase):
     r"""Keyboard controller outputting a 13-D command vector.
 
     Command layout (matches the ActionTerm's ``action_dim=13``):
@@ -104,7 +104,7 @@ class Se2KeyboardFull(DeviceBase):
         way (zero when no key held).
     """
 
-    def __init__(self, cfg: Se2KeyboardFullCfg):
+    def __init__(self, cfg: KeyboardLocoManipTeleopCfg):
         """Initialise the keyboard interface.
 
         Args:
@@ -244,7 +244,7 @@ class Se2KeyboardFull(DeviceBase):
             elif event.input.name == "G":
                 self._gripper_state = -1.0 if self._gripper_state >= 0.0 else 1.0
                 state_str = "OPEN" if self._gripper_state > 0 else "CLOSED"
-                print(f"[Se2KeyboardFull] Gripper → {state_str}")
+                print(f"[KeyboardLocoManipTeleop] Gripper → {state_str}")
             elif event.input.name in self._INPUT_KEY_MAPPING:
                 self._base_command += self._INPUT_KEY_MAPPING[event.input.name]
 
@@ -344,8 +344,8 @@ class Se2KeyboardFull(DeviceBase):
 # ---------------------------------------------------------------------------
 
 @dataclass
-class Se2KeyboardFullCfg(DeviceCfg):
-    """Configuration for :class:`Se2KeyboardFull`.
+class KeyboardLocoManipTeleopCfg(DeviceCfg):
+    """Configuration for :class:`KeyboardLocoManipTeleop`.
 
     All ``*_sensitivity`` values scale the per-frame delta magnitude while the
     corresponding key is held down.  Tune these to match your sim timestep and
@@ -379,4 +379,4 @@ class Se2KeyboardFullCfg(DeviceCfg):
     ee_orn_sensitivity:  float = 0.02
     """Per-frame EE orientation increment (rad)."""
 
-    class_type: type[DeviceBase] = Se2KeyboardFull
+    class_type: type[DeviceBase] = KeyboardLocoManipTeleop
