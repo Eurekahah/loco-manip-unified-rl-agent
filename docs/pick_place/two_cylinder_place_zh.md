@@ -28,7 +28,7 @@ HighLevelFlatEnvCfg
 
 - `HighLevelFlatEnvCfg` 的平地训练语义。
 - `PreTrainedPickWBCAction` 与现有 WBC checkpoint。
-- `TeleopLLAction` 的键盘增量/VR 绝对命令语义。
+- `TeleopLLAction` 的统一绝对偏移语义：键盘增量由采集脚本累积成与 VR 相同的“标定锚点 + 偏移”，每次 reset 重新标定。
 - 低层货架任务的教师观测、目标垫相对位姿、机身姿态和夹爪状态观测。
 - 现有 `LowShelfHDF5Recorder`、RGB-D 相机工厂和 HDF5 检查/回放脚本。
 
@@ -247,6 +247,8 @@ python scripts/data/smoke_low_shelf_cameras.py --task Isaac-M20-Piper-TwoCylinde
 ```
 
 ### 8.5 键盘功能测试与采集
+
+键盘与 VR 使用同一动作语义；`action` 中的 `delta_*` 字段表示相对重新标定锚点的偏移，不是逐帧滚动增量。
 
 ```powershell
 python scripts/data/collect_low_shelf_hdf5.py --task Isaac-M20-Piper-TwoCylinder-Collect-v0 --input keyboard --num_envs 1 --max_steps 3 --output recordings/two_cylinder_smoke/keyboard_gui.hdf5 --overwrite

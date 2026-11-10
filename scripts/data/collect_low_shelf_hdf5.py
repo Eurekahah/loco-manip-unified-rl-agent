@@ -7,6 +7,8 @@ import argparse
 import os
 from datetime import datetime
 
+import numpy as np
+
 from isaaclab.app import AppLauncher
 
 
@@ -50,6 +52,43 @@ from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place
 import rl_training.tasks  # noqa: F401, E402
 
 
+class _KeyboardAbsoluteAdapter:
+    """Convert keyboard held-key deltas into VR-style absolute offsets.
+
+    ``KeyboardLocoManipTeleop`` emits a per-frame delta while a key is held.
+    VR teleoperation emits an offset from a calibration anchor instead. To
+    keep one action space for both input sources, accumulate the keyboard
+    deltas into an offset and clip/absorb at the same limits as the VR
+    clutches. Clipping the accumulator in place means reversing a key starts
+    moving the target immediately, matching ``ClutchOffset`` behavior.
+    """
+
+    def __init__(self) -> None:
+        self._offset = np.zeros(13, dtype=np.float32)
+        # Read the limits from the VR config so both input paths stay in sync.
+        vr_cfg = VRLocoManipTeleopCfg()
+        self._pos_limit = vr_cfg.arm_clutch_pos_limit
+        self._rot_limit = vr_cfg.arm_clutch_rot_limit
+        self._body_limit = vr_cfg.body_clutch_limit
+
+    def reset(self) -> None:
+        self._offset[:] = 0.0
+
+    def __call__(self, cmd13: np.ndarray) -> np.ndarray:
+        cmd13 = np.asarray(cmd13, dtype=np.float32).copy()
+        self._offset[3:6] = np.clip(
+            self._offset[3:6] + cmd13[3:6], -self._pos_limit, self._pos_limit
+        )
+        self._offset[6:9] = np.clip(
+            self._offset[6:9] + cmd13[6:9], -self._rot_limit, self._rot_limit
+        )
+        self._offset[9:12] = np.clip(
+            self._offset[9:12] + cmd13[9:12], -self._body_limit, self._body_limit
+        )
+        cmd13[3:12] = self._offset[3:12]
+        return cmd13
+
+
 def _default_output_path(source: str) -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return os.path.join("recordings", "low_shelf_place", f"{stamp}_{source}.hdf5")
@@ -91,10 +130,13 @@ def main() -> None:
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
     action_term = env.action_manager.get_term("pre_trained_pick_action")
-    action_term.cfg.absolute_commands = args_cli.input == "vr"
+    # Both input sources use VR semantics: absolute offsets from a calibration
+    # anchor, not per-step rolling increments.
+    action_term.cfg.absolute_commands = True
     recorder = env.low_shelf_hdf5_recorder
 
     pending_outcome: bool | None = None
+    keyboard_adapter = _KeyboardAbsoluteAdapter() if args_cli.input == "keyboard" else None
 
     def request_reset(success: bool) -> None:
         nonlocal pending_outcome
@@ -129,6 +171,7 @@ def main() -> None:
     print(f"  input      : {args_cli.input}")
     print(f"  cameras    : {', '.join(camera_names)}")
     print(f"  HDF5       : {os.path.abspath(output_path)}")
+    print("  action     : absolute offsets from the recalibrated anchor")
     if args_cli.input == "vr":
         print("  VR start   : right B (start + recalibrate)")
         print("  VR success : left Y")
@@ -138,23 +181,27 @@ def main() -> None:
         print("  keyboard failure : L")
     print("=" * 64 + "\n")
 
-    env.reset()
-    teleop.reset()
-    if args_cli.input == "vr":
+    def reset_episode_state() -> None:
+        teleop.reset()
+        if keyboard_adapter is not None:
+            keyboard_adapter.reset()
         action_term.recalibrate()
+
+    env.reset()
+    reset_episode_state()
 
     step_count = 0
     try:
         while simulation_app.is_running():
             with torch.inference_mode():
                 cmd13 = teleop.advance()
+                if keyboard_adapter is not None:
+                    cmd13 = keyboard_adapter(cmd13)
 
                 if pending_outcome is not None:
                     recorder.mark_outcome(pending_outcome)
                     env.reset()
-                    teleop.reset()
-                    if args_cli.input == "vr":
-                        action_term.recalibrate()
+                    reset_episode_state()
                     print(f"[Collect] saved manual outcome success={pending_outcome}")
                     pending_outcome = None
                     continue
@@ -173,9 +220,7 @@ def main() -> None:
                         f"[Collect] episode ended: terminated={bool(terminated[0].item())} "
                         f"truncated={bool(truncated[0].item())}"
                     )
-                    teleop.reset()
-                    if args_cli.input == "vr":
-                        action_term.recalibrate()
+                    reset_episode_state()
 
                 if args_cli.max_steps > 0 and step_count >= args_cli.max_steps:
                     print(f"[Collect] reached --max_steps={args_cli.max_steps}")

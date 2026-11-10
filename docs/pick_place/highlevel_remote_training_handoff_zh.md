@@ -49,6 +49,8 @@ git rev-parse --short HEAD
  gripper]
 ```
 
+采集任务中键盘和 VR 都使用“重新标定锚点 + 绝对偏移”语义；`delta_*` 指相对锚点的偏移，不是逐帧滚动增量。`gripper` 使用 `+1 = 开`、`-1 = 闭`。
+
 训练任务：
 
 - 使用 `PreTrainedPickWBCAction`。

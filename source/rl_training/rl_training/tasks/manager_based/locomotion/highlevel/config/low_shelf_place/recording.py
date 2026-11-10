@@ -67,6 +67,7 @@ class LowShelfHDF5Recorder(RecorderTerm):
                 "decimation": env.cfg.decimation,
                 "render_interval": env.cfg.sim.render_interval,
                 "num_envs": env.num_envs,
+                "joint_names": tuple(env.scene["robot"].data.joint_names),
                 "termination_names": self._termination_names,
             },
             overwrite=cfg.overwrite,

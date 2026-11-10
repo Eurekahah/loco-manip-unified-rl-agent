@@ -15,6 +15,7 @@ import numpy as np
 
 
 LOW_SHELF_HDF5_SCHEMA = "low_shelf_pick_place/v1"
+ACTION_SEMANTICS = "absolute_offset_from_recalibrated_anchor"
 
 ACTION_LAYOUT = (
     "vx",
@@ -125,6 +126,9 @@ class LowShelfHDF5Writer:
         self._episodes = self._file.create_group("episodes")
 
         self._file.attrs["schema"] = LOW_SHELF_HDF5_SCHEMA
+        # Keyboard and VR collection share one action space: each arm/body
+        # channel is an absolute offset from the recalibrated anchor.
+        self._file.attrs["action_semantics"] = ACTION_SEMANTICS
         self._file.attrs["task"] = task
         self._file.attrs["instruction"] = instruction
         self._file.attrs["source"] = source
@@ -172,6 +176,7 @@ class LowShelfHDF5Writer:
         sim_times = _stack_frames(frames, "sim_time").astype(np.float64)
 
         episode.attrs["num_steps"] = len(frames)
+        episode.attrs["action_semantics"] = ACTION_SEMANTICS
         episode.attrs["success"] = bool(success)
         episode.attrs["termination_label"] = termination_label
         episode.attrs["termination_names"] = json.dumps(list(termination_names))

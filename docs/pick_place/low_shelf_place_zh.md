@@ -78,7 +78,7 @@ Isaac-M20-Piper-LowShelf-Collect-v0
  gripper]
 ```
 
-前 12 维由 `TeleopLLAction` 转成低层 WBC 命令，夹爪继续使用独立的二值开合动作。键盘使用增量语义，VR 使用“标定基准 + 手柄偏移”的绝对命令语义。
+前 12 维由 `TeleopLLAction` 转成低层 WBC 命令，夹爪继续使用独立的二值开合动作。键盘与 VR 现在统一使用“标定基准 + 偏移”的绝对命令语义：VR 直接输出手柄偏移，键盘的按键增量由采集脚本累积成同量纲、同限幅的偏移。两者每次 reset 都会重新标定锚点。
 
 低层策略复用现有 `PreTrainedPickWBCAction` / `TeleopLLAction` 和 WBC checkpoint。新任务只定义场景、物体、目标、观测、奖励、成功条件和采集接口。
 
@@ -93,6 +93,7 @@ Isaac-M20-Piper-LowShelf-Collect-v0
 - `make_workcell_camera(...)`：固定场景相机，默认位于工作单元前左侧，使用世界系 look-at 朝向工作台。
 - `make_wrist_camera(...)`：挂在 `{ENV_REGEX_NS}/Robot/gripper_base/WristCamera`，沿 Piper 工具轴向前下视。
 - 两路都输出 `rgb` 和 `depth`，默认 `224 x 224`、`10 Hz`。
+- 采集控制频率由 `control_dt` 决定（当前约 `50 Hz`），因此原始 HDF5 中相机帧会按 10 Hz 更新，转换为 LeRobot 时可用 `--fps 10` 按整数 stride 下采样，得到无重复帧的 10 Hz 数据集。
 - 相机外参通过 `TiledCamera.data` 读取。腕部相机设置 `update_latest_camera_pose=True`，随机械臂更新。
 - 采集脚本自动设置 `--enable_cameras`，并允许用 `--scene_camera/--no-scene_camera`、`--wrist_camera/--no-wrist_camera` 选择相机。
 - 分辨率、更新周期可配置：`--camera_width`、`--camera_height`、`--camera_update_period`。
@@ -120,6 +121,8 @@ Isaac-M20-Piper-LowShelf-Collect-v0
 
 人工标签会在下一次 `env.reset()` 时写入 HDF5。
 
+每次 reset（人工成功/失败、自动终止或启动时）都会调用 `teleop.reset()`、键盘偏移适配器 reset 和 `action_term.recalibrate()`，保证新 episode 的绝对偏移从零开始。
+
 ### 4.3 HDF5 schema
 
 根组：
@@ -133,6 +136,8 @@ Isaac-M20-Piper-LowShelf-Collect-v0
 ```text
 schema = low_shelf_pick_place/v1
 task, instruction, source, action_layout
+action_semantics = absolute_offset_from_recalibrated_anchor
+joint_names
 camera_names, quaternion_convention
 camera_convention, depth_convention, intrinsics_convention
 sim_dt, control_dt, decimation, render_interval, num_envs
@@ -145,7 +150,7 @@ timestamp [T]              wall-clock Unix time
 sim_time [T]               simulation time
 step_index [T]
 language_instruction       scalar UTF-8
-action [T, 13]             raw high-level action
+action [T, 13]             raw high-level action (absolute offsets)
 processed_action [T, D]    concatenated processed action terms
 ll_command [T, 13]         canonical low-level command
 
@@ -183,6 +188,18 @@ camera/<name>/sensor_frame [T]
 ```
 
 深度使用 `distance_to_image_plane`，单位为米。当前 `depth_clipping_behavior="zero"`，超出裁剪范围或无效像素为 `0`，下游应把 `0` 视为无效深度。
+
+动作语义：
+
+```text
+action[0:3]    底盘绝对速度 [vx, vy, wz]
+action[3:6]    相对重新标定锚点的 EE 位置偏移，限幅 ±0.4 m
+action[6:9]    相对锚点的 EE 旋转向量偏移，限幅 ±1.0 rad
+action[9:12]   相对锚点的机身高度/pitch/roll 偏移，限幅 ±0.5
+action[12]     夹爪，+1 = 开，-1 = 闭
+```
+
+键盘增量在累积到限幅后会就地饱和；反向按键可以立即反向移动，不会出现“先退回限幅再继续”的死区。`action_semantics` 缺失的旧 HDF5 是旧的键盘滚动增量语义，转换器会拒绝转换，必须重新采集。
 
 ## 5. 实施步骤
 
@@ -260,14 +277,14 @@ VR 初始化 smoke：
 
 - 高层训练环境每个 step 推进 `0.2 s` 仿真时间（`sim.dt=0.005`，`decimation=40`），并执行 10 次低层 WBC 策略。
 - 本任务把 viewer 刷新周期设为低层控制步长 `4`，GUI 刷新率约为环境 step 率的 10 倍；物理语义、控制频率和策略行为不变。
-- 采集/纯遥操任务使用 `decimation=4`，控制步长约 `0.02 s`，即约 `50 Hz`；相机默认 `10 Hz`，因此 HDF5 中相邻帧可能重复同一张相机图。
+- 采集/纯遥操任务使用 `decimation=4`，控制步长约 `0.02 s`，即约 `50 Hz`；相机默认 `10 Hz`，因此原始 HDF5 中相邻 5 帧会重复同一张相机图。离线转换使用 `--fps 10`（stride=5）可去掉重复帧，已用 260 帧假数据验证转换后连续帧不再重复。
 - 正式训练仍建议 `--headless`；GUI 建议 `--num_envs 1`。
 
 ## 7. 已知问题
 
 - 尚未用真实 VR 头显完成一次完整 pick-and-place episode，也没有统计抓取/放置成功率。
 - GUI smoke 没有自动注入键盘按键，只验证了设备初始化、主循环和 HDF5 落盘；实际键位移动仍需人工短测。
-- 采集控制频率约 `50 Hz`，相机约 `10 Hz`。若后续 ACT/VLA 训练需要固定 10/20 Hz，建议在离线转换阶段按 `sim_time` 下采样，避免改变遥操响应频率。
+- 采集控制频率约 `50 Hz`，相机约 `10 Hz`。`convert_hdf5_to_lerobot.py --fps 10` 会按整数 stride 对 action/state/video 同步下采样；不要只改元数据 fps，否则时间戳会和实际帧数不符。
 - 深度无效值为 `0`。腕部相机看向远处时深度中位数可能为 0，属于裁剪设置，不应误判为相机损坏。
 - 腕部相机安装位姿依赖当前 Piper `gripper_base` 坐标系。若更换夹爪、相机支架或 USD，需要重新做相机朝向 smoke。
 - 当前 HDF5 每个 episode 在 reset/close 时整段写出，适合单环境遥操采集；长时间多环境流式写入尚未实现。
@@ -363,7 +380,43 @@ VR 标签：
 左 X  保存当前 episode 为失败并 reset
 ```
 
-### 8.6 HDF5 检查与回放
+### 8.6 HDF5 -> LeRobot v3 转换
+
+转换器：`scripts/data/convert_hdf5_to_lerobot.py`。输出使用官方 `LeRobotDataset.create/add_frame/save_episode` API，目录为 LeRobot v3 标准布局（`data/`、`videos/`、`meta/`），不需要自定义 dataloader。
+
+默认按 HDF5 的 `control_dt` 输出 50 Hz：
+
+```powershell
+python scripts/data/convert_hdf5_to_lerobot.py `
+  --input recordings/low_shelf_place/demo.hdf5 `
+  --output datasets/low_shelf_demo `
+  --repo-id local/low_shelf_demo `
+  --overwrite
+```
+
+训练常用 10 Hz，按 stride=5 同步下采样 action/state/video：
+
+```powershell
+python scripts/data/convert_hdf5_to_lerobot.py `
+  --input recordings/low_shelf_place/demo.hdf5 `
+  --output datasets/low_shelf_demo_10hz `
+  --repo-id local/low_shelf_demo_10hz `
+  --fps 10 `
+  --overwrite
+```
+
+默认映射：
+
+```text
+camera/workcell_camera/rgb -> observation.images.camera1
+camera/wrist_camera/rgb    -> observation.images.camera2
+robot/joint_pos            -> observation.state
+action                     -> action
+```
+
+转换器会校验 HDF5 schema、`action_semantics`、动作宽度、`joint_pos`/相机帧数、RGB shape 和 NaN/Inf；`--fps` 必须是源控制频率的整数因子（如 50 -> 25/10），否则直接报错。自定义相机名用 `--camera-map '{"hdf5_name":"camera3"}'`。
+
+### 8.7 HDF5 检查与回放
 
 只检查 schema 和数值：
 
@@ -382,6 +435,45 @@ python scripts/data/replay_low_shelf_hdf5.py --input recordings/collect_smoke/ke
 ```powershell
 python scripts/data/replay_low_shelf_hdf5.py --input recordings/collect_smoke/keyboard.hdf5 --camera wrist_camera --output recordings/collect_smoke/keyboard_wrist_replay.mp4
 ```
+
+### 8.8 SmolVLA CPU smoke
+
+在安装了 LeRobot 和 SmolVLA 依赖的远程环境执行。配置示例（`train_smolvla_low_shelf.yaml`）：
+
+```yaml
+dataset:
+  repo_id: local/low_shelf_demo_10hz
+  root: /path/to/datasets/low_shelf_demo_10hz
+  video_backend: pyav
+policy:
+  type: smolvla
+  pretrained_path: lerobot/smolvla_base
+  repo_id: local/smolvla_low_shelf_demo
+  push_to_hub: false
+  load_vlm_weights: true
+  train_expert_only: true
+  train_state_proj: true
+output_dir: /path/to/outputs/low_shelf_demo
+job_name: low_shelf_demo
+steps: 3
+batch_size: 1
+num_workers: 0
+log_freq: 1
+eval_steps: 0
+wandb:
+  enable: false
+```
+
+```bash
+HF_HOME=/path/to/hf-cache HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  lerobot-train --config_path=train_smolvla_low_shelf.yaml
+```
+
+注意：
+
+- 数据集相机键直接写成 `observation.images.camera1` / `camera2`，训练配置不要再加 `rename_map`；LeRobot 0.6.1 的 `rename_map` 只改 batch 键，不改 SmolVLA 的 `input_features`，会导致 `All image features are missing from the batch`。
+- 离线训练必须设置 `policy.push_to_hub: false`。
+- 无 GPU 时 `device: cpu` 也能跑通；当前 CPU smoke 约 3-4 s/step（batch=1）。
 
 ## 9. 维护约定
 

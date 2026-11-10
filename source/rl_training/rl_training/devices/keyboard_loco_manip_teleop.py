@@ -34,7 +34,7 @@ class KeyboardLocoManipTeleop(DeviceBase):
     ``[9]``       1      ``Δheight``   – body height increment
     ``[10]``      1      ``Δpitch``    – body pitch increment
     ``[11]``      1      ``Δroll``     – body roll increment
-    ``[12]``      1      ``gripper``   – gripper state (0 = open, 1 = closed)
+    ``[12]``      1      ``gripper``   – +1 open / -1 closed / 0 before first toggle
     ============  =====  ================================================
 
     Key bindings

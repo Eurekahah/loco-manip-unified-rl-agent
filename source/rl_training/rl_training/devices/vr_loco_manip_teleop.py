@@ -8,9 +8,9 @@
 Hardware layout
 ---------------
 Left  controller : thumbstick  → chassis SE(2) velocity (vx, vy, wz)
-                   hand pose Δ → body pitch / roll increment
+                   hand pose  → body pitch / roll offset from calibration
                    trigger     → body height up / down
-Right controller : hand pose Δ → arm end-effector 6-DOF (position + quaternion)
+Right controller : hand pose  → arm end-effector 6-DOF offset from calibration
                    trigger     → gripper open / close
 
 Button bindings
@@ -23,10 +23,10 @@ Output from advance()
 ---------------------
 np.ndarray of shape (13,):
     [vx, vy, wz,                          # indices 0-2  chassis velocity
-     arm_dx, arm_dy, arm_dz,              # indices 3-5  arm Cartesian delta (m)
-     arm_dr, arm_dp, arm_dy,              # indices 6-8  arm rotation delta (quat)
-     delta_h, delta_pitch, delta_roll,    # indices 9-11 body pose delta
-     arm_gripper]                         # index   12    gripper [0=open, 1=closed]
+     arm_dx, arm_dy, arm_dz,              # indices 3-5  arm Cartesian offset (m)
+     arm_dr, arm_dp, arm_dy,              # indices 6-8  arm rotation-vector offset (rad)
+     delta_h, delta_pitch, delta_roll,    # indices 9-11 body pose offset
+     arm_gripper]                         # index   12    +1 open / -1 closed
 """
 
 from __future__ import annotations

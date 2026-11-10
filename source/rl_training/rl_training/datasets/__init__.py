@@ -4,6 +4,7 @@
 """Dataset helpers shared by task scripts and offline tools."""
 
 from .low_shelf_hdf5 import (
+    ACTION_SEMANTICS,
     ACTION_LAYOUT,
     LOW_SHELF_HDF5_SCHEMA,
     LowShelfHDF5Writer,
@@ -11,6 +12,7 @@ from .low_shelf_hdf5 import (
 )
 
 __all__ = [
+    "ACTION_SEMANTICS",
     "ACTION_LAYOUT",
     "LOW_SHELF_HDF5_SCHEMA",
     "LowShelfHDF5Writer",
