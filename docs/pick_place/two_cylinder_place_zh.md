@@ -413,6 +413,38 @@ TRANSFORMERS_OFFLINE=1 \
 - `push_to_hub: false` 是离线训练必须项。
 - 原始 50 Hz HDF5 不要直接按 50 fps 训练；那会让 SmolVLA 看到 5 帧重复画面配不同 action。微调使用 `--fps 10` 去重后的数据即可。
 
+“5 帧重复”的具体含义：控制循环是 `50 Hz`（`control_dt = 0.02 s`），相机 `update_period = 0.1 s`，即相机只有 `10 Hz`。因此原始 HDF5 里每 5 个连续 step 共用同一张 RGB，但对应 5 个不同的 action 和机器人状态。按 50 fps 训练时，模型会看到“画面完全不变、动作却在变”的样本，动作变化率被放大 5 倍，视频时间轴也和真实时间不一致。用 `--fps 10`（stride=5）保留 `0,5,10,...` 帧后，图像、状态、action 和视频时间轴都回到真实的 10 Hz。
+
+### 8.12 特权脚本示例 episode（无需 VR）
+
+真实 VR 数据到位前，可以先用脚本化示例打通“采集 -> LeRobot -> SmolVLA”整条链路。脚本直接读取仿真里的机器人、糖盒和目标垫世界位姿，用关节空间关键帧搜索规划一条“矮台抓取 -> 抬升 -> 底盘侧移 -> 高台放置”的完整路线；13 维动作、三路相机和 HDF5 schema 与 VR/键盘采集完全一致。
+
+```powershell
+conda activate env_isaac_lab
+python scripts/data/collect_two_cylinder_planned_demo.py `
+  --headless --num_envs 1 `
+  --base_x 0.30 --base_y -0.16 `
+  --output recordings/two_cylinder_place/planned_demo_final.hdf5 `
+  --overwrite
+```
+
+输出与验证：
+
+```powershell
+python scripts/data/replay_low_shelf_hdf5.py `
+  --input recordings/two_cylinder_place/planned_demo_final.hdf5 --check-only
+
+python scripts/data/replay_two_cylinder_three_view.py `
+  --input recordings/two_cylinder_place/planned_demo_final.hdf5 `
+  --episode 0 --stride 5 --fps 10 `
+  --output recordings/replay/two_cylinder_planned_three_view.mp4 `
+  --frame recordings/replay/two_cylinder_planned_last.png
+```
+
+预期：`source=privileged_planner`、`success=True`、`action shape=(N, 13)`、三路 RGB、`depth=not-recorded`。
+
+该示例不是人工遥操：糖盒在夹爪贴近后以运动学方式刚性跟随夹爪（糖盒高而窄，Piper 小开口下的真实摩擦抓取不稳定），底盘 XY 和机身高度也按标定锚点脚本化驱动。它只用于验证数据格式、LeRobot 转换和 SmolVLA 训练流程，不能代替真实抓取成功率统计；正式微调数据仍以 VR 采集为准。
+
 ## 9. 后续优先级
 
 1. 用键盘/VR 人工确认矮台可达站位和抓取姿态。
