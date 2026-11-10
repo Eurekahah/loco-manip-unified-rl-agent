@@ -475,6 +475,130 @@ HF_HOME=/path/to/hf-cache HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
 - 离线训练必须设置 `policy.push_to_hub: false`。
 - 无 GPU 时 `device: cpu` 也能跑通；当前 CPU smoke 约 3-4 s/step（batch=1）。
 
+### 8.9 VR 单任务端到端：采集 -> LeRobot v3 -> SmolVLA 微调
+
+以下命令以低层货架任务为例；换任务时只改 `--task` 和输出名。
+
+#### 8.9.1 VR 采集（Windows 本机）
+
+前置条件：头显与主机在同一局域网，放行 HTTPS `8443` 和 WebSocket `8442`；启动后终端会打印 `https://<主机IP>:8443`，头显浏览器打开该地址。XLeVR 证书使用仓库内的 `source/rl_training/rl_training/xtrainer_utils/XLeVR/cert.pem`。
+
+```powershell
+cd D:\nvidia-isaac-sim\loco-manip-unified-rl-agent
+conda activate env_isaac_lab
+python scripts/data/collect_low_shelf_hdf5.py `
+  --task Isaac-M20-Piper-LowShelf-Collect-v0 `
+  --input vr `
+  --num_envs 1 `
+  --output recordings/low_shelf_place/vr_task.hdf5 `
+  --overwrite
+```
+
+- 结果写到 `recordings/low_shelf_place/vr_task.hdf5`（相对仓库根目录）。不传 `--output` 时默认是 `recordings/low_shelf_place/<YYYYMMDD_HHMMSS>_vr.hdf5`。
+- 默认两路相机 `224 x 224`、`10 Hz`；控制频率约 `50 Hz`。需要 25 Hz 相机时加 `--camera_update_period 0.04`，转换时对应使用 `--fps 25`。
+- 一个 HDF5 可以包含多个 episode。右 B 开始并重新标定；左 Y 保存成功并 reset；左 X 保存失败并 reset；直接退出会把当前 episode 以 `shutdown_manual_stop` 保存。
+- `--overwrite` 会覆盖同名 HDF5；正式采集不要误加。
+
+#### 8.9.2 转成 LeRobot v3
+
+推荐把 HDF5 拷到远程训练机再转换（本机已安装 LeRobot 时也可以直接在本机执行同一条转换命令）：
+
+```powershell
+scp -P 558 recordings/low_shelf_place/vr_task.hdf5 root@<remote-host>:/root/tievnas/hjx/smolvla/datasets/raw/
+```
+
+```bash
+cd /root/loco-manip-unified-rl-agent
+/data/smolvla/venv/bin/python scripts/data/convert_hdf5_to_lerobot.py \
+  --input /root/tievnas/hjx/smolvla/datasets/raw/vr_task.hdf5 \
+  --output /root/tievnas/hjx/smolvla/datasets/low_shelf_vr_10hz \
+  --repo-id local/low_shelf_vr_10hz \
+  --fps 10 \
+  --overwrite
+```
+
+输出目录是标准 LeRobot v3：`data/`、`videos/observation.images.camera1`、`videos/observation.images.camera2`、`meta/`。`meta/source_episodes.json` 保留每个 HDF5 episode 的成功/失败标签，`meta/conversion_info.json` 记录 `source_fps`、输出 `fps` 和 `stride`。
+
+#### 8.9.3 SmolVLA 微调
+
+远程训练机新建 `train_low_shelf_vr.yaml`：
+
+```yaml
+dataset:
+  repo_id: local/low_shelf_vr_10hz
+  root: /root/tievnas/hjx/smolvla/datasets/low_shelf_vr_10hz
+  video_backend: pyav
+policy:
+  type: smolvla
+  pretrained_path: lerobot/smolvla_base
+  repo_id: local/smolvla_low_shelf_vr
+  push_to_hub: false
+  load_vlm_weights: true
+  train_expert_only: true
+  train_state_proj: true
+  chunk_size: 20
+  n_action_steps: 20
+output_dir: /root/tievnas/hjx/smolvla/outputs/low_shelf_vr
+job_name: low_shelf_vr
+steps: 20000
+batch_size: 1
+num_workers: 0
+log_freq: 10
+eval_steps: 0
+save_freq: 1000
+wandb:
+  enable: false
+```
+
+```bash
+cd /root/tievnas/hjx/smolvla
+HF_HOME=/root/tievnas/hjx/smolvla/hf-cache HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  /data/smolvla/venv/bin/lerobot-train \
+  --config_path=/root/tievnas/hjx/smolvla/train_low_shelf_vr.yaml
+```
+
+- 输出在 `output_dir/checkpoints/last/pretrained_model`；中断后可加 `--resume=true` 继续。
+- `chunk_size: 20` 在 10 Hz 下覆盖 2 秒，适合 pick-and-place；默认 `50` 在 10 Hz 下是 5 秒，可能过长。已经验证 `chunk_size: 20` 能正常加载和训练。
+- 有 GPU 时把 `batch_size` 调大；当前无卡 CPU 用 `batch_size: 1`。
+- 不要加 `rename_map`；转换器已经直接输出 `camera1/camera2`。离线训练必须 `push_to_hub: false`。
+
+#### 8.9.4 相机设置与 smolvla_base 预训练配置的差异
+
+`lerobot/smolvla_base` 的 `config.json` 声明的是：
+
+```text
+camera1, camera2, camera3      3 x 256 x 256
+observation.state              6 维
+action                         6 维
+resize_imgs_with_padding       512 x 512
+```
+
+当前采集/微调数据是：
+
+```text
+camera1, camera2               3 x 224 x 224
+observation.state              24 维
+action                         13 维
+resize_imgs_with_padding       512 x 512（沿用 base）
+```
+
+所以原始相机设置并不和预训练声明完全一样，但微调是兼容的：SmolVLA 会根据数据集重建 `input_features`/`output_features`，视觉预处理器仍把每路图像等比缩放并 padding 到 `512 x 512`。预训练声明里的 3 相机、6 维 state/action 是 base checkpoint 的原始机器人配置，不是微调硬约束。相机键名必须保持 `camera1`/`camera2`，并且训练和部署使用相同的相机位置、分辨率和内参。
+
+参考 SO100 数据集 `svla_so100_pickplace` 是 `480 x 640`、30 Hz；当前数据是 `224 x 224`、10 Hz。能训练，但视觉细节和时间分辨率都更低。想更接近 base 配置，可在采集时加 `--camera_width 256 --camera_height 256`；如果更看重动作时间分辨率，可用 25/50 Hz 相机设置。
+
+#### 8.9.5 为什么 50 Hz 数据里相机只有 10 Hz
+
+控制循环按 `control_dt=0.02 s` 记录 action/state，即 50 行/秒；相机 `update_period=0.1 s`，只渲染 10 张/秒。因此原始 HDF5 的 1 秒数据会像这样：
+
+```text
+行号:    0 1 2 3 4 5 6 7 8 9
+相机帧:  A A A A A B B B B B
+```
+
+如果直接按 50 fps 转成视频，视频里会有 50 帧，但只有 10 张不同的图。SmolVLA 会看到连续 5 个相同画面配不同 action，既浪费算力，也会让时间统计失真。`--fps 10` 会取第 `0,5,10,...` 行，得到 `A,B,...`，action/state/video 在同一时刻对齐；这就是当前推荐 `--fps 10` 的原因。
+
+如果希望 25 Hz 数据，采集时用 `--camera_update_period 0.04`，转换用 `--fps 25`（stride=2）；希望 50 Hz 就用 `--camera_update_period 0.02`，转换保持默认 50 Hz。不要只改转换器的 `--fps` 而不重采样，当前转换器已经会拒绝这种只改元数据的用法。
+
 ## 9. 维护约定
 
 每次完成一个实施步骤，都要同步更新本文件的：
