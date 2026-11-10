@@ -251,10 +251,12 @@ class ClutchOffset:
             np.asarray(limit, dtype=np.float64), (self.dim,)).copy()
         self.held = np.zeros(self.dim)
         self._anchor: np.ndarray | None = None  # 按下瞬间的 raw
+        self._last_output = np.zeros(self.dim)
         self.engaged = False
 
     def reset(self) -> None:
         self.held[:] = 0.0
+        self._last_output[:] = 0.0
         self._anchor = None
         self.engaged = False
 
@@ -268,12 +270,22 @@ class ClutchOffset:
             self._anchor = None
         self.engaged = bool(engaged)
         if not self.engaged:
+            self._last_output = self.held.copy()
             return self.held.copy()
         out = self._current(raw)
         clipped = self._clipped(out)
         # 吸收超出部分：把锚点平移，使输出恰好等于限幅值
         self._anchor = self._anchor + (out - clipped)
+        self._last_output = clipped.copy()
         return clipped
+
+    def release(self) -> np.ndarray:
+        """用最后一次实际输出冻结离合，适用于松开 grip 时没有携带位姿的包。"""
+        if self.engaged:
+            self.held = self._last_output.copy()
+            self._anchor = None
+            self.engaged = False
+        return self.held.copy()
 
     def _current(self, raw) -> np.ndarray:
         return self.held + (raw - self._anchor)

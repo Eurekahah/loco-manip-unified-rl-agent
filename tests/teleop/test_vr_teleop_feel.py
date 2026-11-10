@@ -140,6 +140,14 @@ class TestPoseFilters(unittest.TestCase):
         q = shaping.rotvec_to_quat([0, 0, 0.3])
         np.testing.assert_allclose(shaping.quat_to_rotvec(-q), [0, 0, 0.3], atol=1e-9)
 
+    def test_rotvec_90deg_pitch_is_continuous(self):
+        # 欧拉角在 pitch=90° 会奇异；旋转向量应保持有限且可逆。
+        rv = np.array([0.0, np.pi / 2.0, 0.0])
+        q = shaping.rotvec_to_quat(rv)
+        out = shaping.quat_to_rotvec(q)
+        self.assertTrue(np.all(np.isfinite(out)))
+        np.testing.assert_allclose(out, rv, atol=1e-9)
+
     def test_slerp_endpoints_and_midpoint(self):
         q0 = shaping.rotvec_to_quat([0, 0, 0])
         q1 = shaping.rotvec_to_quat([0, 0, 1.0])
@@ -215,6 +223,8 @@ class TestDeviceChassis(unittest.TestCase):
         cls.m = _load_device_module()
 
     def make(self, **cfg):
+        # 底盘整形单测显式打开整形；默认“无整形”由 TestArmSignal 单独覆盖。
+        cfg.setdefault("stick_shaping_enabled", True)
         dev = self.m.VRLocoManipTeleop(self.m.VRLocoManipTeleopCfg(**cfg))
         dev.set_step_dt(0.02)
         return dev
@@ -319,16 +329,7 @@ class TestConnectInfo(unittest.TestCase):
             self.assertFalse(ip.startswith("127.") or ip.startswith("169.254."))
 
 
-class _FakeRot:
-    """最小 Rotation 桩：只提供 as_euler，返回预设欧拉角。"""
-    def __init__(self, euler):
-        self._e = np.asarray(euler, dtype=np.float64)
-
-    def as_euler(self, *a, **k):
-        return self._e
-
-
-class TestArmFilter(unittest.TestCase):
+class TestArmSignal(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.m = _load_device_module()
@@ -336,38 +337,40 @@ class TestArmFilter(unittest.TestCase):
     def make(self, **cfg):
         return self.m.VRLocoManipTeleop(self.m.VRLocoManipTeleopCfg(**cfg))
 
-    def feed(self, dev, pos, euler, n=1, dt=0.02):
+    def feed(self, dev, pos, rotvec, n=1):
         for _ in range(n):
-            dev._hand_dt["right"] = dt
-            dev._update_arm(np.asarray(pos, float), _FakeRot(euler), 0.0)
+            dev._update_arm(np.asarray(pos, float), np.asarray(rotvec, float), 0.0)
         return dev._command.copy()
 
-    def test_gate_off_matches_legacy_hard_deadzone(self):
-        dev = self.make()
+    def test_comfortable_defaults(self):
+        cfg = self.m.VRLocoManipTeleopCfg()
+        self.assertFalse(cfg.stick_shaping_enabled)
+        self.assertTrue(cfg.arm_clutch_enabled)
+        self.assertTrue(cfg.body_clutch_enabled)
+
+    def test_hard_deadzone(self):
+        dev = self.make(arm_clutch_enabled=False)
         out = self.feed(dev, [0.0, 0.01, 0.0], [0, 0, 0])
         # 默认轴映射: command[3]=delta.y, [4]=-delta.x, [5]=delta.z；0.01 > 0.004 死区 → 原值输出
         self.assertAlmostEqual(out[3], 0.01)
         out = self.feed(dev, [0.0, 0.003, 0.0], [0, 0, 0])
         self.assertEqual(out[3], 0.0)
 
-    def test_gate_on_deadzone_continuous(self):
-        dev = self.make(arm_filter_enabled=True, arm_pos_tau=0.0)
-        out = self.feed(dev, [0.0, 0.0041, 0.0], [0, 0, 0])
-        self.assertAlmostEqual(out[3], 0.0001, places=6)  # 边缘不跳变
+    def test_rotvec_pitch_90_has_no_gimbal_jump(self):
+        dev = self.make(arm_clutch_enabled=False)
+        out = self.feed(dev, np.zeros(3), [0.0, np.pi / 2.0, 0.0])
+        self.assertTrue(np.all(np.isfinite(out[6:9])))
+        self.assertAlmostEqual(out[6], np.pi / 2.0)
+        self.assertAlmostEqual(out[7], 0.0)
+        self.assertAlmostEqual(out[8], 0.0)
 
-    def test_gate_on_smooths_step(self):
-        dev = self.make(arm_filter_enabled=True, arm_pos_tau=0.1)
-        self.feed(dev, [0, 0, 0], [0, 0, 0])
-        out = self.feed(dev, [0.0, 0.1, 0.0], [0, 0, 0])
-        self.assertTrue(0.0 < out[3] < 0.1 - 0.004)  # 阶跃被平滑，首步只走一部分
-        out = self.feed(dev, [0.0, 0.1, 0.0], [0, 0, 0], n=300)
-        self.assertAlmostEqual(out[3], 0.1 - 0.004, places=3)  # 最终收敛
-
-    def test_reset_clears_filter(self):
-        dev = self.make(arm_filter_enabled=True, arm_pos_tau=0.1)
+    def test_reset_clears_clutch(self):
+        dev = self.make()
+        dev._grip["right"] = True
         self.feed(dev, [0.0, 0.1, 0.0], [0, 0, 0], n=50)
         dev.reset()
-        out = self.feed(dev, [0, 0, 0], [0, 0, 0])
+        dev._grip["right"] = True
+        out = self.feed(dev, [0.0, 0.1, 0.0], [0, 0, 0])
         self.assertEqual(out[3], 0.0)
 
 
@@ -393,6 +396,13 @@ class TestClutchOffset(unittest.TestCase):
         c.update([0, 0], True); c.update([1, 1], True); c.reset()
         np.testing.assert_allclose(c.update([3, 3], False), 0.0)
 
+    def test_release_freezes_at_last_output_without_new_pose(self):
+        c = shaping.ClutchOffset(1)
+        c.update([0.0], True)
+        c.update([0.3], True)
+        np.testing.assert_allclose(c.release(), [0.3])
+        np.testing.assert_allclose(c.update([5.0], False), [0.3])
+
 
 class TestArmBodyGates(unittest.TestCase):
     @classmethod
@@ -404,8 +414,7 @@ class TestArmBodyGates(unittest.TestCase):
 
     def test_arm_clutch_gate(self):
         dev = self.make(arm_clutch_enabled=True)
-        rot = _FakeRot([0, 0, 0])
-        dev._hand_dt["right"] = 0.02
+        rot = np.zeros(3)
         dev._grip["right"] = False
         dev._update_arm(np.array([0.0, 0.2, 0.0]), rot, 0.0)
         self.assertEqual(dev._command[3], 0.0)                 # 没按握持键：不跟随
@@ -419,29 +428,31 @@ class TestArmBodyGates(unittest.TestCase):
         self.assertAlmostEqual(dev._command[3], 0.1)   # 冻结
 
     def test_arm_gates_off_ignores_grip(self):
-        dev = self.make()
+        dev = self.make(arm_clutch_enabled=False)
         dev._grip["right"] = False
-        dev._update_arm(np.array([0.0, 0.2, 0.0]), _FakeRot([0, 0, 0]), 0.0)
+        dev._update_arm(np.array([0.0, 0.2, 0.0]), np.zeros(3), 0.0)
         self.assertAlmostEqual(dev._command[3], 0.2)
 
     def test_body_default_matches_legacy(self):
-        dev = self.make()
-        dev._update_body(np.array([0.0, 0.0, 0.1]), _FakeRot([0.2, 0.3, 0]), 0.0)
+        dev = self.make(body_clutch_enabled=False)
+        dev._update_body(np.array([0.0, 0.0, 0.1]), np.array([0.2, 0.3, 0.0]), 0.0)
         self.assertAlmostEqual(dev._command[9], 0.1 * dev.height_sensitivity)
         self.assertAlmostEqual(dev._command[10], -0.2 * dev.pitch_sensitivity)
         self.assertAlmostEqual(dev._command[11], 0.3 * dev.roll_sensitivity)
 
     def test_body_clutch_ignores_wrist_tilt_when_not_gripping(self):
-        dev = self.make(body_clutch_enabled=True)
-        dev._update_body(np.zeros(3), _FakeRot([0.3, 0.3, 0]), 0.0)  # 推摇杆导致手柄倾斜
+        dev = self.make()
+        dev._update_body(np.zeros(3), np.array([0.3, 0.3, 0.0]), 0.0)  # 推摇杆导致手柄倾斜
         np.testing.assert_allclose(dev._command[9:12], 0.0)
 
-    def test_body_filter_smooths(self):
-        dev = self.make(body_filter_enabled=True, body_tau=0.1)
-        dev._hand_dt["left"] = 0.02
-        dev._update_body(np.zeros(3), _FakeRot([0, 0, 0]), 0.0)
-        dev._update_body(np.zeros(3), _FakeRot([0.3, 0, 0]), 0.0)
-        self.assertTrue(0.0 < abs(dev._command[10]) < 0.3 * dev.pitch_sensitivity)
+    def test_body_clutch_follows_when_gripping(self):
+        dev = self.make()
+        dev._grip["left"] = True
+        dev._update_body(np.zeros(3), np.zeros(3), 0.0)  # 按下瞬间锚定
+        dev._update_body(np.array([0.0, 0.0, 0.1]), np.array([0.2, 0.3, 0.0]), 0.0)
+        self.assertAlmostEqual(dev._command[9], 0.1 * dev.height_sensitivity)
+        self.assertAlmostEqual(dev._command[10], -0.2 * dev.pitch_sensitivity)
+        self.assertAlmostEqual(dev._command[11], 0.3 * dev.roll_sensitivity)
 
     def test_grip_state_parsed_from_queue(self):
         dev = self.make()
@@ -453,6 +464,45 @@ class TestArmBodyGates(unittest.TestCase):
         dev._command_queue.put_nowait(types.SimpleNamespace(
             arm="right", target_position=None, metadata={"source": "vr_grip_release"}))
         dev._poll_queue()
+        self.assertFalse(dev._grip["right"])
+
+
+class TestQueueCoalescing(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.m = _load_device_module()
+
+    def make(self):
+        dev = self.m.VRLocoManipTeleop(self.m.VRLocoManipTeleopCfg())
+        dev._started = True
+        return dev
+
+    @staticmethod
+    def goal(x, grip):
+        return types.SimpleNamespace(
+            arm="right",
+            target_position=np.array([x, 0.0, 0.0]),
+            metadata={"grip_active": grip},
+        )
+
+    def test_same_grip_state_keeps_only_latest_pose(self):
+        dev = self.make()
+        seen = []
+        dev._process_goal_pose = lambda goal: seen.append(float(goal.target_position[0]))
+        for i in range(6):
+            dev._command_queue.put_nowait(self.goal(float(i), True))
+        dev._poll_queue()
+        self.assertEqual(seen, [5.0])
+
+    def test_grip_transition_keeps_last_pose_before_release(self):
+        dev = self.make()
+        seen = []
+        dev._process_goal_pose = lambda goal: seen.append(float(goal.target_position[0]))
+        for i in range(4):
+            dev._command_queue.put_nowait(self.goal(float(i), True))
+        dev._command_queue.put_nowait(self.goal(4.0, False))
+        dev._poll_queue()
+        self.assertEqual(seen, [3.0, 4.0])
         self.assertFalse(dev._grip["right"])
 
 

@@ -38,9 +38,8 @@ import socket
 import ssl
 import threading
 import time
-import weakref
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -49,9 +48,7 @@ from isaaclab.devices import DeviceBase, DeviceCfg
 
 from rl_training.devices.vr_signal_shaping import (
     ClutchOffset,
-    LowPass,
     SlewRateLimiter,
-    continuous_deadzone,
     shape_stick,
 )
 
@@ -160,19 +157,12 @@ class VRLocoManipTeleop(DeviceBase):
         self._step_dt: float | None = None
         self._last_advance_time = time.monotonic()
 
-        # ---- 机械臂手柄信号：连续死区 + 低通（步骤2门控，默认关）----
-        self._arm_filter = cfg.arm_filter_enabled
-        self._arm_pos_lp = LowPass(cfg.arm_pos_tau)
-        self._arm_rot_lp = LowPass(cfg.arm_rot_tau)
-
-        # ---- 机械臂离合键（步骤3门控，默认关）：按住右握持键才跟随，松开冻结 ----
+        # ---- 机械臂离合键（默认开）：按住右握持键才跟随，松开冻结 ----
         self._arm_clutch_on = cfg.arm_clutch_enabled
         self._arm_pos_clutch = ClutchOffset(3, limit=cfg.arm_clutch_pos_limit)
         self._arm_rot_clutch = ClutchOffset(3, limit=cfg.arm_clutch_rot_limit)
 
-        # ---- 机体姿态：滤波(步骤4a) / 左握持键离合(步骤4b)，各自独立门控，默认关 ----
-        self._body_filter = cfg.body_filter_enabled
-        self._body_lp = LowPass(cfg.body_tau)
+        # ---- 机体姿态：左握持键离合（默认开）----
         self._body_clutch_on = cfg.body_clutch_enabled
         self._body_clutch = ClutchOffset(3, limit=cfg.body_clutch_limit)
 
@@ -213,18 +203,9 @@ class VRLocoManipTeleop(DeviceBase):
         self._command = np.zeros(13, dtype=np.float64)
         # 扳机积分出的机身高度偏移（按住 trigger 持续升高），标定/reset 时归零
         self._body_height_offset = 0.0
-        # 相邻 VR 数据包间隔，用于把扳机"速度"积分成高度偏移
-        self._dt = 0.0
-        self._last_packet_time = time.time()
-        # 每只手各自的相邻包间隔（滤波器按各自采样间隔工作，左右包交错时 _dt 会偏小）
-        self._hand_dt = {"left": 0.0, "right": 0.0}
-        self._hand_last_time: dict[str, float | None] = {"left": None, "right": None}
-
-        # ---- previous calibrated pose for delta computation ----
-        self._prev_arm_pos:  np.ndarray | None = None
-        self._prev_arm_rot:  R          | None = None
-        self._prev_body_rot: R          | None = None
-
+        # 左手相邻 VR 数据包间隔，用于把扳机"速度"积分成高度偏移
+        self._body_dt = 0.0
+        self._body_last_packet_time: float | None = None
         # ---- XLeVR setup ----
         self._xlevr_cfg = XLeVRConfig()
         self._xlevr_cfg.enable_vr   = True
@@ -281,19 +262,13 @@ class VRLocoManipTeleop(DeviceBase):
             "right": {"pos": None, "rot": None},
         }
         self._calibration_triggered = {"left": False, "right": False}
-        self._prev_arm_pos  = None
-        self._prev_arm_rot  = None
-        self._prev_body_rot = None
-        self._last_packet_time = time.time()
+        self._body_last_packet_time = None
+        self._body_dt = 0.0
 
     def _reset_arm_state(self) -> None:
-        """清空机械臂手柄滤波器状态（reset / 重新标定时调用）。"""
-        self._arm_pos_lp.reset()
-        self._arm_rot_lp.reset()
-        self._hand_last_time["right"] = None
+        """清空离合/采样状态（reset / 重新标定时调用）。"""
         self._arm_pos_clutch.reset()
         self._arm_rot_clutch.reset()
-        self._body_lp.reset()
         self._body_clutch.reset()
 
     def add_callback(self, key: str, func: Callable):
@@ -370,7 +345,8 @@ class VRLocoManipTeleop(DeviceBase):
     # ------------------------------------------------------------------
 
     def _poll_queue(self):
-        """Drain the async queue and update _command."""
+        """Drain the async queue, coalescing stale poses, and update ``_command``."""
+        goals = []
         while not self._command_queue.empty():
             try:
                 goal = self._command_queue.get_nowait()
@@ -379,66 +355,108 @@ class VRLocoManipTeleop(DeviceBase):
 
             if goal.arm == "headset":
                 continue
+            goals.append(goal)
 
-            # 记录相邻包间隔，供扳机高度积分使用
+        if not goals:
+            return
+
+        # 先按到达顺序处理元数据和按钮，保留所有按键边沿；位姿稍后按手合并。
+        grip_state = dict(self._grip)
+        for goal in goals:
             now = time.time()
-            self._dt = min(max(now - self._last_packet_time, 0.0), 0.1)
-            self._last_packet_time = now
-            last = self._hand_last_time.get(goal.arm)
-            if last is not None and goal.arm in self._hand_dt:
-                self._hand_dt[goal.arm] = min(max(now - last, 0.0), 0.1)
-            self._hand_last_time[goal.arm] = now
+            setattr(goal, "_vr_read_wall", now)
 
-            # --- 握持键状态（离合用）---
             if goal.metadata:
                 if "grip_active" in goal.metadata:
-                    self._grip[goal.arm] = bool(goal.metadata["grip_active"])
+                    grip_state[goal.arm] = bool(goal.metadata["grip_active"])
                 elif goal.metadata.get("source") == "vr_grip_release":
-                    self._grip[goal.arm] = False
+                    grip_state[goal.arm] = False
+            setattr(goal, "_vr_grip_state", grip_state.get(goal.arm, False))
 
             # --- buttons ---
             if goal.metadata and "buttons" in goal.metadata:
                 self._check_buttons(goal.metadata["buttons"], goal.metadata.get("hand", goal.arm))
 
-            if not self._started or goal.target_position is None:
+        # 同一只手、同一握持状态只保留最后一个位姿；握持状态切换时保留切换前最后一帧，
+        # 这样松开 grip 时离合仍能冻结在最后位置。
+        batches: dict[str, list[tuple[object, bool]]] = {}
+        for goal in goals:
+            if goal.target_position is None:
                 continue
-
-            # --- pose update ---
-            sim_pos, r_sim = self._vr_to_sim_pose(goal)
             hand = goal.arm
+            engaged = bool(getattr(goal, "_vr_grip_state", False))
+            hand_batches = batches.setdefault(hand, [])
+            if hand_batches and hand_batches[-1][1] == engaged:
+                hand_batches[-1] = (goal, engaged)
+            else:
+                hand_batches.append((goal, engaged))
 
-            # calibration (triggered once on button-B press)
-            # 按B键设置当前位姿为 origin，后续计算增量
-            if self._calibration_triggered.get(hand, False):
-                print(f"[VR Device] Calibrating {hand} controller origin...")
-                self._vr_origin[hand]["pos"] = sim_pos.copy()
-                self._vr_origin[hand]["rot"] = r_sim
-                self._calibration_triggered[hand] = False
+        if self._started:
+            for hand in ("left", "right"):
+                for goal, engaged in batches.get(hand, []):
+                    self._grip[hand] = engaged
+                    self._process_goal_pose(goal)
+
+        # grip release 包可能没有 target_position；此时用最后输出冻结，避免下一帧跳到新位姿。
+        for hand in ("left", "right"):
+            if self._grip[hand] and not grip_state.get(hand, False):
                 if hand == "right":
-                    self._reset_arm_state()
+                    self._arm_pos_clutch.release()
+                    self._arm_rot_clutch.release()
                 else:
-                    self._body_lp.reset()
-                    self._body_clutch.reset()
+                    self._body_clutch.release()
 
-            if self._vr_origin[hand]["pos"] is None:
-                continue
+        # 最后状态以队列中最新包为准（包括 target_position=None 的 grip release 包）。
+        self._grip = grip_state
 
-            delta_pos = sim_pos - self._vr_origin[hand]["pos"]
-            r_diff    = r_sim * self._vr_origin[hand]["rot"].inv()
-            # 手柄自身坐标系下的相对旋转：转轴固定在手柄上，不随标定时手势漂移
-            # （r_diff 是世界/sim 系的，纯俯仰会投影成多个轴的分量）
-            r_diff_local = self._vr_origin[hand]["rot"].inv() * r_sim
+    def _process_goal_pose(self, goal) -> None:
+        """把单个（已合并到最新的）位姿包写入命令。"""
+        hand = goal.arm
+        now = float(getattr(goal, "_vr_read_wall", time.time()))
 
-            trigger = 0.0
-            if goal.metadata and "trigger" in goal.metadata:
-                trigger = float(goal.metadata["trigger"])
+        # 记录左手相邻包间隔，供扳机高度积分使用
+        if hand == "left":
+            if self._body_last_packet_time is not None:
+                self._body_dt = min(
+                    max(now - self._body_last_packet_time, 0.0), 0.1
+                )
+            self._body_last_packet_time = now
 
+        sim_pos, r_sim = self._vr_to_sim_pose(goal)
+
+        # calibration (triggered once on button-B press)
+        # 按B键设置当前位姿为 origin，后续计算增量
+        if self._calibration_triggered.get(hand, False):
+            print(f"[VR Device] Calibrating {hand} controller origin...")
+            self._vr_origin[hand]["pos"] = sim_pos.copy()
+            self._vr_origin[hand]["rot"] = r_sim
+            self._calibration_triggered[hand] = False
             if hand == "right":
-                self._update_arm(delta_pos, r_diff_local, trigger)
-                self._update_yaw_from_thumbstick(goal)
-            elif hand == "left":
-                self._update_body(delta_pos, r_diff, trigger)
-                self._update_chassis_from_thumbstick(goal)
+                self._reset_arm_state()
+            else:
+                self._body_clutch.reset()
+
+        if self._vr_origin[hand]["pos"] is None:
+            return
+
+        delta_pos = sim_pos - self._vr_origin[hand]["pos"]
+        r_diff = r_sim * self._vr_origin[hand]["rot"].inv()
+        # 手柄自身坐标系下的相对旋转：转轴固定在手柄上，不随标定时手势漂移
+        # 用四元数旋转向量而不是欧拉角，避免 pitch=±90° 的万向锁。
+        r_diff_local = self._vr_origin[hand]["rot"].inv() * r_sim
+        delta_rotvec = r_diff.as_rotvec()
+        delta_rotvec_local = r_diff_local.as_rotvec()
+
+        trigger = 0.0
+        if goal.metadata and "trigger" in goal.metadata:
+            trigger = float(goal.metadata["trigger"])
+
+        if hand == "right":
+            self._update_arm(delta_pos, delta_rotvec_local, trigger)
+            self._update_yaw_from_thumbstick(goal)
+        elif hand == "left":
+            self._update_body(delta_pos, delta_rotvec, trigger)
+            self._update_chassis_from_thumbstick(goal)
 
     # ------------------------------------------------------------------
     # Command updaters
@@ -446,7 +464,7 @@ class VRLocoManipTeleop(DeviceBase):
 
     def _update_arm(self,
                 delta_pos: np.ndarray,
-                r_diff_local: R,
+                delta_rotvec_local: np.ndarray,
                 trigger: float):
         # ------------------------------------------------------------------
         # 位置增量：sim/房间系位移 -> EE x/y/z 通道
@@ -458,11 +476,13 @@ class VRLocoManipTeleop(DeviceBase):
         # 注意：执行端把该增量加到 body 系基准上，因此实际手感是“相对机器人
         # 当前朝向”；若以后想改成“相对房间方向”，需先把增量按机身偏航旋转。
         # ------------------------------------------------------------------
-        # 旋转：用“手柄局部系”的相对旋转（r_diff_local），纯俯仰不会拆成多轴分量；
-        # 局部系欧拉角 -> EE 通道的映射由 arm_rot_axis_map 决定：command[6+i] = sgn * euler_local[src]。
-        euler_local = r_diff_local.as_euler("XYZ", degrees=False)
+        # 旋转：用手柄局部系的相对旋转向量。旋转向量由四元数直接得到，
+        # 不经过欧拉角分解，因此没有 pitch=±90° 的万向锁/跳变。
         raw_pos = np.array([sgn * delta_pos[src] for src, sgn in self.arm_pos_axis_map], dtype=np.float64)
-        raw_rot = np.array([sgn * euler_local[src] for src, sgn in self.arm_rot_axis_map], dtype=np.float64)
+        raw_rot = np.array(
+            [sgn * delta_rotvec_local[src] for src, sgn in self.arm_rot_axis_map],
+            dtype=np.float64,
+        )
 
         if self._arm_clutch_on:
             # 步骤3：按住右握持键才跟随手柄相对位移，松开冻结；目标被限幅并吸收超出部分
@@ -470,13 +490,8 @@ class VRLocoManipTeleop(DeviceBase):
             raw_pos = self._arm_pos_clutch.update(raw_pos, g)
             raw_rot = self._arm_rot_clutch.update(raw_rot, g)
 
-        if self._arm_filter:
-            # 步骤2：连续死区（边缘不跳变）+ 一阶低通（抑制手抖，代价是少量延迟）
-            pos = self._arm_pos_lp.update(continuous_deadzone(raw_pos, self.pos_deadzone), self._hand_dt["right"])
-            rot = self._arm_rot_lp.update(continuous_deadzone(raw_rot, self.rot_deadzone), self._hand_dt["right"])
-        else:  # 旧行为：硬阈值死区，无滤波
-            pos = np.array([self._apply_deadzone(v, self.pos_deadzone) for v in raw_pos])
-            rot = np.array([self._apply_deadzone(v, self.rot_deadzone) for v in raw_rot])
+        pos = np.array([self._apply_deadzone(v, self.pos_deadzone) for v in raw_pos])
+        rot = np.array([self._apply_deadzone(v, self.rot_deadzone) for v in raw_rot])
 
         self._command[3:6] = pos * self.arm_pos_sensitivity
         self._command[6:9] = rot * self.arm_rot_sensitivity
@@ -497,32 +512,27 @@ class VRLocoManipTeleop(DeviceBase):
         self._stick_target[2] = shaped[0] * self.omega_z_sensitivity
         self._stick_stamp["right"] = time.monotonic()
 
-    def _update_body(self, delta_pos: np.ndarray, r_diff: R, trigger: float):
+    def _update_body(self, delta_pos: np.ndarray, delta_rotvec: np.ndarray, trigger: float):
         """Write body height / pitch / roll offsets from left controller.
 
         输出的是"相对标定原点"的纯偏移（不再混入 default_body_height 绝对量），
         由执行端在 absolute_commands 模式下叠加到标定基准上。
         """
-        euler = r_diff.as_euler("XYZ", degrees=False)
+        # 旋转向量同样避免欧拉角奇异；小角度下与原来的 pitch/roll 映射一致。
         # 原始三通道：[高度偏移(m), pitch(rad), roll(rad)]（符号沿用旧映射）
-        raw = np.array([delta_pos[2], -euler[0], euler[1]], dtype=np.float64)
+        raw = np.array([delta_pos[2], -delta_rotvec[0], delta_rotvec[1]], dtype=np.float64)
 
         if self._body_clutch_on:
             # 步骤4b：按住左握持键，机体高度/俯仰/横滚才跟手；松开保持
             raw = self._body_clutch.update(raw, self._grip["left"])
 
-        if self._body_filter:
-            # 步骤4a：连续死区 + 低通
-            dzs = np.array([self.pos_deadzone, self.rot_deadzone, self.rot_deadzone])
-            body = self._body_lp.update(continuous_deadzone(raw, dzs), self._hand_dt["left"])
-        else:  # 旧行为：硬阈值死区
-            body = np.array([self._apply_deadzone(raw[0], self.pos_deadzone),
-                             self._apply_deadzone(raw[1], self.rot_deadzone),
-                             self._apply_deadzone(raw[2], self.rot_deadzone)])
+        body = np.array([self._apply_deadzone(raw[0], self.pos_deadzone),
+                         self._apply_deadzone(raw[1], self.rot_deadzone),
+                         self._apply_deadzone(raw[2], self.rot_deadzone)])
 
         # height: Z 偏移 + 扳机积分（按住持续升高，松手保持，标定/reset 归零）
         if trigger > 0.5:
-            self._body_height_offset += self.height_sensitivity * self._dt
+            self._body_height_offset += self.height_sensitivity * self._body_dt
             self._body_height_offset = float(np.clip(self._body_height_offset, -0.5, 0.5))
         self._command[9] = body[0] * self.height_sensitivity + self._body_height_offset
         self._command[10] = body[1] * self.pitch_sensitivity
@@ -551,7 +561,6 @@ class VRLocoManipTeleop(DeviceBase):
         self._stick_target[0] = -shaped[1] * self.v_x_sensitivity
         self._stick_target[1] = -shaped[0] * self.v_y_sensitivity
         self._stick_stamp["left"] = time.monotonic()
-
 
     # ------------------------------------------------------------------
     # Coordinate conversion  (identical to XTrainerVR._convert_goal_to_pose)
@@ -746,7 +755,7 @@ class VRLocoManipTeleopCfg(DeviceCfg):
     """Yaw rate scale (left thumbstick twist / rotation)."""
 
     # -- 底盘摇杆整形（死区 → 曲线 → 模长限幅 → 斜率限制）--
-    stick_shaping_enabled: bool = True
+    stick_shaping_enabled: bool = False
     """False 则回退为旧的纯线性映射（用于 A/B 手感对比）。"""
     stick_deadzone: float = 0.12
     """摇杆圆形死区（0~1）。模长小于此值输出 0，超出部分重标定到 [0,1]，边缘连续。"""
@@ -767,29 +776,17 @@ class VRLocoManipTeleopCfg(DeviceCfg):
     stick_timeout: float = 0.5
     """摇杆数据超时（s）。超时视为手柄丢失，目标速度回 0。"""
 
-    # -- 机械臂手柄信号滤波（步骤2，默认关，便于单独 A/B）--
-    arm_filter_enabled: bool = False
-    """True：用连续死区 + 一阶低通处理右手位姿；False：旧的硬阈值死区、无滤波。"""
-    arm_pos_tau: float = 0.05
-    """位置低通时间常数（s）。越大越顺但越有延迟；0 = 不滤波。"""
-    arm_rot_tau: float = 0.08
-    """旋转低通时间常数（s）。"""
-
-    # -- 机械臂离合键（步骤3，默认关）--
-    arm_clutch_enabled: bool = False
+    # -- 机械臂离合键（默认开）--
+    arm_clutch_enabled: bool = True
     """True：按住右握持键(grip)才让机械臂跟随手柄，松开冻结，再按从当前位置继续（无需重新标定）。"""
     arm_clutch_pos_limit: float = 0.4
     """离合模式下末端位置偏移上限(m)，逐轴；超出部分被吸收，手一回退立刻反向跟随，没有空行程。"""
     arm_clutch_rot_limit: float = 1.0
     """离合模式下末端姿态偏移上限(rad)，逐轴。"""
 
-    # -- 机体姿态（步骤4，两个门控独立，默认关）--
-    body_filter_enabled: bool = False
-    """步骤4a：左手位姿(高度/俯仰/横滚)用连续死区 + 低通。"""
-    body_tau: float = 0.1
-    """机体姿态低通时间常数(s)。"""
-    body_clutch_enabled: bool = False
-    """步骤4b：按住左握持键才让机体高度/俯仰/横滚跟手，避免推摇杆时手腕倾斜串扰机体。"""
+    # -- 机体姿态离合键（默认开）--
+    body_clutch_enabled: bool = True
+    """按住左握持键才让机体高度/俯仰/横滚跟手，避免推摇杆时手腕倾斜串扰机体。"""
     body_clutch_limit: float = 0.5
     """机体离合偏移上限（高度 m / 角度 rad，逐轴同值，最终仍受执行端 clamp）。"""
 
@@ -814,11 +811,11 @@ class VRLocoManipTeleopCfg(DeviceCfg):
         (0, -1.0),  # command[7] = EE pitch <- 手柄局部 roll（初始猜测，实验后改）
         (2, +1.0),  # command[8] = EE yaw   <- 手柄局部 yaw
     )
-    """手柄局部轴 -> EE roll/pitch/yaw 通道映射，每项 (euler_local下标, 符号)。
+    """手柄局部旋转向量 -> EE roll/pitch/yaw 通道映射，每项 (rotvec下标, 符号)。
 
-    下标含义：0=手柄局部 roll(x)，1=手柄局部 pitch(y)，2=手柄局部 yaw(z)。
+    下标含义：0=绕手柄局部 x 轴，1=绕 y 轴，2=绕 z 轴。
     单轴实验方法：按 B 标定后，每次只做一种纯旋转（俯仰/偏航/滚转），
-    看 euler_local 哪个分量被激活、末端实际绕哪根轴转，再把 (下标, 符号)
+    看 rotvec_local 哪个分量被激活、末端实际绕哪根轴转，再把 (下标, 符号)
     填到对应 command 通道。初始值是按位置通道的 (x,y,z)->(y,-x,z) 映射猜的。
     """
 
