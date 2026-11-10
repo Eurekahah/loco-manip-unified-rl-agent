@@ -9,6 +9,7 @@ Default mapping:
 
     HDF5 camera/workcell_camera/rgb -> observation.images.camera1
     HDF5 camera/wrist_camera/rgb    -> observation.images.camera2
+    HDF5 camera/top_camera/rgb      -> observation.images.camera3
     HDF5 robot/joint_pos            -> observation.state
     HDF5 action                     -> action
 
@@ -56,6 +57,7 @@ ACTION_SEMANTICS = "absolute_offset_from_recalibrated_anchor"
 DEFAULT_CAMERA_MAP = {
     "workcell_camera": "camera1",
     "wrist_camera": "camera2",
+    "top_camera": "camera3",
 }
 
 
@@ -388,7 +390,7 @@ def main() -> None:
         default=None,
         help=(
             'JSON object mapping HDF5 camera groups to LeRobot suffixes, e.g. '
-            '\'{"workcell_camera":"camera1","wrist_camera":"camera2"}\'.'
+            '\'{"workcell_camera":"camera1","wrist_camera":"camera2","top_camera":"camera3"}\'.'
         ),
     )
     parser.add_argument(

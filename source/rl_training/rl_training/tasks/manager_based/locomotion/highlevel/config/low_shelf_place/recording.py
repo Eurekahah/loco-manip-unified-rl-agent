@@ -273,7 +273,7 @@ class LowShelfHDF5RecorderCfg(RecorderTermCfg):
     task: str = "Isaac-M20-Piper-LowShelf-Collect-v0"
     language_instruction: str = "把下层托盘里的糖盒放到上层桌面。"
     source: str = "unknown"
-    camera_names: tuple[str, ...] = ("workcell_camera", "wrist_camera")
+    camera_names: tuple[str, ...] = ("workcell_camera", "wrist_camera", "top_camera")
     overwrite: bool = False
 
 

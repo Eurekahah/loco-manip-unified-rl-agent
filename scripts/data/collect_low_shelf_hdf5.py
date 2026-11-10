@@ -23,13 +23,14 @@ parser.add_argument("--camera_height", type=int, default=224)
 parser.add_argument("--camera_update_period", type=float, default=0.1)
 parser.add_argument("--scene_camera", action=argparse.BooleanOptionalAction, default=True)
 parser.add_argument("--wrist_camera", action=argparse.BooleanOptionalAction, default=True)
+parser.add_argument("--top_camera", action=argparse.BooleanOptionalAction, default=True)
 parser.add_argument("--overwrite", action="store_true")
 parser.add_argument("--seed", type=int, default=42)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
-if not args_cli.scene_camera and not args_cli.wrist_camera:
-    parser.error("At least one of --scene_camera or --wrist_camera must be enabled")
+if not args_cli.scene_camera and not args_cli.wrist_camera and not args_cli.top_camera:
+    parser.error("At least one camera must be enabled")
 if args_cli.num_envs != 1:
     parser.error("Interactive collection currently requires --num_envs 1")
 
@@ -46,6 +47,7 @@ from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 from rl_training.devices.keyboard_loco_manip_teleop import KeyboardLocoManipTeleop, KeyboardLocoManipTeleopCfg  # noqa: E402
 from rl_training.devices.vr_loco_manip_teleop import VRLocoManipTeleop, VRLocoManipTeleopCfg  # noqa: E402
 from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place.scene_cfg import (  # noqa: E402
+    make_top_camera,
     make_workcell_camera,
     make_wrist_camera,
 )
@@ -103,6 +105,7 @@ def main() -> None:
     camera_names: list[str] = []
     env_cfg.scene.workcell_camera = None
     env_cfg.scene.wrist_camera = None
+    env_cfg.scene.top_camera = None
     if args_cli.scene_camera:
         env_cfg.scene.workcell_camera = make_workcell_camera(
             width=args_cli.camera_width,
@@ -117,6 +120,13 @@ def main() -> None:
             update_period=args_cli.camera_update_period,
         )
         camera_names.append("wrist_camera")
+    if args_cli.top_camera:
+        env_cfg.scene.top_camera = make_top_camera(
+            width=args_cli.camera_width,
+            height=args_cli.camera_height,
+            update_period=args_cli.camera_update_period,
+        )
+        camera_names.append("top_camera")
 
     recorder_cfg = env_cfg.recorders.record_hdf5
     recorder_cfg.output_path = output_path

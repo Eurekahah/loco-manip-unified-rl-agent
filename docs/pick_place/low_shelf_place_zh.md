@@ -4,7 +4,7 @@
 
 **目标**：制作可执行的 low-shelf pick-and-place 场景，并让 M20 的机身高度与 pitch 成为完成任务的必要动作。
 
-**当前状态（2026-11-05）**：第一版场景、状态教师任务、相机化数据采集任务、键盘/VR 输入链路、HDF5 记录和最小回放/检查工具已实现。训练任务 1/4 环境无头 smoke、两路相机 headless smoke、键盘 headless/GUI smoke、VR 初始化 smoke 均通过。本阶段只完成第一部分的数据采集闭环；完整抓取/放置成功率仍待后续验证。
+**当前状态（2026-11-10）**：第一版场景、状态教师任务、相机化数据采集任务、键盘/VR 输入链路、HDF5 记录、三路相机采集和最小回放/检查工具已实现。训练任务无头 smoke、三路相机 headless smoke、键盘 headless/GUI smoke、VR 初始化 smoke、LeRobot 转换和 SmolVLA CPU smoke 均通过。完整抓取/放置成功率仍待后续验证。
 
 第二部分的双圆柱台任务已单独记录在 [two_cylinder_place_zh.md](two_cylinder_place_zh.md)，训练、遥操和采集配置与本任务保持独立。
 
@@ -14,9 +14,9 @@
 |---|---|---|---|---|
 | RL 训练/状态教师 | `Isaac-M20-Piper-LowShelf-Place-v0` | `PreTrainedPickWBCAction` | 默认关闭 | 默认关闭 |
 | 纯遥操调试 | `Isaac-M20-Piper-LowShelf-Teleop-v0` | `TeleopLLAction` | 默认关闭 | 默认关闭 |
-| 相机化数据采集 | `Isaac-M20-Piper-LowShelf-Collect-v0` | `TeleopLLAction` | 默认场景相机 + 腕部相机 | 默认启用 |
+| 相机化数据采集 | `Isaac-M20-Piper-LowShelf-Collect-v0` | `TeleopLLAction` | 默认场景相机 + 腕部相机 + 顶部相机 | 默认启用 |
 
-训练配置 `LowShelfPlaceEnvCfg` 明确把 `workcell_camera`、`wrist_camera`、`arm_camera`、`nav_camera` 置空，`RecorderManager` 保持 0 个 term。采集配置 `LowShelfPlaceCollectEnvCfg` 才显式创建两路 RGB-D 相机和 HDF5 recorder。这样不会把相机更新或数据落盘带回无头训练。
+训练配置 `LowShelfPlaceEnvCfg` 明确把 `workcell_camera`、`wrist_camera`、`top_camera`、`arm_camera`、`nav_camera` 置空，`RecorderManager` 保持 0 个 term。采集配置 `LowShelfPlaceCollectEnvCfg` 才显式创建三路 RGB-D 相机和 HDF5 recorder。这样不会把相机更新或数据落盘带回无头训练。
 
 任务 ID：
 
@@ -88,20 +88,22 @@ Isaac-M20-Piper-LowShelf-Collect-v0
 
 ### 4.1 相机配置
 
-两路相机都在 `scene_cfg.py` 中通过工厂函数配置：
+三路相机都在 `scene_cfg.py` 中通过工厂函数配置：
 
 - `make_workcell_camera(...)`：固定场景相机，默认位于工作单元前左侧，使用世界系 look-at 朝向工作台。
 - `make_wrist_camera(...)`：挂在 `{ENV_REGEX_NS}/Robot/gripper_base/WristCamera`，沿 Piper 工具轴向前下视。
-- 两路都输出 `rgb` 和 `depth`，默认 `224 x 224`、`10 Hz`。
+- `make_top_camera(...)`：固定顶部相机，默认位于上层板上方 `(0.80, 0.0, 1.45)`，垂直向下看向 `(0.80, 0.0, 0.35)`，用于观察上层放置板和蓝色目标区。
+- 三路都输出 `rgb` 和 `depth`，默认 `224 x 224`、`10 Hz`。
 - 采集控制频率由 `control_dt` 决定（当前约 `50 Hz`），因此原始 HDF5 中相机帧会按 10 Hz 更新，转换为 LeRobot 时可用 `--fps 10` 按整数 stride 下采样，得到无重复帧的 10 Hz 数据集。
 - 相机外参通过 `TiledCamera.data` 读取。腕部相机设置 `update_latest_camera_pose=True`，随机械臂更新。
-- 采集脚本自动设置 `--enable_cameras`，并允许用 `--scene_camera/--no-scene_camera`、`--wrist_camera/--no-wrist_camera` 选择相机。
+- 采集脚本自动设置 `--enable_cameras`，并允许用 `--scene_camera/--no-scene_camera`、`--wrist_camera/--no-wrist_camera`、`--top_camera/--no-top_camera` 选择相机。
 - 分辨率、更新周期可配置：`--camera_width`、`--camera_height`、`--camera_update_period`。
 
 实拍确认：
 
 - 场景相机同时看到下层糖盒、上层板和蓝色目标垫。
 - 腕部相机在初始高位能看到上层目标区，机械臂进入下层时覆盖夹爪前方作业区。
+- 顶部相机垂直向下看到上层板、蓝色目标垫和放置阶段机械臂；下层取料被上层板遮挡，因此由场景相机负责。
 - 场景相机 `+X` 光轴指向 look-at 目标，`+Z` 图像上方接近世界 `+Z`。
 - 腕部相机 `+X` 光轴沿 Piper 工具轴向前并向下约 `30°`。
 
@@ -236,7 +238,7 @@ action[12]     夹爪，+1 = 开，-1 = 闭
 配置解析：
 
 - 训练任务：`LowShelfPlaceEnvCfg`，`cameras=[]`，`recorders=[]`。
-- 采集任务：`LowShelfPlaceCollectEnvCfg`，`cameras=['workcell_camera', 'wrist_camera']`，`recorders=['record_hdf5']`。
+- 采集任务：`LowShelfPlaceCollectEnvCfg`，`cameras=['workcell_camera', 'wrist_camera', 'top_camera']`，`recorders=['record_hdf5']`。
 
 无头训练：
 
@@ -306,7 +308,7 @@ conda activate env_isaac_lab
 python scripts/reinforcement_learning/rsl_rl/probe_task_cfg.py --task Isaac-M20-Piper-LowShelf-Place-v0 --headless
 ```
 
-采集任务应显示两路相机和 `record_hdf5`：
+采集任务应显示三路相机和 `record_hdf5`：
 
 ```powershell
 python scripts/reinforcement_learning/rsl_rl/probe_task_cfg.py --task Isaac-M20-Piper-LowShelf-Collect-v0 --headless
@@ -341,6 +343,8 @@ recordings/camera_smoke/workcell_camera_rgb.png
 recordings/camera_smoke/workcell_camera_depth.png
 recordings/camera_smoke/wrist_camera_rgb.png
 recordings/camera_smoke/wrist_camera_depth.png
+recordings/camera_smoke/top_camera_rgb.png
+recordings/camera_smoke/top_camera_depth.png
 recordings/camera_smoke/camera_smoke.hdf5
 ```
 
@@ -410,6 +414,7 @@ python scripts/data/convert_hdf5_to_lerobot.py `
 ```text
 camera/workcell_camera/rgb -> observation.images.camera1
 camera/wrist_camera/rgb    -> observation.images.camera2
+camera/top_camera/rgb      -> observation.images.camera3
 robot/joint_pos            -> observation.state
 action                     -> action
 ```
@@ -434,6 +439,12 @@ python scripts/data/replay_low_shelf_hdf5.py --input recordings/collect_smoke/ke
 
 ```powershell
 python scripts/data/replay_low_shelf_hdf5.py --input recordings/collect_smoke/keyboard.hdf5 --camera wrist_camera --output recordings/collect_smoke/keyboard_wrist_replay.mp4
+```
+
+生成顶部相机 RGB-D 回放：
+
+```powershell
+python scripts/data/replay_low_shelf_hdf5.py --input recordings/collect_smoke/keyboard.hdf5 --camera top_camera --output recordings/collect_smoke/keyboard_top_replay.mp4
 ```
 
 ### 8.8 SmolVLA CPU smoke
@@ -471,7 +482,7 @@ HF_HOME=/path/to/hf-cache HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
 
 注意：
 
-- 数据集相机键直接写成 `observation.images.camera1` / `camera2`，训练配置不要再加 `rename_map`；LeRobot 0.6.1 的 `rename_map` 只改 batch 键，不改 SmolVLA 的 `input_features`，会导致 `All image features are missing from the batch`。
+- 数据集相机键直接写成 `observation.images.camera1` / `camera2` / `camera3`，训练配置不要再加 `rename_map`；LeRobot 0.6.1 的 `rename_map` 只改 batch 键，不改 SmolVLA 的 `input_features`，会导致 `All image features are missing from the batch`。
 - 离线训练必须设置 `policy.push_to_hub: false`。
 - 无 GPU 时 `device: cpu` 也能跑通；当前 CPU smoke 约 3-4 s/step（batch=1）。
 
@@ -495,7 +506,7 @@ python scripts/data/collect_low_shelf_hdf5.py `
 ```
 
 - 结果写到 `recordings/low_shelf_place/vr_task.hdf5`（相对仓库根目录）。不传 `--output` 时默认是 `recordings/low_shelf_place/<YYYYMMDD_HHMMSS>_vr.hdf5`。
-- 默认两路相机 `224 x 224`、`10 Hz`；控制频率约 `50 Hz`。需要 25 Hz 相机时加 `--camera_update_period 0.04`，转换时对应使用 `--fps 25`。
+- 默认三路相机 `224 x 224`、`10 Hz`；控制频率约 `50 Hz`。需要 25 Hz 相机时加 `--camera_update_period 0.04`，转换时对应使用 `--fps 25`。如果临时设备不足，可加 `--no-top_camera` 只采集两路。
 - 一个 HDF5 可以包含多个 episode。右 B 开始并重新标定；左 Y 保存成功并 reset；左 X 保存失败并 reset；直接退出会把当前 episode 以 `shutdown_manual_stop` 保存。
 - `--overwrite` 会覆盖同名 HDF5；正式采集不要误加。
 
@@ -518,7 +529,7 @@ cd /root/loco-manip-unified-rl-agent
   --overwrite
 ```
 
-输出目录是标准 LeRobot v3：`data/`、`videos/observation.images.camera1`、`videos/observation.images.camera2`、`meta/`。`meta/source_episodes.json` 保留每个 HDF5 episode 的成功/失败标签，`meta/conversion_info.json` 记录 `source_fps`、输出 `fps` 和 `stride`。
+输出目录是标准 LeRobot v3：`data/`、`videos/observation.images.camera1`、`videos/observation.images.camera2`、`videos/observation.images.camera3`、`meta/`。`meta/source_episodes.json` 保留每个 HDF5 episode 的成功/失败标签，`meta/conversion_info.json` 记录 `source_fps`、输出 `fps` 和 `stride`。
 
 `--successful-only` 只保留 `success=True` 的 episode，适合第一版任务微调；如果要做失败恢复/纠错数据，可以去掉该参数，再在训练侧按自己的策略筛选。转换器默认保留所有 episode。
 
@@ -563,7 +574,7 @@ HF_HOME=/root/tievnas/hjx/smolvla/hf-cache HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE
 - 输出在 `output_dir/checkpoints/last/pretrained_model`；中断后可加 `--resume=true` 继续。
 - `chunk_size: 20` 在 10 Hz 下覆盖 2 秒，适合 pick-and-place；默认 `50` 在 10 Hz 下是 5 秒，可能过长。已经验证 `chunk_size: 20` 能正常加载和训练。
 - 有 GPU 时把 `batch_size` 调大；当前无卡 CPU 用 `batch_size: 1`。
-- 不要加 `rename_map`；转换器已经直接输出 `camera1/camera2`。离线训练必须 `push_to_hub: false`。
+- 不要加 `rename_map`；转换器已经直接输出 `camera1/camera2/camera3`。离线训练必须 `push_to_hub: false`。
 
 #### 8.9.4 相机设置与 smolvla_base 预训练配置的差异
 
@@ -579,13 +590,15 @@ resize_imgs_with_padding       512 x 512
 当前采集/微调数据是：
 
 ```text
-camera1, camera2               3 x 224 x 224
+camera1, camera2, camera3      3 x 224 x 224
 observation.state              24 维
 action                         13 维
 resize_imgs_with_padding       512 x 512（沿用 base）
 ```
 
-所以原始相机设置并不和预训练声明完全一样，但微调是兼容的：SmolVLA 会根据数据集重建 `input_features`/`output_features`，视觉预处理器仍把每路图像等比缩放并 padding 到 `512 x 512`。预训练声明里的 3 相机、6 维 state/action 是 base checkpoint 的原始机器人配置，不是微调硬约束。相机键名必须保持 `camera1`/`camera2`，并且训练和部署使用相同的相机位置、分辨率和内参。
+所以相机数量现在已经和 base 对齐，但分辨率和 state/action 维度仍不同。微调是兼容的：SmolVLA 会根据数据集重建 `input_features`/`output_features`，视觉预处理器仍把每路图像等比缩放并 padding 到 `512 x 512`。预训练声明里的 6 维 state/action 是 base checkpoint 的原始机器人配置，不是微调硬约束。相机键名必须保持 `camera1`/`camera2`/`camera3`，并且训练和部署使用相同的相机位置、分辨率和内参。
+
+两路相机也能训练，因为 SmolVLA 不强制相机数量；但三路更接近 base 的多视角配置，顶部全局视角对上层放置和有遮挡时的空间定位通常有帮助，尤其适合当前“下层取料、上层放置”的任务。第一版建议保留三路。
 
 参考 SO100 数据集 `svla_so100_pickplace` 是 `480 x 640`、30 Hz；当前数据是 `224 x 224`、10 Hz。能训练，但视觉细节和时间分辨率都更低。想更接近 base 配置，可在采集时加 `--camera_width 256 --camera_height 256`；如果更看重动作时间分辨率，可用 25/50 Hz 相机设置。
 

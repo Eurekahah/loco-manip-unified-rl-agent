@@ -28,7 +28,7 @@ from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg imp
 
 from . import mdp
 from .recording import LowShelfHDF5RecorderManagerCfg
-from .scene_cfg import LowShelfPlaceSceneCfg, make_workcell_camera, make_wrist_camera
+from .scene_cfg import LowShelfPlaceSceneCfg, make_top_camera, make_workcell_camera, make_wrist_camera
 
 
 @configclass
@@ -291,6 +291,7 @@ class LowShelfPlaceEnvCfg(HighLevelFlatEnvCfg):
         self.scene.nav_camera = None
         self.scene.workcell_camera = None
         self.scene.wrist_camera = None
+        self.scene.top_camera = None
         self.disable_zero_weight_rewards()
 
 
@@ -307,6 +308,7 @@ class LowShelfPlaceTeleopEnvCfg(LowShelfPlaceEnvCfg):
         # separate task (LowShelfPlaceCollectEnvCfg).
         self.scene.workcell_camera = None
         self.scene.wrist_camera = None
+        self.scene.top_camera = None
         self.decimation = 4
         self.sim.render_interval = self.decimation
         self.episode_length_s = 60.0
@@ -323,6 +325,7 @@ class LowShelfPlaceCollectEnvCfg(LowShelfPlaceTeleopEnvCfg):
         super().__post_init__()
         self.scene.workcell_camera = make_workcell_camera()
         self.scene.wrist_camera = make_wrist_camera()
+        self.scene.top_camera = make_top_camera()
         self.recorders.record_hdf5.language_instruction = self.language_instruction
         self.recorders.record_hdf5.task = "Isaac-M20-Piper-LowShelf-Collect-v0"
 

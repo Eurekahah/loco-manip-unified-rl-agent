@@ -30,6 +30,7 @@ import torch  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 
 from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place.scene_cfg import (  # noqa: E402
+    make_top_camera,
     make_workcell_camera,
     make_wrist_camera,
 )
@@ -59,7 +60,11 @@ def main() -> None:
     env_cfg.scene.wrist_camera = make_wrist_camera(
         width=args_cli.camera_width, height=args_cli.camera_height
     )
-    env_cfg.recorders.record_hdf5.camera_names = ("workcell_camera", "wrist_camera")
+    env_cfg.scene.top_camera = make_top_camera(
+        width=args_cli.camera_width, height=args_cli.camera_height
+    )
+    camera_names = ("workcell_camera", "wrist_camera", "top_camera")
+    env_cfg.recorders.record_hdf5.camera_names = camera_names
     env_cfg.recorders.record_hdf5.output_path = os.path.join(args_cli.output_dir, "camera_smoke.hdf5")
     env_cfg.recorders.record_hdf5.overwrite = True
     env_cfg.recorders.record_hdf5.source = "camera_smoke"
@@ -70,7 +75,7 @@ def main() -> None:
     for _ in range(args_cli.steps):
         env.step(actions)
 
-    for name in ("workcell_camera", "wrist_camera"):
+    for name in camera_names:
         sensor = env.scene.sensors[name]
         data = sensor.data
         rgb = data.output["rgb"][0].detach().cpu().numpy().astype(np.uint8)

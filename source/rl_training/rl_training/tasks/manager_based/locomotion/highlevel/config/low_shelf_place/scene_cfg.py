@@ -166,6 +166,42 @@ def make_wrist_camera(
     )
 
 
+def make_top_camera(
+    *,
+    width: int = 224,
+    height: int = 224,
+    update_period: float = 0.1,
+    pos: tuple[float, float, float] = (0.80, 0.0, 1.45),
+    target: tuple[float, float, float] = (0.80, 0.0, 0.35),
+    rot: tuple[float, float, float, float] | None = None,
+    clipping_range: tuple[float, float] = (0.1, 4.0),
+) -> TiledCameraCfg:
+    """Create an overhead camera for the upper shelf and placement area."""
+    camera_rot = rot if rot is not None else _look_at_quat_world(pos, target)
+    return TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/TopCamera",
+        update_period=update_period,
+        height=height,
+        width=width,
+        data_types=["rgb", "depth"],
+        debug_vis=False,
+        depth_clipping_behavior="zero",
+        update_latest_camera_pose=False,
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=20.0,
+            focus_distance=400.0,
+            f_stop=0.0,
+            horizontal_aperture=20.955,
+            clipping_range=clipping_range,
+        ),
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=pos,
+            rot=camera_rot,
+            convention="world",
+        ),
+    )
+
+
 @configclass
 class LowShelfPlaceSceneCfg(HighLevelSceneCfg):
     """Compact two-level workcell for a body-pitch-assisted pick-and-place task."""
@@ -258,4 +294,5 @@ class LowShelfPlaceSceneCfg(HighLevelSceneCfg):
     # therefore keep the same headless performance as the state-only task.
     workcell_camera: TiledCameraCfg | None = None
     wrist_camera: TiledCameraCfg | None = None
+    top_camera: TiledCameraCfg | None = None
 
