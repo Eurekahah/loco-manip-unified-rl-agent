@@ -436,9 +436,6 @@ AFRAME.registerComponent('controller-updater', {
         const leftRotY = THREE.MathUtils.radToDeg(leftRotEuler.y);
         const leftRotZ = THREE.MathUtils.radToDeg(leftRotEuler.z);
 
-        // 添加调试信息
-        console.log(`Left Hand - Visible: ${this.leftHand.object3D.visible}, Pos: ${leftPos.x.toFixed(2)},${leftPos.y.toFixed(2)},${leftPos.z.toFixed(2)}`);
-
         // Calculate relative rotation if grip is held
         if (this.leftGripDown && this.leftGripInitialRotation) {
           this.leftRelativeRotation = this.calculateRelativeRotation(
@@ -454,8 +451,6 @@ AFRAME.registerComponent('controller-updater', {
             );
           }
           
-          console.log('Left relative rotation:', this.leftRelativeRotation);
-          console.log('Left Z-axis rotation:', this.leftZAxisRotation.toFixed(1), 'degrees');
         }
 
         // Create display text including relative rotation when grip is held
@@ -498,8 +493,6 @@ AFRAME.registerComponent('controller-updater', {
                 };
             }
         }
-    } else {
-        console.log('Left hand object not available');
     }
 
     // Update Right Hand Text & Collect Data
@@ -511,9 +504,6 @@ AFRAME.registerComponent('controller-updater', {
         const rightRotX = THREE.MathUtils.radToDeg(rightRotEuler.x);
         const rightRotY = THREE.MathUtils.radToDeg(rightRotEuler.y);
         const rightRotZ = THREE.MathUtils.radToDeg(rightRotEuler.z);
-
-        // 添加调试信息
-        console.log(`Right Hand - Visible: ${this.rightHand.object3D.visible}, Pos: ${rightPos.x.toFixed(2)},${rightPos.y.toFixed(2)},${rightPos.z.toFixed(2)}`);
 
         // Calculate relative rotation if grip is held
         if (this.rightGripDown && this.rightGripInitialRotation) {
@@ -530,8 +520,6 @@ AFRAME.registerComponent('controller-updater', {
             );
           }
           
-          console.log('Right relative rotation:', this.rightRelativeRotation);
-          console.log('Right Z-axis rotation:', this.rightZAxisRotation.toFixed(1), 'degrees');
         }
 
         // Create display text including relative rotation when grip is held
@@ -574,8 +562,6 @@ AFRAME.registerComponent('controller-updater', {
                 };
             }
         }
-    } else {
-        console.log('Right hand object not available');
     }
 
     // Collect headset data
@@ -602,9 +588,6 @@ AFRAME.registerComponent('controller-updater', {
           w: this.headset.object3D.quaternion.w 
         };
         
-        console.log(`Headset - Pos: ${headsetPos.x.toFixed(2)},${headsetPos.y.toFixed(2)},${headsetPos.z.toFixed(2)}`);
-    } else {
-        console.log('Headset object not available');
     }
 
     // Send combined packet if WebSocket is open and at least one controller has valid data
@@ -622,16 +605,6 @@ AFRAME.registerComponent('controller-updater', {
                 headset: headset
             };
             this.websocket.send(JSON.stringify(dualControllerData));
-            
-            // 添加调试信息
-            console.log('Sending VR data:', {
-                left: hasValidLeft ? 'valid' : 'invalid',
-                right: hasValidRight ? 'valid' : 'invalid',
-                headset: hasValidHeadset ? 'valid' : 'invalid',
-                leftPos: leftController.position,
-                rightPos: rightController.position,
-                headsetPos: headset.position
-            });
         }
     }
   }
@@ -743,4 +716,4 @@ function addControllerTrackingButton() {
     } else {
         console.warn('WebXR not supported by this browser.');
     }
-} 
+}

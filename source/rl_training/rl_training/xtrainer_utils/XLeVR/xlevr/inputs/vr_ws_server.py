@@ -10,6 +10,7 @@ import websockets
 import numpy as np
 import math
 import logging
+import time
 from typing import Dict, Optional, Set
 from scipy.spatial.transform import Rotation as R
 
@@ -120,7 +121,8 @@ class VRWebSocketServer(BaseInputProvider):
                 self.websocket_handler, 
                 host, 
                 port, 
-                ssl=ssl_context
+                ssl=ssl_context,
+                compression=None,  # 60-90Hz 小包不做 deflate，省 Quest/Python 两端 CPU
             )
             self.is_running = True
             logger.info(f"VR WebSocket server running on wss://{host}:{port}")
@@ -170,6 +172,7 @@ class VRWebSocketServer(BaseInputProvider):
     
     async def process_controller_data(self, data: Dict):
         """Process incoming VR controller data."""
+        client_timestamp_ms = data.get("timestamp")
         # 检查是否有摇杆或按钮操作，只在有操作时打印
         has_thumbstick_or_button_activity = False
         thumbstick_info = []
@@ -235,20 +238,27 @@ class VRWebSocketServer(BaseInputProvider):
                         "relative_position": False,
                         "vr_position": headset_position.tolist(),
                         "rotation": rot,
-                        "quaternion": quat
+                        "quaternion": quat,
+                        "client_timestamp_ms": client_timestamp_ms,
+                        "server_recv_monotonic": time.monotonic(),
                     }
                 )
                 await self.send_goal(headset_goal)
         
         # Process controller data
         if 'leftController' in data:
-            await self.process_single_controller('left', data['leftController'])
+            await self.process_single_controller(
+                'left', data['leftController'], client_timestamp_ms
+            )
         
         if 'rightController' in data:
-            await self.process_single_controller('right', data['rightController'])
+            await self.process_single_controller(
+                'right', data['rightController'], client_timestamp_ms
+            )
     
-    async def process_single_controller(self, hand: str, data: Dict):
+    async def process_single_controller(self, hand: str, data: Dict, client_timestamp_ms=None):
         """Process data for a single controller."""
+        server_recv_monotonic = time.monotonic()
         position = data.get('position', {})
         rotation = data.get('rotation', {})
         quaternion = data.get('quaternion', {})  # Get quaternion data directly
@@ -349,6 +359,8 @@ class VRWebSocketServer(BaseInputProvider):
                     "thumbstick": thumbstick,
                     "buttons": buttons,
                     "quaternion": quaternion,
+                    "client_timestamp_ms": client_timestamp_ms,
+                    "server_recv_monotonic": server_recv_monotonic,
                 }
             )
             await self.send_goal(goal)
@@ -592,4 +604,4 @@ class VRWebSocketServer(BaseInputProvider):
             print()
         else:
             # Use the parent class method to send to queue
-            await super().send_goal(goal) 
+            await super().send_goal(goal)
