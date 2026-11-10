@@ -628,7 +628,8 @@ class TeleopEnvCfg(HLFlatPickTeacherEnvCfg):
 # 低层的 policy 观测逐项一致；replay 侧还会用 `policy_layout.json` 再校验一次。
 # ==========================================
 _LOW_LEVEL_HISTORY_POLICY = resolve_policy_path(
-    "logs/rsl_rl/history_adaptation/2026-09-20_00-50-31/exported_deploy/policy.pt",
+    # 由 .../2026-09-30_19-36-00_cloud_cap12_20k/model_19999.pt 导出的部署态策略。
+    "logs/rsl_rl/history_adaptation/2026-09-30_19-36-00_cloud_cap12_20k/exported_deploy/policy.pt",
     key="teleop_history",
 )
 

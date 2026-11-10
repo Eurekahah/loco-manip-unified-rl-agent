@@ -21,13 +21,14 @@ if TYPE_CHECKING:
 
 class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
     """
-    从 CommandManager 直接读取世界坐标系下的目标 EE 位姿，
+    从 CommandManager 直接读取 root 系下的目标 EE 位姿，
     完全绕过 policy 的 action 输出来驱动机械臂 IK。
 
     适用于装载机械臂的轮腿式机器人（floating base），
     底盘运动由其他 action term 控制，机械臂由本 term 接管。
 
-    command 格式: (num_envs, 7) -> [x, y, z, qw, qx, qy, qz]，世界坐标系。
+    command 格式: (num_envs, 7) -> [x, y, z, qw, qx, qy, qz]（绝对模式），
+    或 (num_envs, 6) -> [dx, dy, dz, drx, dry, drz]（相对模式）。
     """
 
     cfg: CommandDrivenIKActionCfg
@@ -35,15 +36,33 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
     def __init__(self, cfg, env: ManagerBasedRLEnv):
         
         self._ee_vis_markers: VisualizationMarkers | None = None
+        self._command_override: torch.Tensor | None = None
         super().__init__(cfg, env)
         self._init_joint_protection()
 
     def process_actions(self, actions: torch.Tensor):
-        command = self._env.command_manager.get_command(self.cfg.command_name)
+        if self._command_override is None:
+            command = self._env.command_manager.get_command(self.cfg.command_name)
+        else:
+            command = self._command_override
+        if command.shape[-1] != self._ik_controller.action_dim:
+            mode = "relative" if self.cfg.controller.use_relative_mode else "absolute"
+            raise ValueError(
+                f"[{type(self).__name__}] {mode} IK 需要 {self._ik_controller.action_dim}D command，"
+                f"实际收到 {command.shape[-1]}D。相对模式请通过 set_command_override() 注入 6D 位姿增量。"
+            )
         # 当前末端真实位姿（root系）
         ee_pos_curr, ee_quat_curr = self._compute_frame_pose()
 
         self._ik_controller.set_command(command, ee_pos_curr, ee_quat_curr)
+
+    def set_command_override(self, command: torch.Tensor | None) -> None:
+        """覆盖 command_manager 的输入（Teleop 相对 IK 用）。``None`` 恢复默认来源。"""
+        self._command_override = None if command is None else command
+
+    def reset(self, env_ids=None):
+        super().reset(env_ids)
+        self._command_override = None
 
     # ------------------------------------------------------------------
     # B2-②/⑤：IK 输出的"关节保护"（DEF-049）
@@ -281,7 +300,7 @@ class CommandDrivenIKActionCfg(ActionTermCfg):
     """末端执行器 body 名称，例如 "end_effector" """
 
     controller: DifferentialIKControllerCfg = MISSING
-    """IK controller 配置，必须设置 command_type='pose', use_relative_mode=False"""
+    """IK controller 配置；command_type='pose'，use_relative_mode 决定 7D 绝对或 6D 相对输入。"""
 
     # --- 本类新增字段 ---
 

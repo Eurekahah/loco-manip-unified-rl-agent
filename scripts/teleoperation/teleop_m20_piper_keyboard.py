@@ -1,6 +1,8 @@
 # scripts/teleoperation/teleop_m20_piper_keyboard.py
 
 import argparse
+import copy
+
 import torch
 import numpy as np
 from isaaclab.app import AppLauncher
@@ -8,8 +10,25 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser()
 parser.add_argument("--task", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=1)
+parser.add_argument(
+    "--render-interval",
+    type=int,
+    default=4,
+    help="Isaac Sim 每多少个物理步渲染一次；默认 4（每个 env step 渲染一次）。",
+)
+parser.add_argument(
+    "--camera-view",
+    choices=("free", "chest", "wrist", "both"),
+    default="free",
+    help="GUI 视角：free=自由视角，chest=胸前，wrist=腕部，both=胸前主视口 + 独立腕部视口。",
+)
 AppLauncher.add_app_launcher_args(parser)
+parser.set_defaults(rendering_mode="performance")
 args = parser.parse_args()
+if args.render_interval < 1:
+    parser.error("--render-interval 必须 >= 1")
+if args.headless and args.camera_view != "free":
+    parser.error("--camera-view 需要 GUI；headless 模式只能使用 free。")
 
 app_launcher = AppLauncher(args)
 simulation_app = app_launcher.app
@@ -21,13 +40,100 @@ from rl_training.devices.keyboard_loco_manip_teleop import KeyboardLocoManipTele
 import rl_training.tasks  # noqa: F401
 
 
+class _TeleopCameraRig:
+    """Bind the main viewport and an optional second viewport to teleop cameras."""
+
+    def __init__(self, env, mode: str):
+        self.extra_viewport = None
+        if mode == "free":
+            return
+
+        import omni.kit.commands
+        from omni.kit.viewport.utility import get_active_viewport
+
+        active_viewport = get_active_viewport()
+        nav_camera_path = (
+            str(env.scene["nav_camera"]._view.prim_paths[0])
+            if mode in {"chest", "both"}
+            else None
+        )
+        arm_camera_path = (
+            str(env.scene["arm_camera"]._view.prim_paths[0])
+            if mode in {"wrist", "both"}
+            else None
+        )
+        primary_path = nav_camera_path if mode in {"chest", "both"} else arm_camera_path
+        omni.kit.commands.execute(
+            "SetViewportCamera",
+            camera_path=primary_path,
+            viewport_api=active_viewport,
+        )
+
+        if mode == "both":
+            from isaacsim.core.utils.viewports import create_viewport_for_camera
+
+            self.extra_viewport = create_viewport_for_camera(
+                "Wrist Camera",
+                arm_camera_path,
+                width=640,
+                height=480,
+                position_x=80,
+                position_y=80,
+            )
+
+    def close(self):
+        if self.extra_viewport is not None:
+            self.extra_viewport.destroy()
+            self.extra_viewport = None
+
+
 def main():
     # ── 1. 创建环境 ────────────────────────────────────────────────────
     env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs)
     env_cfg.terminations.time_out = None
-    env_cfg.actions.pre_trained_pick_action.debug_vis = not args.headless
-    env_cfg.actions.pre_trained_pick_action.debug_vis_ee_target_only = True
+    env_cfg.sim.render_interval = int(args.render_interval)
+
+    if args.camera_view != "free":
+        if args.camera_view in {"chest", "both"}:
+            from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import (
+                HighLevelSceneCfg,
+            )
+
+            reference_scene_cfg = HighLevelSceneCfg(
+                num_envs=args.num_envs, env_spacing=5.0
+            )
+            nav_cfg = copy.deepcopy(reference_scene_cfg.nav_camera)
+            nav_cfg.prim_path = "{ENV_REGEX_NS}/Robot/base_link/nav_camera"
+            nav_cfg.data_types = ["rgb"]
+            env_cfg.scene.nav_camera = nav_cfg
+        if args.camera_view in {"wrist", "both"}:
+            from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place.scene_cfg import (
+                make_wrist_camera,
+            )
+
+            arm_cfg = make_wrist_camera(width=224, height=224, update_period=0.1)
+            arm_cfg.data_types = ["rgb"]
+            env_cfg.scene.arm_camera = arm_cfg
+
+    env_cfg.actions.pre_trained_pick_action.debug_vis = False
+    env_cfg.actions.pre_trained_pick_action.debug_vis_ee_target_only = False
+    if getattr(env_cfg, "commands", None) is not None and hasattr(env_cfg.commands, "ee_pose"):
+        env_cfg.commands.ee_pose.debug_vis = False
+    env_cfg.actions.pre_trained_pick_action.low_level_ee_actions.debug_vis = False
     env = gym.make(args.task, cfg=env_cfg).unwrapped
+    env.cfg.sim.render_interval = int(args.render_interval)
+    env.sim.cfg.render_interval = int(args.render_interval)
+    env.command_manager.set_debug_vis(False)
+    env.action_manager.set_debug_vis(False)
+
+    import omni.usd
+    from pxr import UsdGeom
+
+    visuals_prim = omni.usd.get_context().get_stage().GetPrimAtPath("/Visuals")
+    if visuals_prim.IsValid():
+        UsdGeom.Imageable(visuals_prim).MakeInvisible()
+
+    camera_rig = _TeleopCameraRig(env, args.camera_view)
 
     # ── 2. 创建键盘设备 ────────────────────────────────────────────────
     device_cfg = KeyboardLocoManipTeleopCfg(
@@ -130,6 +236,7 @@ def main():
             print(f"[Teleop] Error during simulation step: {e}")
             raise
 
+    camera_rig.close()
     env.close()
 
 
