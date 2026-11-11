@@ -11,7 +11,6 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
 
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as hl_mdp
-import rl_training.tasks.manager_based.locomotion.velocity.mdp as vel_mdp
 from rl_training.tasks.manager_based.locomotion.highlevel.config.high_level.hl_flat_pick_env_cfg import (
     TeleopActionsCfg,
 )
@@ -37,78 +36,6 @@ from .scene_cfg import (
 
 @configclass
 class TwoCylinderPlaceRewardsCfg:
-    approach_object = RewTerm(
-        func=hl_mdp.distance_to_target_reward_shift_progress,
-        weight=0.05,
-        params={
-            "robot_cfg": SceneEntityCfg("robot"),
-            "target_cfg": SceneEntityCfg("object"),
-            "sensitivity": 5.0,
-            "penalty_scale": 0.0,
-            "stop_reward_dist": 0.50,
-            "overshoot_penalty_scale": 0.2,
-        },
-    )
-    heading_to_object = RewTerm(
-        func=hl_mdp.heading_to_target_reward_progress,
-        weight=0.02,
-        params={
-            "robot_cfg": SceneEntityCfg("robot"),
-            "target_cfg": SceneEntityCfg("object"),
-            "sensitivity": 10.0,
-            "penalty_scale": 0.0,
-            "near_dist_gate": 0.30,
-        },
-    )
-    gripper_alignment = RewTerm(
-        func=hl_mdp.object_ee_symmetric_alignment_progress,
-        weight=0.25,
-        params={
-            "min_finger_dist": 0.04,
-            "object_cfg": SceneEntityCfg("object"),
-            "ee_frame_cfg_finger1": SceneEntityCfg("robot", body_names="gripper_link1"),
-            "ee_frame_cfg_finger2": SceneEntityCfg("robot", body_names="gripper_link2"),
-            "sensitivity": 10.0,
-        },
-    )
-    ee_object_progress = RewTerm(
-        func=mdp.ee_object_progress_reward,
-        weight=0.25,
-        params={
-            "object_cfg": SceneEntityCfg("object"),
-            "robot_cfg": SceneEntityCfg("robot"),
-            "sensitivity": 20.0,
-        },
-    )
-    ee_orientation = RewTerm(
-        func=hl_mdp.ee_orientation_to_object,
-        weight=0.02,
-        params={
-            "object_cfg": SceneEntityCfg("object"),
-            "ee_frame_cfg": SceneEntityCfg("robot", body_names="gripper_base"),
-            "dist_gate": 0.01,
-        },
-    )
-    standpick = RewTerm(
-        func=mdp.standpick_reward,
-        weight=0.10,
-        params={
-            "object_cfg": SceneEntityCfg("object"),
-            "robot_cfg": SceneEntityCfg("robot"),
-            "distance_threshold": 0.60,
-            "forward_speed_threshold": 0.08,
-        },
-    )
-    lift_object = RewTerm(
-        func=hl_mdp.object_is_lifted_progress,
-        weight=1.0,
-        params={
-            "object_cfg": SceneEntityCfg("object"),
-            "cmd_proximity_gate": 0.25,
-            "action_term_name": "pre_trained_pick_action",
-            "sensitivity": 10.0,
-        },
-    )
     pick_up = RewTerm(
         func=mdp.pick_up_bonus,
         weight=3.5,
@@ -120,46 +47,11 @@ class TwoCylinderPlaceRewardsCfg:
             "gripper_closed_threshold": 0.03,
         },
     )
-    object_to_target = RewTerm(
-        func=mdp.object_to_target_reward_gated,
-        weight=1.5,
-        params={
-            "object_cfg": SceneEntityCfg("object"),
-            "target_cfg": SceneEntityCfg("target_pad"),
-            "lift_height": 0.04,
-            "sensitivity": 6.0,
-        },
-    )
-    body_pitch_reach = RewTerm(
-        func=low_shelf_mdp.body_pitch_reach_reward,
-        weight=0.02,
-        params={
-            "asset_cfg": SceneEntityCfg("robot"),
-            "object_cfg": SceneEntityCfg("object"),
-            "desired_pitch": -0.14,
-            "tolerance": 0.12,
-            "object_height_gate": 0.42,
-        },
-    )
-    body_height_for_place = RewTerm(
-        func=mdp.body_height_for_place_reward,
-        weight=0.05,
-        params={
-            "asset_cfg": SceneEntityCfg("robot"),
-            "object_cfg": SceneEntityCfg("object"),
-            "target_cfg": SceneEntityCfg("target_pad"),
-            "low_height": 0.40,
-            "high_height": 0.52,
-            "lift_transition_margin": 0.10,
-            "tolerance": 0.07,
-        },
-    )
     place_success = RewTerm(
         func=hl_mdp.is_terminated_term,
         weight=4.0,
         params={"term_keys": "place_success"},
     )
-    action_rate = RewTerm(func=vel_mdp.action_rate_l2, weight=-0.001)
 
 
 @configclass
