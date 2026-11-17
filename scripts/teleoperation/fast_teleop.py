@@ -100,22 +100,16 @@ class FastTeleopStepper:
         render_enabled = self.env.sim.has_gui() or self.env.sim.has_rtx_sensors()
         should_render = render_due and render_enabled
 
-        if not self.write_targets_each_tick:
-            started = time.perf_counter()
-            self.env.action_manager.apply_action()
-            self._measure("fast_action_apply_ms", started)
-            started = time.perf_counter()
-            self.env.scene.write_data_to_sim()
-            self._measure("fast_scene_write_ms", started)
-
         for index in range(self._decimation):
             self.env._sim_step_counter += 1
 
-            if self.write_targets_each_tick:
-                started = time.perf_counter()
-                self.env.action_manager.apply_action()
-                self._measure("fast_action_apply_ms", started)
+            # Always advance action terms so the low-level policy/history keep
+            # their original 50 Hz cadence. Target writes may still be decimated.
+            started = time.perf_counter()
+            self.env.action_manager.apply_action()
+            self._measure("fast_action_apply_ms", started)
 
+            if self.write_targets_each_tick or index == 0:
                 started = time.perf_counter()
                 self.env.scene.write_data_to_sim()
                 self._measure("fast_scene_write_ms", started)

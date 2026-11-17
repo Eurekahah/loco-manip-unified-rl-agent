@@ -59,7 +59,7 @@ event_manager_ms
 | 完整 `env.step` | 5.60 | 208.35 ms |
 | Fast，每 5 ms 写目标，IK 5 ms | 6.30 | 181.49 ms |
 | Fast，每 20 ms 写目标，IK 20 ms | 17.57 | 87.52 ms |
-| Fast，每 20 ms 写目标，IK 20 ms，100 步稳定 | 21.05 | 59.12 ms |
+| Fast，每 20 ms 写目标，IK 20 ms，100 步稳定 | 16.33 | 68.52 ms |
 
 Fast 配置主要耗时：
 
@@ -74,14 +74,19 @@ scene.update              约 7 ms
 100 步稳定样本：
 
 ```text
-env_step mean    58.67 ms
-env_step p95     73.57 ms
-sim.step mean     7.27 ms（每个物理 tick）
-scene.write      11.46 ms
-scene.update      6.30 ms
-action apply      8.12 ms
-IK apply         15.68 ms（每 20 ms 一次）
+env_step mean    68.08 ms
+env_step p95     66.51 ms
+sim.step mean     7.38 ms（每个物理 tick）
+scene.write      11.55 ms（每个控制 tick）
+scene.update      6.46 ms（每个控制 tick）
+action apply      4.19 ms（每个物理 tick）
+low-level policy  2.13 ms（每 4 个物理 tick）
+IK apply          7.22 ms（每 4 个物理 tick）
 ```
+
+关键修正：`action_manager.apply_action()` 必须每个 5 ms 物理 tick 调用，否则低层
+策略/history 计数器会降到约 12.5 Hz，机械臂会明显抖动。Fast path 只降频
+`scene.write_data_to_sim()`，不降频 action manager。
 
 首个 episode step 仍包含约 0.5 秒的首次策略/IK 缓存 spike，之后进入稳定区间。
 
