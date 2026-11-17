@@ -98,6 +98,7 @@ def main() -> None:
     target = env.scene["target_pad"]
     action_term = env.action_manager.get_term("pre_trained_pick_action")
     recorder = env.low_shelf_hdf5_recorder
+    recorder.set_recording_active(False)
     ee_body_id = robot.find_bodies("gripper_base")[0][0]
     finger_ids, _ = robot.find_bodies(["gripper_link1", "gripper_link2"], preserve_order=True)
     gripper_ids, _ = robot.find_joints(("gripper_joint1", "gripper_joint2"), preserve_order=True)
@@ -377,15 +378,14 @@ def main() -> None:
         orientation_weight=0.30,
     )
 
-    # Restore the scene and drop the unrecorded search frames.
+    # Restore the scene and start streaming only the recorded pick sequence.
     robot.write_joint_state_to_sim(rest_q.unsqueeze(0), zero6, joint_ids=arm_ids)
     obj.write_root_pose_to_sim(torch.cat([object_root, object_quat_saved]).unsqueeze(0))
     obj.write_root_velocity_to_sim(zero6)
     env.sim.step(render=False)
     env.scene.update(env.cfg.sim.dt)
     _anchor_base()
-    if recorder._frames[0]:
-        recorder._frames[0].clear()
+    recorder.set_recording_active(True)
     log_state("search restored")
 
     # 4) Recorded pick: approach, close the fingers, attach, lift. The box is
@@ -479,7 +479,7 @@ def main() -> None:
     )
     success = placed
 
-    if recorder._frames[0]:
+    if recorder.has_open_episode():
         recorder.mark_outcome(success)
         env.reset()
     recorder.close(recorder.output_path)

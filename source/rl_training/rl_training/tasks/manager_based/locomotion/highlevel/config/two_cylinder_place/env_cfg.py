@@ -11,15 +11,13 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
 
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as hl_mdp
+from rl_training.recorders import HDF5RecorderManagerCfg
 from rl_training.tasks.manager_based.locomotion.highlevel.config.high_level.hl_flat_pick_env_cfg import (
     TeleopActionsCfg,
 )
 from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place.env_cfg import (
     LowShelfPlaceEnvCfg,
     LowShelfPlaceTerminationsCfg,
-)
-from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place.recording import (
-    LowShelfHDF5RecorderManagerCfg,
 )
 from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place import (
     mdp as low_shelf_mdp,
@@ -116,7 +114,7 @@ class TwoCylinderPlaceTeleopEnvCfg(TwoCylinderPlaceEnvCfg):
 class TwoCylinderPlaceCollectEnvCfg(TwoCylinderPlaceTeleopEnvCfg):
     """Explicit RGB collection variant for keyboard tests and VR demos."""
 
-    recorders: LowShelfHDF5RecorderManagerCfg = LowShelfHDF5RecorderManagerCfg()
+    recorders: HDF5RecorderManagerCfg = HDF5RecorderManagerCfg()
 
     def __post_init__(self):
         super().__post_init__()
@@ -125,3 +123,16 @@ class TwoCylinderPlaceCollectEnvCfg(TwoCylinderPlaceTeleopEnvCfg):
         self.scene.top_camera = make_two_cylinder_top_camera(with_depth=False)
         self.recorders.record_hdf5.language_instruction = self.language_instruction
         self.recorders.record_hdf5.task = "Isaac-M20-Piper-TwoCylinder-Collect-v0"
+        self.recorders.record_hdf5.task_profile = "two_cylinder"
+        self.recorders.record_hdf5.action_term_name = "pre_trained_pick_action"
+        self.recorders.record_hdf5.tracked_entity_names = ("object", "target_pad")
+        self.recorders.record_hdf5.primary_object_name = "object"
+        self.recorders.record_hdf5.primary_target_name = "target_pad"
+        self.recorders.record_hdf5.success_term_name = "place_success"
+        self.recorders.record_hdf5.ee_body_name = "gripper_base"
+        self.recorders.record_hdf5.base_link_name = "base_link"
+        self.recorders.record_hdf5.gripper_joint_names = (
+            "gripper_joint1",
+            "gripper_joint2",
+        )
+        self.recorders.record_hdf5.legacy_env_attr_name = "low_shelf_hdf5_recorder"

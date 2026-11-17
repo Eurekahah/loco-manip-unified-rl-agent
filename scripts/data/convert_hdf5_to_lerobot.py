@@ -69,6 +69,7 @@ FISHEYE_CAMERA_ORDER = (
     "fisheye_cam1",
     "fisheye_cam2",
     "fisheye_cam3",
+    "fisheye_panorama",
 )
 
 
@@ -214,9 +215,11 @@ def convert(args: argparse.Namespace) -> None:
 
     with h5py.File(input_path, "r") as source:
         schema = _decode(source.attrs.get("schema", ""))
-        if schema != "low_shelf_pick_place/v1":
+        supported_schemas = {"teleop_manipulation/v1", "low_shelf_pick_place/v1"}
+        if schema not in supported_schemas:
             raise ValueError(
-                f"Unsupported HDF5 schema '{schema}'; expected 'low_shelf_pick_place/v1'."
+                f"Unsupported HDF5 schema '{schema}'; expected one of "
+                f"{sorted(supported_schemas)}."
             )
         action_semantics = _decode(source.attrs.get("action_semantics", ""))
         if action_semantics != ACTION_SEMANTICS:
