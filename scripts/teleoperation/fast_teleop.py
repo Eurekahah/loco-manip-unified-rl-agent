@@ -74,6 +74,8 @@ class FastTeleopStepper:
         *,
         render_hz: float = 15.0,
         write_targets_each_tick: bool = False,
+        robot_hot_loop: bool = False,
+        robot_hot_period_s: float = 0.005,
         profiler=None,
     ) -> None:
         if render_hz <= 0.0:
@@ -81,10 +83,18 @@ class FastTeleopStepper:
         self.env = env
         self.render_hz = float(render_hz)
         self.write_targets_each_tick = bool(write_targets_each_tick)
+        self.robot_hot_loop = bool(robot_hot_loop)
+        if robot_hot_period_s <= 0.0:
+            raise ValueError("robot_hot_period_s must be positive")
         self.profiler = profiler
         self._last_render = 0.0
         self._decimation = int(env.cfg.decimation)
         self._physics_dt = float(env.physics_dt)
+        self._robot = env.scene["robot"]
+        self._robot_hot_decimation = max(
+            1,
+            int(round(float(robot_hot_period_s) / self._physics_dt)),
+        )
 
     def _measure(self, name: str, started: float) -> None:
         if self.profiler is not None:
@@ -113,6 +123,10 @@ class FastTeleopStepper:
                 started = time.perf_counter()
                 self.env.scene.write_data_to_sim()
                 self._measure("fast_scene_write_ms", started)
+            elif self.robot_hot_loop and index % self._robot_hot_decimation == 0:
+                started = time.perf_counter()
+                self._write_robot_hot()
+                self._measure("fast_robot_write_ms", started)
 
             started = time.perf_counter()
             self.env.sim.step(render=False)
@@ -127,6 +141,10 @@ class FastTeleopStepper:
                 started = time.perf_counter()
                 self.env.scene.update(dt=self._physics_dt)
                 self._measure("fast_scene_update_ms", started)
+            elif self.robot_hot_loop:
+                started = time.perf_counter()
+                self._robot.update(dt=self._physics_dt)
+                self._measure("fast_robot_update_ms", started)
 
         if not self.write_targets_each_tick:
             started = time.perf_counter()
@@ -135,3 +153,6 @@ class FastTeleopStepper:
 
         if should_render:
             self._last_render = time.perf_counter()
+
+    def _write_robot_hot(self) -> None:
+        self._robot.write_data_to_sim()

@@ -50,6 +50,18 @@ parser.add_argument(
     help="Write action targets every 5 ms physics tick; default writes once per 20 ms control tick.",
 )
 parser.add_argument(
+    "--fast-robot-hot-loop",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="Update robot targets/state at the hot period while other scene data stays at 20 ms.",
+)
+parser.add_argument(
+    "--fast-robot-hot-period",
+    type=float,
+    default=0.01,
+    help="Robot target/actuator update period for the fast robot hot loop.",
+)
+parser.add_argument(
     "--ik-update-period",
     type=float,
     default=0.0,
@@ -74,6 +86,8 @@ if args.fast_render_hz <= 0.0:
     parser.error("--fast-render-hz must be > 0")
 if args.ik_update_period < 0.0:
     parser.error("--ik-update-period must be >= 0")
+if args.fast_robot_hot_period <= 0.0:
+    parser.error("--fast-robot-hot-period must be > 0")
 validate_fisheye_args(parser, args, include_panorama=True)
 args.enable_cameras = bool(
     getattr(args, "enable_cameras", False)
@@ -254,6 +268,8 @@ def main():
             env,
             render_hz=args.fast_render_hz,
             write_targets_each_tick=args.fast_write_each_tick,
+            robot_hot_loop=args.fast_robot_hot_loop,
+            robot_hot_period_s=args.fast_robot_hot_period,
             profiler=profiler,
         )
 

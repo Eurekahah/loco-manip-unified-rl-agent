@@ -10,6 +10,8 @@
 --fast-teleop / --no-fast-teleop
 --fast-render-hz                 墙钟渲染频率，默认 15 Hz
 --fast-write-each-tick           默认关闭；关闭时每 20 ms 控制 tick 写一次目标
+--fast-robot-hot-loop            默认开启；机械臂/robot target 以 hot period 更新
+--fast-robot-hot-period          默认 10 ms
 --ik-update-period               IK 重算周期（仿真秒），默认 0 表示每个物理 tick
 --profile-detailed               拆分 action/policy/IK/scene/sim/render 计时
 ```
@@ -59,7 +61,7 @@ event_manager_ms
 | 完整 `env.step` | 5.60 | 208.35 ms |
 | Fast，每 5 ms 写目标，IK 5 ms | 6.30 | 181.49 ms |
 | Fast，每 20 ms 写目标，IK 20 ms | 17.57 | 87.52 ms |
-| Fast，每 20 ms 写目标，IK 20 ms，100 步稳定 | 16.33 | 68.52 ms |
+| Fast，默认 10 ms robot hot loop，100 步稳定 | 10.65 | 101.78 ms |
 
 Fast 配置主要耗时：
 
@@ -71,22 +73,36 @@ action process            约 7 ms
 scene.update              约 7 ms
 ```
 
-100 步稳定样本：
+100 步默认 Fast 样本：
 
 ```text
-env_step mean    68.08 ms
-env_step p95     66.51 ms
-sim.step mean     7.38 ms（每个物理 tick）
-scene.write      11.55 ms（每个控制 tick）
-scene.update      6.46 ms（每个控制 tick）
-action apply      4.19 ms（每个物理 tick）
-low-level policy  2.13 ms（每 4 个物理 tick）
-IK apply          7.22 ms（每 4 个物理 tick）
+env_step mean    101.37 ms
+env_step p95     102.25 ms
+sim.step mean      8.54 ms（每个物理 tick）
+scene.write       11.94 ms（每个控制 tick）
+robot.write       11.91 ms（每 10 ms）
+robot.update       0.27 ms（每个物理 tick）
+scene.update       6.39 ms（每个控制 tick）
+action apply       8.00 ms（每个物理 tick）
+low-level policy   2.30 ms（每 4 个物理 tick）
+IK apply           5.60 ms（每 4 个物理 tick）
 ```
 
-关键修正：`action_manager.apply_action()` 必须每个 5 ms 物理 tick 调用，否则低层
-策略/history 计数器会降到约 12.5 Hz，机械臂会明显抖动。Fast path 只降频
-`scene.write_data_to_sim()`，不降频 action manager。
+关键修正：
+
+- `action_manager.apply_action()` 必须每个 5 ms 物理 tick 调用，否则低层
+  policy/history 计数器会降到约 12.5 Hz。
+- 只写 20 ms 一次会让机械臂目标保持过久。固定命令轨迹 A/B：
+
+```text
+normal       q_range=0.002141  target_second_diff_rms=0.00000148
+fast 20 ms   q_range=0.257056  target_second_diff_rms=0.08163100
+fast_hot 10ms q_range=0.001852 target_second_diff_rms=0.00001641
+fast_hot 5ms  q_range=0.000323 target_second_diff_rms=0.00000136
+```
+
+默认 Fast 使用 10 ms robot hot loop，兼顾抖动和速度。需要最平滑控制时可显式使用
+`--fast-robot-hot-period 0.005`，代价约为 7.7 FPS。
 
 首个 episode step 仍包含约 0.5 秒的首次策略/IK 缓存 spike，之后进入稳定区间。
 
