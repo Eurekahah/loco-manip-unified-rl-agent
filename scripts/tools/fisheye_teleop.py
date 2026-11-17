@@ -380,7 +380,11 @@ def read_fisheye_tensors(
 
 
 def _sensor_frame(env, scene_key: str, env_id: int = 0) -> int:
-    frame = env.scene.sensors[scene_key].frame
+    sensor = env.scene.sensors[scene_key]
+    # Camera.frame only increments when Camera.data is fetched. Reading frame
+    # directly would leave the preview gate permanently stuck after one update.
+    _ = sensor.data
+    frame = sensor.frame
     if isinstance(frame, torch.Tensor):
         return int(frame[env_id].item())
     return int(frame)
@@ -406,6 +410,7 @@ class CameraUiWindow:
             height=height + 44,
             position_x=int(position[0]),
             position_y=int(position[1]),
+            raster_policy=ui.RasterPolicy.NEVER,
         )
         with self._window.frame:
             ui.ImageWithProvider(self._provider, width=width, height=height)
@@ -417,6 +422,7 @@ class CameraUiWindow:
         rgba[..., :3] = rgb
         rgba[..., 3] = 255
         self._provider.set_data_array(np.ascontiguousarray(rgba), [width, height])
+        self._window.frame.invalidate_raster()
 
     def close(self) -> None:
         self._window.visible = False
@@ -442,6 +448,7 @@ class FisheyePanoramaWindow:
             height=height + 52,
             position_x=int(position[0]),
             position_y=int(position[1]),
+            raster_policy=ui.RasterPolicy.NEVER,
         )
         with self._window.frame:
             with ui.VStack(spacing=4):
@@ -455,6 +462,7 @@ class FisheyePanoramaWindow:
         rgba[..., :3] = rgb
         rgba[..., 3] = 255
         self._provider.set_data_array(np.ascontiguousarray(rgba), [width, height])
+        self._window.frame.invalidate_raster()
 
     def close(self) -> None:
         self._window.visible = False

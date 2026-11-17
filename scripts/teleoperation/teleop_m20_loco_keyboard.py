@@ -84,17 +84,12 @@ def main():
     # 1. 创建环境（你已有的 manager-based 环境）
     env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs)
     env_cfg.terminations.time_out = None
-    fisheye_update_period = (
-        args.fisheye_update_period
-        if args.fisheye_update_period > 0.0
-        else 1.0 / args.panorama_display_hz
-    )
     fisheye_spec = add_fisheye_rig(
         env_cfg,
         mode=args.fisheye_rig,
         width=args.fisheye_width,
         height=args.fisheye_height,
-        update_period=fisheye_update_period,
+        update_period=args.fisheye_update_period,
         fov_deg=args.fisheye_fov_deg,
         mount_pos=args.fisheye_mount_pos,
         lens_offset=args.fisheye_lens_offset,

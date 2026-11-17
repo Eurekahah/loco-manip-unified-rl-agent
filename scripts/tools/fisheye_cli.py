@@ -31,7 +31,7 @@ def add_fisheye_args(
         "--fisheye-update-period",
         type=float,
         default=update_period_default,
-        help="Sensor update period in seconds; 0 follows the preview or record frequency.",
+        help="Sensor update period in seconds; 0 updates every render step.",
     )
     parser.add_argument(
         "--fisheye-fov-deg",

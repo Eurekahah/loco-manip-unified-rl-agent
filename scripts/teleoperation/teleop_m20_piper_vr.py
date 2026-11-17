@@ -159,22 +159,17 @@ def main():
             arm_cfg = make_wrist_camera(
                 width=224,
                 height=224,
-                update_period=1.0 / args.wrist_display_hz,
+                update_period=0.0,
             )
             arm_cfg.data_types = ["rgb"]
             env_cfg.scene.arm_camera = arm_cfg
 
-    fisheye_update_period = (
-        args.fisheye_update_period
-        if args.fisheye_update_period > 0.0
-        else 1.0 / args.panorama_display_hz
-    )
     fisheye_spec = add_fisheye_rig(
         env_cfg,
         mode=args.fisheye_rig,
         width=args.fisheye_width,
         height=args.fisheye_height,
-        update_period=fisheye_update_period,
+        update_period=args.fisheye_update_period,
         fov_deg=args.fisheye_fov_deg,
         mount_pos=args.fisheye_mount_pos,
         lens_offset=args.fisheye_lens_offset,
