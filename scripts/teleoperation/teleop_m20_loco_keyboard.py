@@ -1,15 +1,28 @@
 # scripts/teleoperation/teleop_m20_loco_keyboard.py
 
 import argparse
+import sys
+from pathlib import Path
+
 import torch
 import numpy as np
 from isaaclab.app import AppLauncher
 
+TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+from fisheye_cli import add_fisheye_args, validate_fisheye_args
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--task", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=1)
+add_fisheye_args(parser, include_panorama=True)
 AppLauncher.add_app_launcher_args(parser)
+parser.set_defaults(rendering_mode="performance")
 args = parser.parse_args()
+validate_fisheye_args(parser, args, include_panorama=True)
+args.enable_cameras = bool(args.fisheye_rig != "none" or args.show_panorama)
 
 app_launcher = AppLauncher(args)
 simulation_app = app_launcher.app
@@ -21,6 +34,7 @@ from rl_training.devices.keyboard_loco_teleop import (
     KeyboardLocoTeleop, KeyboardLocoTeleopCfg
 )
 import rl_training.tasks  # noqa: F401
+from fisheye_teleop import TeleopFisheyeDisplay, add_fisheye_rig
 
 def build_13d_action(
     cmd6: np.ndarray,   # [vx, vy, wz, delta_height, delta_pitch, delta_roll]
@@ -58,9 +72,24 @@ def main():
     # 1. 创建环境（你已有的 manager-based 环境）
     env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs)
     env_cfg.terminations.time_out = None
-
+    fisheye_spec = add_fisheye_rig(
+        env_cfg,
+        mode=args.fisheye_rig,
+        width=args.fisheye_width,
+        height=args.fisheye_height,
+        update_period=args.fisheye_update_period,
+        fov_deg=args.fisheye_fov_deg,
+        mount_pos=args.fisheye_mount_pos,
+        lens_offset=args.fisheye_lens_offset,
+    )
 
     env = gym.make(args.task, cfg=env_cfg).unwrapped
+    fisheye_display = TeleopFisheyeDisplay(
+        fisheye_spec,
+        show_panorama=args.show_panorama,
+        panorama_width=args.panorama_width,
+        panorama_height=args.panorama_height,
+    )
 
     # 2. 创建设备
     device_cfg = KeyboardLocoTeleopCfg(
@@ -131,6 +160,8 @@ def main():
                 else:
                     env.sim.render()
 
+                fisheye_display.update(env)
+
                 if should_reset_recording_instance:
                     env.reset()
                     teleop_interface.reset()
@@ -140,6 +171,7 @@ def main():
             print(f"Error during simulation step: {e}")
             break
 
+    fisheye_display.close()
     env.close()
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
+from dataclasses import field
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -69,6 +70,7 @@ class LowShelfHDF5Recorder(RecorderTerm):
                 "num_envs": env.num_envs,
                 "joint_names": tuple(env.scene["robot"].data.joint_names),
                 "termination_names": self._termination_names,
+                **cfg.extra_metadata,
             },
             overwrite=cfg.overwrite,
         )
@@ -278,6 +280,7 @@ class LowShelfHDF5RecorderCfg(RecorderTermCfg):
     # Keep the HDF5 source order aligned with the SmolVLA camera suffixes:
     # top -> camera1, wrist -> camera2, workcell -> camera3.
     camera_names: tuple[str, ...] = ("top_camera", "wrist_camera", "workcell_camera")
+    extra_metadata: dict[str, object] = field(default_factory=dict)
     overwrite: bool = False
 
 

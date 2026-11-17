@@ -10,6 +10,7 @@ Default mapping:
     HDF5 camera/top_camera/rgb      -> observation.images.camera1
     HDF5 camera/wrist_camera/rgb    -> observation.images.camera2
     HDF5 camera/workcell_camera/rgb -> observation.images.camera3
+    HDF5 camera/fisheye_* /rgb      -> observation.images.camera4+
     HDF5 robot/joint_pos            -> observation.state
     HDF5 action                     -> action
 
@@ -61,6 +62,15 @@ DEFAULT_CAMERA_MAP = {
     "workcell_camera": "camera3",
 }
 
+FISHEYE_CAMERA_ORDER = (
+    "fisheye_front",
+    "fisheye_back",
+    "fisheye_cam0",
+    "fisheye_cam1",
+    "fisheye_cam2",
+    "fisheye_cam3",
+)
+
 
 def _camera_suffix_key(name: str) -> tuple[int, int, str]:
     match = re.fullmatch(r"camera(\d+)", name)
@@ -94,9 +104,7 @@ def _json_value(value):
 
 def _build_features(
     *,
-    height: int,
-    width: int,
-    camera_suffixes: list[str],
+    camera_shapes: dict[str, tuple[int, int]],
     action_layout: list[str],
     state_names: list[str],
     fps: int,
@@ -117,7 +125,7 @@ def _build_features(
             }
         )
 
-    def camera_feature() -> dict:
+    def camera_feature(height: int, width: int) -> dict:
         return {
             "dtype": image_dtype,
             "shape": [height, width, 3],
@@ -126,7 +134,8 @@ def _build_features(
         }
 
     features = {
-        f"observation.images.{suffix}": camera_feature() for suffix in camera_suffixes
+        f"observation.images.{suffix}": camera_feature(*shape)
+        for suffix, shape in camera_shapes.items()
     }
     features["observation.state"] = {
         "dtype": "float32",
@@ -152,17 +161,34 @@ def _resolve_camera_map(source: h5py.File, episode_name: str, override: str | No
             raise ValueError(f"--camera-map references missing HDF5 cameras: {missing}")
         return _canonical_camera_map({str(key): str(value) for key, value in mapping.items()})
 
-    mapping = {}
+    mapping: dict[str, str] = {}
+    unmapped: list[str] = []
     for name in available:
         if name in DEFAULT_CAMERA_MAP:
             mapping[name] = DEFAULT_CAMERA_MAP[name]
         elif name.startswith("camera"):
             mapping[name] = name
         else:
+            unmapped.append(name)
+
+    # Fisheye groups are optional and can coexist with the three standard
+    # cameras. Allocate the next free cameraN suffix so a fisheye-only file
+    # still starts at camera1, while mixed files continue at camera4.
+    used_numbers = {
+        int(match.group(1))
+        for suffix in mapping.values()
+        if (match := re.fullmatch(r"camera(\d+)", suffix)) is not None
+    }
+    next_number = max(used_numbers, default=0) + 1
+    order = {name: index for index, name in enumerate(FISHEYE_CAMERA_ORDER)}
+    for name in sorted(unmapped, key=lambda item: (order.get(item, len(order)), item)):
+        if name not in FISHEYE_CAMERA_ORDER:
             raise ValueError(
                 f"No default LeRobot name for HDF5 camera '{name}'. "
                 f"Pass --camera-map with one of: {available}"
             )
+        mapping[name] = f"camera{next_number}"
+        next_number += 1
     return _canonical_camera_map(mapping)
 
 
@@ -255,17 +281,16 @@ def convert(args: argparse.Namespace) -> None:
         else:
             state_names = [f"joint_{index}" for index in range(state_dim)]
 
-        first_camera_name = next(iter(camera_map))
-        first_rgb = first_episode[f"camera/{first_camera_name}/rgb"]
-        height, width = int(first_rgb.shape[1]), int(first_rgb.shape[2])
+        camera_shapes = {}
+        for hdf5_name, lerobot_suffix in camera_map.items():
+            rgb = first_episode[f"camera/{hdf5_name}/rgb"]
+            camera_shapes[lerobot_suffix] = (int(rgb.shape[1]), int(rgb.shape[2]))
 
         dataset = LeRobotDataset.create(
             repo_id=args.repo_id or f"local/{output_path.name}",
             fps=fps,
             features=_build_features(
-                height=height,
-                width=width,
-                camera_suffixes=list(camera_map.values()),
+                camera_shapes=camera_shapes,
                 action_layout=action_layout,
                 state_names=state_names,
                 fps=fps,
@@ -305,10 +330,11 @@ def convert(args: argparse.Namespace) -> None:
                         f"{episode_name}: camera '{hdf5_name}' has {rgb.shape[0]} frames, "
                         f"expected {num_steps}."
                     )
-                if rgb.shape[1:] != (height, width, 3):
+                expected_height, expected_width = camera_shapes[lerobot_suffix]
+                if rgb.shape[1:] != (expected_height, expected_width, 3):
                     raise ValueError(
                         f"{episode_name}: camera '{hdf5_name}' frame shape {rgb.shape[1:]} "
-                        f"does not match ({height}, {width}, 3)."
+                        f"does not match ({expected_height}, {expected_width}, 3)."
                     )
                 camera_frames[f"observation.images.{lerobot_suffix}"] = rgb
 
@@ -366,6 +392,9 @@ def convert(args: argparse.Namespace) -> None:
                 "action_semantics": action_semantics,
                 "successful_only": bool(args.successful_only),
                 "camera_map": camera_map,
+                "camera_shapes": {
+                    suffix: list(shape) for suffix, shape in camera_shapes.items()
+                },
                 "action_layout": action_layout,
                 "state_layout": state_names,
             },

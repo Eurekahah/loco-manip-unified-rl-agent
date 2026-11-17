@@ -5,11 +5,19 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 
 from isaaclab.app import AppLauncher
+
+TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+from fisheye_cli import add_fisheye_args, validate_fisheye_args
 
 
 parser = argparse.ArgumentParser(description="Collect low-shelf pick-and-place demonstrations to HDF5.")
@@ -30,13 +38,26 @@ parser.add_argument(
 parser.add_argument("--scene_camera", action=argparse.BooleanOptionalAction, default=True)
 parser.add_argument("--wrist_camera", action=argparse.BooleanOptionalAction, default=True)
 parser.add_argument("--top_camera", action=argparse.BooleanOptionalAction, default=True)
+add_fisheye_args(
+    parser,
+    include_panorama=False,
+    width_default=480,
+    height_default=300,
+    update_period_default=0.1,
+)
 parser.add_argument("--overwrite", action="store_true")
 parser.add_argument("--seed", type=int, default=42)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
-if not args_cli.scene_camera and not args_cli.wrist_camera and not args_cli.top_camera:
+if (
+    not args_cli.scene_camera
+    and not args_cli.wrist_camera
+    and not args_cli.top_camera
+    and args_cli.fisheye_rig == "none"
+):
     parser.error("At least one camera must be enabled")
+validate_fisheye_args(parser, args_cli, include_panorama=False)
 if args_cli.num_envs != 1:
     parser.error("Interactive collection currently requires --num_envs 1")
 
@@ -63,6 +84,7 @@ from rl_training.tasks.manager_based.locomotion.highlevel.config.two_cylinder_pl
     make_two_cylinder_wrist_camera,
 )
 import rl_training.tasks  # noqa: F401, E402
+from fisheye_teleop import add_fisheye_rig  # noqa: E402
 
 
 class _KeyboardAbsoluteAdapter:
@@ -154,10 +176,32 @@ def main() -> None:
         )
         camera_names.append("workcell_camera")
 
+    fisheye_spec = add_fisheye_rig(
+        env_cfg,
+        mode=args_cli.fisheye_rig,
+        width=args_cli.fisheye_width,
+        height=args_cli.fisheye_height,
+        update_period=args_cli.fisheye_update_period,
+        fov_deg=args_cli.fisheye_fov_deg,
+        mount_pos=args_cli.fisheye_mount_pos,
+        lens_offset=args_cli.fisheye_lens_offset,
+        with_depth=args_cli.record_depth,
+    )
+    camera_names.extend(fisheye_spec.scene_keys)
+
     recorder_cfg = env_cfg.recorders.record_hdf5
     recorder_cfg.output_path = output_path
     recorder_cfg.source = args_cli.input
     recorder_cfg.camera_names = tuple(camera_names)
+    if fisheye_spec.enabled:
+        recorder_cfg.extra_metadata = {
+            "fisheye_rig": fisheye_spec.mode,
+            "fisheye_projection": "equidistant",
+            "fisheye_fov_deg": fisheye_spec.fov_deg,
+            "fisheye_mount_pos_base_link": list(args_cli.fisheye_mount_pos),
+            "fisheye_lens_offset_m": fisheye_spec.lens_offset,
+            "fisheye_camera_names": list(fisheye_spec.scene_keys),
+        }
     recorder_cfg.overwrite = args_cli.overwrite
     recorder_cfg.language_instruction = env_cfg.language_instruction
     # Keep collection visuals focused on the commanded EE pose in GUI mode.
@@ -206,6 +250,7 @@ def main() -> None:
     print(f"  task       : {args_cli.task}")
     print(f"  input      : {args_cli.input}")
     print(f"  cameras    : {', '.join(camera_names)}")
+    print(f"  fisheye    : {args_cli.fisheye_rig}")
     print(f"  depth      : {'rgb+depth' if args_cli.record_depth else 'rgb only'}")
     print(f"  HDF5       : {os.path.abspath(output_path)}")
     print("  action     : absolute offsets from the recalibrated anchor")
