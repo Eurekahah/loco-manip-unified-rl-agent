@@ -14,6 +14,7 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 from fisheye_cli import add_fisheye_args, validate_fisheye_args
+from teleop_cli import prefer_cpu_for_single_env_fast_path
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--task", type=str, required=True)
@@ -78,8 +79,8 @@ parser.add_argument(
 parser.add_argument(
     "--ik-update-period",
     type=float,
-    default=0.0,
-    help="IK recompute period in simulation seconds; 0 keeps every physics tick.",
+    default=0.01,
+    help="IK recompute period in simulation seconds; default 0.01 matches the 10 ms target write.",
 )
 parser.add_argument(
     "--profile-detailed",
@@ -108,6 +109,7 @@ if args.ik_update_period < 0.0:
 if args.fast_robot_hot_period <= 0.0:
     parser.error("--fast-robot-hot-period must be > 0")
 validate_fisheye_args(parser, args, include_panorama=True)
+prefer_cpu_for_single_env_fast_path(args, enabled=args.fast_teleop)
 args.enable_cameras = bool(
     getattr(args, "enable_cameras", False)
     or args.fisheye_rig != "none"

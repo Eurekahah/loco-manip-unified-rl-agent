@@ -170,6 +170,37 @@ tests/teleop/test_fast_teleop.py
 结果：10 passed
 ```
 
+### 2026-11-17 本轮补充结果
+
+官方 Isaac Lab 5.1.0 的遥操控制体仍是 `teleop_interface.advance() -> env.step()`，
+没有独立 Fast 路径；官方文档明确建议单环境尝试 CPU 物理。新增任务无关基准工具：
+
+```text
+scripts/tools/benchmark_teleop_control.py
+```
+
+同机 A4000 实测：
+
+| 路径 | 设备 | FPS | p95 |
+|---|---|---:|---:|
+| 官方 Lift/Franka manager | GPU | 41.72 | 25.90 ms |
+| 官方 Lift/Franka manager | CPU | 159.17 | 6.66 ms |
+| M20 manager | GPU | 5.94 | 180.35 ms |
+| M20 manager | CPU | 22.05 | 47.24 ms |
+| M20 Fast hot 10 ms，IK 100 Hz | GPU | 12.94 | 83.17 ms |
+| M20 Fast hot 10 ms，IK 100 Hz | CPU | **51.13** | **20.29 ms** |
+
+已完成默认值调整：
+
+- 单环境 Fast 遥操/数采未显式传 `--device` 时自动使用 CPU；显式
+  `--device cuda:0` 可覆盖。
+- `--ik-update-period` 默认从 `0.0` 改为 `0.01`，与 10 ms target 写入对齐。
+- CPU 固定轨迹的 q range 和二阶差分均优于 GPU，腕部相机 10 Hz 采集冒烟约
+  34.7-38.5 FPS。
+
+新增回归：`tests/teleop/test_teleop_cli.py`。下一步优先级变为相机 readback/转换
+后台化，而不是继续降低 IK 或 target 写入频率。
+
 ## 5. 当前可用命令
 
 键盘 Fast 遥操（带四鱼眼和全景）：
@@ -183,7 +214,7 @@ python scripts\teleoperation\teleop_m20_piper_keyboard.py `
   --fast-render-hz 15 `
   --fast-robot-hot-loop `
   --fast-robot-hot-period 0.01 `
-  --ik-update-period 0.0 `
+  --ik-update-period 0.01 `
   --fisheye-rig four `
   --show-panorama `
   --fisheye-width 480 --fisheye-height 300 `
@@ -208,7 +239,7 @@ python scripts\data\collect_demonstrations.py `
   --no-top_camera --no-scene_camera --wrist_camera `
   --record-hz 10 --compression lzf `
   --fast-stepping --fast-render-hz 15 `
-  --fast-robot-hot-period 0.01 --ik-update-period 0.0 `
+  --fast-robot-hot-period 0.01 --ik-update-period 0.01 `
   --output recordings\fast_teleop\two_cylinder_fast.hdf5 `
   --profile-json outputs\fast_teleop\fast_profile.json
 ```
@@ -243,7 +274,7 @@ HDF5 enqueue / writer
 
 需要做两个快速实验：
 
-1. `--device cpu` A/B。单环境 GPU 管线可能有额外同步开销，不能假设 GPU 一定更快。
+1. CPU/GPU A/B 已完成：单环境 Fast 默认 CPU，显式 `--device cuda:0` 可复现 GPU 路径。
 2. 仅用于 profiling 的 PhysX 对照：临时关闭 armature self-collision 和 contact
    reporting，观察 `sim.step` 是否明显下降。正式采集是否关闭必须另做一致性验收。
 

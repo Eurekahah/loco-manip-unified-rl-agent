@@ -14,16 +14,19 @@ reward/observation/termination/event 管理链。
 --fast-robot-hot-loop            默认开启；机械臂/robot target 以 hot period 更新
 --fast-robot-hot-period          默认 10 ms
 --fast-robot-only-write          实验开关；只写 robot，不写其它 scene 实体
---ik-update-period               IK 重算周期（仿真秒），默认 0 表示每个物理 tick
+--ik-update-period               IK 重算周期（仿真秒），默认 0.01，与 10 ms target 写入对齐
 --profile-detailed               拆分 action/policy/IK/scene/sim/render 计时
 ```
+
+Fast 遥操和 Fast 数采在单环境且用户未显式传 `--device` 时默认使用 CPU 物理。
+需要强制 GPU 时显式传 `--device cuda:0`。该默认值来自下面的同机 A/B，不是经验猜测。
 
 ## Fast path 结构
 
 ```text
 读取最新遥操命令
   -> action_manager.process_action
-  -> action_manager.apply_action          # 每 20 ms 控制 tick
+  -> action_manager.apply_action          # 每 5 ms 物理 tick
   -> scene.write_data_to_sim              # 每 20 ms 控制 tick
   -> robot.write_data_to_sim              # 可选 hot loop，每 10 ms
   -> 4 x sim.step(render=False)           # 4 x 5 ms 物理 tick
@@ -76,6 +79,85 @@ scene_update_ms
 render_ms
 obs_manager_ms
 event_manager_ms
+```
+
+## 2026-11-17 官方实现对比
+
+本地 Isaac Lab 5.1.0 的官方遥操入口是
+`scripts/environments/teleoperation/teleop_se3_agent.py`。它的控制体仍然只有：
+
+```text
+teleop_interface.advance()
+  -> env.step(actions)
+```
+
+官方没有独立的 Fast Teleop 循环。它把优化放在设备抽象、retargeter、场景配置和
+CloudXR 管线中，并在文档里给出两项与本项目直接相关的建议：
+
+- 单环境优先尝试 `--device cpu`，避免 GPU 管线的同步开销。
+- CloudXR 以 90 Hz 显示、45 FPS 渲染为目标；120 Hz 物理需要高端工作站。
+
+为避免拿不同机器人、不同 decimation 直接比较，本仓库新增
+`scripts/tools/benchmark_teleop_control.py`，统一 warmup、固定动作、headless
+和计时口径。测试机为 Ryzen 7 2700X + RTX A4000：
+
+| 控制路径 | 设备 | decimation | FPS | p95 |
+|---|---|---:|---:|---:|
+| 官方 Lift/Franka，完整 `env.step()` | GPU | 2 | 41.72 | 25.90 ms |
+| 官方 Lift/Franka，完整 `env.step()` | CPU | 2 | **159.17** | 6.66 ms |
+| M20 Teleop，完整 `env.step()` | GPU | 4 | 5.94 | 180.35 ms |
+| M20 Teleop，完整 `env.step()` | CPU | 4 | 22.05 | 47.24 ms |
+| M20 Fast，10 ms hot，IK 200 Hz | GPU | 4 | 10.65 | 100.87 ms |
+| M20 Fast，10 ms hot，IK 100 Hz | GPU | 4 | 12.94 | 83.17 ms |
+| M20 Fast，10 ms hot，IK 100 Hz | CPU | 4 | **51.13** | 20.29 ms |
+
+表中的“官方 Lift/Franka”是官方任务加官方 `ManagerBasedRLEnv.step()` 路径，
+不包含网络、手柄轮询、GUI 和相机。它说明官方实现本身并不存在魔法：
+任务简单、物理频率较低时可达很高 FPS；本项目 M20 的完整管理器链在 GPU 上仍只有
+约 6 FPS。
+
+最值得借鉴的官方结论是 CPU 单环境物理。M20 Fast 路径从 GPU 的 12.94 FPS
+提升到 CPU 的 51.13 FPS，控制体周期从 77.29 ms 降到 19.56 ms。
+
+固定动作轨迹验收（100 步，30 步 warmup）：
+
+| 配置 | q range | q 二阶差分 RMS | target 二阶差分 RMS |
+|---|---:|---:|---:|
+| GPU Fast，10 ms hot，IK 100 Hz | 0.001852 | 8.08e-5 | 1.64e-5 |
+| CPU Fast，10 ms hot，IK 100 Hz | **0.001275** | **1.70e-5** | **3.68e-6** |
+
+CPU 路径不仅更快，固定命令下的轨迹抖动也更低。原 IK 200 Hz 并非必要：
+`--ik-update-period 0.01` 与 10 ms target 写入同频，实测轨迹不差于原默认。
+
+腕部相机 224x224、`record_hz=10`、`fast-render-hz=15` 的 CPU 采集冒烟：
+
+| 配置 | 帧数 | 整体 FPS | 控制/渲染表现 |
+|---|---:|---:|---|
+| CPU Fast 数采，腕部相机 | 100 | 34.69 | 控制约 20 ms，15 Hz 渲染单次约 40 ms |
+| CPU Fast 数采，腕部相机（默认参数冒烟） | 30 | 38.53 | 控制约 20 ms，渲染约 14 ms |
+
+相机渲染仍会阻塞主线程，所以渲染发生时会出现约 40-60 ms 的尖峰；但控制空档已经
+明显低于原 GPU 路径，满足 15-25 Hz 交互目标。
+
+时间轴验收：
+
+```text
+sim_time   = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+step_index = [0, 5, 10, 15, 20, 25]
+sensor_frame = [1, 2, 3, 4, 5, 6]
+```
+
+30 个控制周期、`record_hz=10` 写出 6 帧，RGB 与动作、机器人状态使用同一
+`sim_time`；异步 writer 队列为 0，无丢帧。
+
+复现命令：
+
+```powershell
+python scripts\tools\benchmark_teleop_control.py `
+  --task Isaac-M20-Piper-Teleop-History-v0 `
+  --mode fast_hot --warmup 30 --steps 100 `
+  --fast-robot-hot-period 0.01 --ik-update-period 0.01 `
+  --profile-detailed --device cpu
 ```
 
 ## A/B 结果
@@ -145,13 +227,15 @@ IK 周期 A/B 的结论：`--ik-update-period 0.01` 与默认 0 的轨迹指标�
 
 - 完整 manager 链不是唯一瓶颈，但跳过它仍有收益。
 - 逐 5 ms 重复写目标明显浪费，20 ms 写一次更适合 50 Hz 高层控制。
-- IK 是最值得继续做 A/B 的部分，首次/偶发 spike 仍会拉高 p95。
-- 需要继续预热、增加样本数，并验证关闭 armature self-collision/contact reporting 的影响。
+- Fast 默认使用 CPU 物理和 100 Hz IK 后，控制体已达到约 51 FPS；相机配置仍有渲染尖峰。
+- 首次/偶发策略和 IK 编译 spike 仍会拉高 max，正式 profiling 必须保留 warmup。
+- 关闭 armature self-collision/contact reporting 仍未做正式一致性验收。
 
 ## 当前限制
 
 - Fast path 已接入键盘、VR 遥操和通用 HDF5 数采；相机采样仍在主线程，异步 writer
   只负责磁盘写入。
 - Fast path 不执行训练 reward/termination/event manager，手动 reset 仍走完整环境。
-- IK 周期和每 tick/每控制 tick 写目标仍需做动作一致性验收。
-- 30/50 步 profiling 仍受首次策略和 IK 编译/缓存影响，后续应使用更长 episode 和 warmup。
+- 显式传 `--device cuda:0` 可复现旧 GPU 路径；多环境 Fast 路径不会自动切 CPU。
+- 相机 RGB/depth `.cpu()`、帧转换和预览仍在主线程，下一步应把 CPU 转换和有界队列
+  从控制热路径移走。

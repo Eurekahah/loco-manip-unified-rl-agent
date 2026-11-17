@@ -43,6 +43,65 @@
 | 2026-10-08 | 新增 **DEF-066**（顺带清 known_issues ⑭）：EE 碰撞检查拿**世界坐标**比"机体盒子" ⇒ **只有 env 0 有效、其它 env 静默失效**；改成高度不变系局部坐标 + 盒子重定义为机体区域 ⇒ 拒绝率从 ≈0 变成 **24%**（204 个候选拒 49，AABB 5），三处冒烟 EXIT=0、臂负载不变差 | 分支 `codex/ll-train-detail-fix` |
 | 2026-11-17 | 新增 **DEF-071**：Fast Teleop 初版虽然把主循环从约 5.6 FPS 提到 16 FPS，但机械臂持续抖动；轨迹探针证明 `apply_action` 降频导致低层策略降到约 12.5 Hz，随后发现 20 ms target 写入仍会使 target 二阶差分放大 5.5 万倍。最终默认改为 10 ms robot hot loop，稳定约 10.65 FPS，轨迹接近 normal | `codex/low-shelf-pick-place @ 18f2120` |
 | 2026-11-17 | 新增 **DEF-072**：Fast HDF5 数采的 `common_step_counter` 未推进，50 步冒烟只写出 1 帧且所有 `sim_time` 都停在 0；补齐 `episode_length_buf/common_step_counter` 后，同一命令写出 10 帧、`sim_time=0..0.9`，并新增 Fast stepper 单测 | 本次（工作区） |
+| 2026-11-17 | 新增 **DEF-073**：对照 Isaac Lab 官方遥操与单环境 CPU 建议，Fast 遥操从 GPU 的 12.94 FPS 提升到 CPU 的 51.13 FPS；IK 默认由 200 Hz 降为与 10 ms target 对齐的 100 Hz，固定轨迹抖动同时下降；腕部相机 10 Hz 数采约 34.7-38.5 FPS | 本次（工作区） |
+
+---
+
+### DEF-073 `2026-11-17` Fast Teleop 单环境默认 CPU + IK 与 target 写入同频
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **特性 / 性能**（官方实现对照后的低延迟默认值） |
+| 状态 | 已实现；M20 Fast 控制体 12.94 → **51.13 FPS**，腕部相机数采约 34.7-38.5 FPS |
+| 关联 | `scripts/tools/benchmark_teleop_control.py`；`scripts/tools/teleop_cli.py`；`scripts/teleoperation/teleop_m20_piper_{keyboard,vr}.py`；`scripts/data/collection/cli.py`；`docs/teleop_fast_path_zh.md` |
+
+**1. 现象 / 背景**
+
+* 交接文档中的 Fast 默认在 GPU 上约 10-13 FPS，仍未稳定达到 15-25 Hz。
+* Isaac Lab 5.1.0 官方遥操入口仍是 `teleop_interface.advance() -> env.step()`，
+  没有专用 Fast 循环；官方文档明确建议单环境优先尝试 CPU 物理。
+* 本项目每个控制周期执行 4 个 5 ms 物理 tick；原默认 IK 也在每个物理 tick
+  重算，即 200 Hz，而机械臂 target 只在 100 Hz hot loop 写入。
+
+**2. 同机基准**
+
+新增任务无关基准脚本，统一固定动作、30 步 warmup、100 步统计和 headless 口径。
+测试机为 Ryzen 7 2700X + RTX A4000：
+
+| 路径 | 设备 | FPS | p95 |
+|---|---|---:|---:|
+| 官方 Lift/Franka manager | GPU | 41.72 | 25.90 ms |
+| 官方 Lift/Franka manager | CPU | 159.17 | 6.66 ms |
+| M20 manager | GPU | 5.94 | 180.35 ms |
+| M20 manager | CPU | 22.05 | 47.24 ms |
+| M20 Fast hot 10 ms，IK 200 Hz | GPU | 10.65 | 100.87 ms |
+| M20 Fast hot 10 ms，IK 100 Hz | GPU | 12.94 | 83.17 ms |
+| M20 Fast hot 10 ms，IK 100 Hz | CPU | **51.13** | **20.29 ms** |
+
+**3. 修正**
+
+* 单环境 Fast 遥操/数采在用户未显式传 `--device` 时自动使用 CPU；
+  显式 `--device cuda:0` 保留旧 GPU 路径。
+* `--ik-update-period` 默认由 `0.0` 改为 `0.01`，与 10 ms target 写入对齐。
+* 保持 `action_manager.apply_action()` 每 5 ms 执行，不降低低层策略/history 频率。
+* 保持 10 ms robot hot loop 和 20 ms scene write，不重新采用会造成抖动的 20 ms
+  target-only 方案。
+
+**4. 结果**
+
+* CPU 固定命令 100 步：q range `0.001275`、q 二阶差分 RMS `1.70e-5`、
+  target 二阶差分 RMS `3.68e-6`，均优于 GPU 路径。
+* 腕部相机 224x224、10 Hz HDF5、15 Hz 渲染：100 步约 34.69 FPS，
+  30 步默认参数冒烟约 38.53 FPS；异步 writer 无丢帧。
+* 30 个控制周期写出 6 帧：`sim_time=0..0.5`、`step_index=0,5,...,25`，
+  `sensor_frame=1..6`，动作/状态/图像时间轴一致。
+* 回归：teleop 5 passed、data 6 passed、fisheye 2 passed。
+
+**5. 遗留**
+
+* 相机 readback、RGB/depth `.cpu()`、帧转换和预览仍在主线程；渲染尖峰仍会拉高
+  控制周期的 p95。
+* 多环境 Fast 路径不会自动切 CPU；需要按实际吞吐另行 profiling。
 
 ---
 
