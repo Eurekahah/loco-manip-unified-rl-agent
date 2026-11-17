@@ -152,3 +152,47 @@ two_cylinder  -> profile=two_cylinder, schema=teleop_manipulation/v1
 ```
 
 两个任务均由同一个 `collect_demonstrations.py` 完成 headless HDF5 写入和正常关闭。
+
+## 回放
+
+回放同样与具体任务解耦：
+
+```text
+scripts/data/replay_hdf5.py
+  └─ scripts/data/replay/hdf5_video.py
+       ├─ 读取任意 teleop_manipulation/v1 HDF5
+       ├─ 按 camera_names 元数据排序
+       ├─ 支持 RGB、深度、单相机和多相机
+       └─ 输出 MP4 / PNG
+```
+
+回放不加载 Isaac Sim，也不依赖 task id 或 collection profile。检查数据：
+
+```powershell
+python scripts\data\replay_hdf5.py `
+  --input recordings\my_task\keyboard.hdf5 `
+  --check-only
+```
+
+单相机：
+
+```powershell
+python scripts\data\replay_hdf5.py `
+  --input recordings\my_task\keyboard.hdf5 `
+  --cameras wrist_camera `
+  --output recordings\replay\my_task_wrist.mp4
+```
+
+多相机：
+
+```powershell
+python scripts\data\replay_hdf5.py `
+  --input recordings\my_task\keyboard.hdf5 `
+  --cameras top_camera wrist_camera workcell_camera `
+  --stride 2 --fps 10 `
+  --output recordings\replay\my_task_views.mp4 `
+  --frame recordings\replay\my_task_last.png
+```
+
+不同分辨率会按 `--tile-width` / `--tile-height` 统一后拼接。鱼眼相机缺少普通针孔
+`intrinsics` 时仍可正常回放。

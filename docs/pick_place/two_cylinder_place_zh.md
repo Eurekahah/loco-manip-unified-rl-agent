@@ -291,7 +291,7 @@ python scripts/data/smoke_two_cylinder_grasp.py --headless --max_move_steps 70
 ### 8.8 HDF5 检查
 
 ```powershell
-python scripts/data/replay_low_shelf_hdf5.py --input recordings/two_cylinder_smoke/keyboard_gui.hdf5 --check-only
+python scripts/data/replay_hdf5.py --input recordings/two_cylinder_smoke/keyboard_gui.hdf5 --check-only
 ```
 
 ### 8.9 三路相机目标可见截图
@@ -431,10 +431,10 @@ python scripts/data/collect_two_cylinder_planned_demo.py `
 输出与验证：
 
 ```powershell
-python scripts/data/replay_low_shelf_hdf5.py `
+python scripts/data/replay_hdf5.py `
   --input recordings/two_cylinder_place/planned_demo_final.hdf5 --check-only
 
-python scripts/data/replay_two_cylinder_three_view.py `
+python scripts/data/replay_hdf5.py `
   --input recordings/two_cylinder_place/planned_demo_final.hdf5 `
   --episode 0 --stride 5 --fps 10 `
   --output recordings/replay/two_cylinder_planned_three_view.mp4 `

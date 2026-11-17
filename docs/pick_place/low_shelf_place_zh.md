@@ -273,7 +273,7 @@ VR 初始化 smoke：
 
 回放与检查：
 
-- `replay_low_shelf_hdf5.py --check-only` 能检查 schema、动作、机器人状态、终止项和相机数据。
+- `replay_hdf5.py --check-only` 能检查 schema、动作、终止项和相机数据。
 - RGB + 深度伪彩色 MP4 回放已从真实采集 HDF5 生成。
 
 ### 6.3 GUI 帧率诊断
@@ -427,25 +427,25 @@ action                     -> action
 只检查 schema 和数值：
 
 ```powershell
-python scripts/data/replay_low_shelf_hdf5.py --input recordings/collect_smoke/keyboard.hdf5 --check-only
+python scripts/data/replay_hdf5.py --input recordings/collect_smoke/keyboard.hdf5 --check-only
 ```
 
 生成场景相机 RGB-D 回放：
 
 ```powershell
-python scripts/data/replay_low_shelf_hdf5.py --input recordings/collect_smoke/keyboard.hdf5 --camera workcell_camera --output recordings/collect_smoke/keyboard_workcell_replay.mp4
+python scripts/data/replay_hdf5.py --input recordings/collect_smoke/keyboard.hdf5 --cameras workcell_camera --output recordings/collect_smoke/keyboard_workcell_replay.mp4
 ```
 
 生成腕部相机 RGB-D 回放：
 
 ```powershell
-python scripts/data/replay_low_shelf_hdf5.py --input recordings/collect_smoke/keyboard.hdf5 --camera wrist_camera --output recordings/collect_smoke/keyboard_wrist_replay.mp4
+python scripts/data/replay_hdf5.py --input recordings/collect_smoke/keyboard.hdf5 --cameras wrist_camera --output recordings/collect_smoke/keyboard_wrist_replay.mp4
 ```
 
 生成顶部相机 RGB-D 回放：
 
 ```powershell
-python scripts/data/replay_low_shelf_hdf5.py --input recordings/collect_smoke/keyboard.hdf5 --camera top_camera --output recordings/collect_smoke/keyboard_top_replay.mp4
+python scripts/data/replay_hdf5.py --input recordings/collect_smoke/keyboard.hdf5 --cameras top_camera --output recordings/collect_smoke/keyboard_top_replay.mp4
 ```
 
 ### 8.8 SmolVLA CPU smoke
