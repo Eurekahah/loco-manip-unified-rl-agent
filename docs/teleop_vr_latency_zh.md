@@ -2,6 +2,9 @@
 
 记录日期：2026-11-10
 
+后续 Fast Teleop 原型、详细 profiling 和 A/B 结果见
+[`teleop_fast_path_zh.md`](teleop_fast_path_zh.md)。
+
 测试任务：
 
 `Isaac-M20-Piper-Teleop-History-v0`

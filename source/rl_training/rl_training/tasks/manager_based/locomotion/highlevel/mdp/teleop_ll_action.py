@@ -93,6 +93,12 @@ class TeleopLLAction(LowLevelPolicyActionBase):
         self._default_body_pose[:, 0] = 0.51  # height 默认 0.51，pitch/roll 默认 0
         
         self.arm_link_ids = self.robot.find_bodies(["arm.*"])[0]
+        ik_period = float(getattr(self.cfg, "ik_update_period_s", 0.0))
+        physics_dt = float(self._env.physics_dt)
+        self._ik_update_decimation = (
+            max(1, int(round(ik_period / physics_dt))) if ik_period > 0.0 else 1
+        )
+        self._ik_apply_counter = 0
 
         # ---- IK 对比门控：绝对 7D 目标 vs 每步相对 6D 增量 ----
         self._relative_ik = bool(getattr(self.cfg, "relative_ik_commands", False))
@@ -367,6 +373,14 @@ class TeleopLLAction(LowLevelPolicyActionBase):
         else:
             self._capture_default_ee_pose(ids)
             self._reset_default_body_pose(ids)
+        self._ik_apply_counter = 0
+
+    def _should_apply_ik(self) -> bool:
+        if self._ik_update_decimation <= 1:
+            return True
+        should_apply = self._ik_apply_counter % self._ik_update_decimation == 0
+        self._ik_apply_counter += 1
+        return should_apply
 
     def _normalize_env_ids(self, env_ids) -> torch.Tensor:
         """把 ``ActionManager.reset`` 传来的 ``None`` / ``slice`` / ``Tensor`` 统一成 id 张量。"""
@@ -468,6 +482,9 @@ class TeleopLLActionCfg(ActionTermCfg):
 
     relative_ik_commands: bool = False
     """True：把目标变化量差分成每步 6D 相对位姿送 IK，用于和绝对目标 IK 对比。"""
+
+    ik_update_period_s: float = 0.0
+    """IK recompute period in simulation seconds; 0 recomputes every physics tick."""
 
     # delta_* 字段全部移除
 

@@ -31,6 +31,35 @@ parser.add_argument(
     help="GUI 视角：free=自由视角，chest=胸前，wrist=腕部，both=胸前主视口 + 独立腕部视口。",
 )
 parser.add_argument("--max-steps", type=int, default=0, help="Stop after N environment steps; 0 runs until exit.")
+parser.add_argument(
+    "--fast-teleop",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help="Use the lightweight teleoperation stepping path without training managers.",
+)
+parser.add_argument(
+    "--fast-render-hz",
+    type=float,
+    default=15.0,
+    help="Wall-clock render frequency for fast teleoperation.",
+)
+parser.add_argument(
+    "--fast-write-each-tick",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help="Write action targets every 5 ms physics tick; default writes once per 20 ms control tick.",
+)
+parser.add_argument(
+    "--ik-update-period",
+    type=float,
+    default=0.0,
+    help="IK recompute period in simulation seconds; 0 keeps every physics tick.",
+)
+parser.add_argument(
+    "--profile-detailed",
+    action="store_true",
+    help="Profile action manager, low-level policy, IK, scene, simulation and render separately.",
+)
 add_fisheye_args(parser, include_panorama=True)
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(rendering_mode="performance")
@@ -41,9 +70,14 @@ if args.headless and args.camera_view != "free":
     parser.error("--camera-view 需要 GUI；headless 模式只能使用 free。")
 if args.max_steps < 0:
     parser.error("--max-steps must be >= 0")
+if args.fast_render_hz <= 0.0:
+    parser.error("--fast-render-hz must be > 0")
+if args.ik_update_period < 0.0:
+    parser.error("--ik-update-period must be >= 0")
 validate_fisheye_args(parser, args, include_panorama=True)
 args.enable_cameras = bool(
-    args.fisheye_rig != "none"
+    getattr(args, "enable_cameras", False)
+    or args.fisheye_rig != "none"
     or args.camera_view != "free"
     or args.show_panorama
     or args.show_wrist_camera
@@ -64,6 +98,7 @@ from rl_training.devices.keyboard_loco_manip_teleop import KeyboardLocoManipTele
 import rl_training.tasks  # noqa: F401
 from fisheye_profiler import RuntimeProfiler
 from fisheye_teleop import TeleopFisheyeDisplay, add_fisheye_rig
+from fast_teleop import DetailedStepProfiler, FastTeleopStepper
 
 
 class _TeleopCameraRig:
@@ -162,6 +197,7 @@ def main():
     if getattr(env_cfg, "commands", None) is not None and hasattr(env_cfg.commands, "ee_pose"):
         env_cfg.commands.ee_pose.debug_vis = False
     env_cfg.actions.pre_trained_pick_action.low_level_ee_actions.debug_vis = False
+    env_cfg.actions.pre_trained_pick_action.ik_update_period_s = args.ik_update_period
     env = gym.make(args.task, cfg=env_cfg).unwrapped
     env.cfg.sim.render_interval = int(args.render_interval)
     env.sim.cfg.render_interval = int(args.render_interval)
@@ -208,6 +244,18 @@ def main():
     )
     teleop_interface = KeyboardLocoManipTeleop(device_cfg)
     print(teleop_interface)
+    detailed_profiler = None
+    fast_stepper = None
+    if args.profile_detailed:
+        detailed_profiler = DetailedStepProfiler(env, profiler)
+        detailed_profiler.install()
+    if args.fast_teleop:
+        fast_stepper = FastTeleopStepper(
+            env,
+            render_hz=args.fast_render_hz,
+            write_targets_each_tick=args.fast_write_each_tick,
+            profiler=profiler,
+        )
 
     # ── 3. 控制标志 ────────────────────────────────────────────────────
     teleoperation_active = True
@@ -285,7 +333,10 @@ def main():
                     #     f"grip={int(cmd13[12])}"
                     # )
                     with profiler.measure("env_step_ms"):
-                        env.step(actions)
+                        if fast_stepper is not None:
+                            fast_stepper.step(actions)
+                        else:
+                            env.step(actions)
                 else:
                     with profiler.measure("env_step_ms"):
                         env.sim.render()
@@ -310,6 +361,8 @@ def main():
     fisheye_display.save_ui_snapshots()
     fisheye_display.close()
     camera_rig.close()
+    if detailed_profiler is not None:
+        detailed_profiler.uninstall()
     env.close()
     profiler.write(force=True)
     profiler.print_summary()

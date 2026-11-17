@@ -36,6 +36,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Sequence
 
 import torch
@@ -175,10 +176,19 @@ class LowLevelPolicyActionBase(ActionTerm):
             tag=type(self).__name__,
         )
         self._counter = 0
+        self._profile_hook = None
 
     # ------------------------------------------------------------------ #
     # 子类可覆盖的钩子
     # ------------------------------------------------------------------ #
+
+    def set_profile_hook(self, hook) -> None:
+        """Install an optional ``hook(name, milliseconds)`` profiling callback."""
+        self._profile_hook = hook
+
+    def _profile(self, name: str, started: float) -> None:
+        if self._profile_hook is not None:
+            self._profile_hook(name, (time.perf_counter() - started) * 1000.0)
 
     def _build_low_level_obs_cfg(self, cfg: ActionTermCfg, last_action_fn):
         """构造低层观测组；子类可覆盖以接入自己的 command 字段。"""
@@ -247,21 +257,50 @@ class LowLevelPolicyActionBase(ActionTerm):
 
     def apply_actions(self):
         """低层 tick：复位处理 -> 推 history 帧 -> 算低层观测 -> 跑低层策略 -> 路由动作。"""
+        apply_started = time.perf_counter()
         if self._counter % self.cfg.low_level_decimation == 0:
+            started = time.perf_counter()
             history_flat = self._ll_replay_state.on_tick()
+            self._profile("ll_history_ms", started)
+            started = time.perf_counter()
             self._on_low_level_tick()
+            self._profile("ll_ik_target_ms", started)
+            started = time.perf_counter()
             low_level_obs = self._low_level_obs_manager.compute_group("ll_policy")
+            self._profile("ll_obs_ms", started)
+            started = time.perf_counter()
             policy_output = run_low_level_policy(self.policy, low_level_obs, history_flat)
+            self._profile("ll_policy_ms", started)
+            started = time.perf_counter()
             self._route_policy_output(policy_output)
+            self._profile("ll_route_ms", started)
 
+            started = time.perf_counter()
             self._joint_pos_action_term.process_actions(self.low_level_leg_actions)
+            self._profile("ll_leg_process_ms", started)
+            started = time.perf_counter()
             self._wheel_vel_action_term.process_actions(self.low_level_wheel_actions)
+            self._profile("ll_wheel_process_ms", started)
             if self._ee_ik_action_term is not None:
+                started = time.perf_counter()
                 self._ee_ik_action_term.process_actions(self.low_level_ee_actions)
+                self._profile("ll_ik_process_ms", started)
             self._counter = 0
 
+        started = time.perf_counter()
         self._joint_pos_action_term.apply_actions()
+        self._profile("ll_leg_apply_ms", started)
+        started = time.perf_counter()
         self._wheel_vel_action_term.apply_actions()
+        self._profile("ll_wheel_apply_ms", started)
         if self._ee_ik_action_term is not None:
-            self._ee_ik_action_term.apply_actions()
+            if self._should_apply_ik():
+                started = time.perf_counter()
+                self._ee_ik_action_term.apply_actions()
+                self._profile("ll_ik_apply_ms", started)
         self._counter += 1
+        self._profile("ll_apply_total_ms", apply_started)
+
+    def _should_apply_ik(self) -> bool:
+        """Whether to recompute IK on this physics apply tick."""
+        return True

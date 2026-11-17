@@ -27,7 +27,11 @@ if args.max_steps < 0:
     parser.error("--max-steps must be >= 0")
 if args.show_wrist_camera:
     parser.error("--show-wrist-camera is not available in this locomotion-only script")
-args.enable_cameras = bool(args.fisheye_rig != "none" or args.show_panorama)
+args.enable_cameras = bool(
+    getattr(args, "enable_cameras", False)
+    or args.fisheye_rig != "none"
+    or args.show_panorama
+)
 if args.fisheye_rig != "none" and not any(
     item.startswith("--rendering_mode") for item in sys.argv[1:]
 ):
