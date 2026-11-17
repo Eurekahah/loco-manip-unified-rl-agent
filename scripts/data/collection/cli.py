@@ -12,7 +12,7 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 from fisheye_cli import add_fisheye_args, validate_fisheye_args  # noqa: E402
-from teleop_cli import prefer_cpu_for_single_env_fast_path  # noqa: E402
+from teleop_cli import prefer_cpu_for_single_env_teleop  # noqa: E402
 
 
 def build_collection_parser(
@@ -122,7 +122,7 @@ def validate_collection_args(
 
 
 def apply_rendering_default(args: argparse.Namespace) -> None:
-    prefer_cpu_for_single_env_fast_path(args, enabled=args.fast_stepping)
+    prefer_cpu_for_single_env_teleop(args)
     if args.fisheye_rig != "none" and not any(
         item.startswith("--rendering_mode") for item in sys.argv[1:]
     ):

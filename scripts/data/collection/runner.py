@@ -33,6 +33,10 @@ if str(TELEOP_DIR) not in sys.path:
 from fast_teleop import DetailedStepProfiler, FastTeleopStepper  # noqa: E402
 
 from .profiles import CollectionTaskProfile, resolve_profile
+from .termination import (
+    compute_fast_termination_status,
+    validate_success_termination_term,
+)
 
 
 class KeyboardAbsoluteAdapter:
@@ -211,6 +215,7 @@ def run_collection(
                 "fast_robot_hot_period_s": args_cli.fast_robot_hot_period,
                 "fast_robot_only_write": args_cli.fast_robot_only_write,
                 "ik_update_period_s": args_cli.ik_update_period,
+                "automatic_termination": True,
             }
         )
     if fisheye_spec.enabled:
@@ -240,6 +245,10 @@ def run_collection(
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
     action_term = env.action_manager.get_term(profile.action_term_name)
+    validate_success_termination_term(
+        env.termination_manager,
+        profile.success_term_name,
+    )
     if hasattr(action_term.cfg, "absolute_commands"):
         action_term.cfg.absolute_commands = True
     if profile.configure_action_term is not None:
@@ -342,7 +351,10 @@ def run_collection(
     )
     print(f"  stepping   : {'fast' if args_cli.fast_stepping else 'manager'}")
     if args_cli.fast_stepping:
-        print("  fast note  : automatic termination is disabled; use manual success/failure reset")
+        print(
+            "  fast note  : automatic termination/success switching enabled; "
+            "manual success/failure still overrides"
+        )
     print(f"  HDF5       : {os.path.abspath(output_path)}")
     print("  action     : absolute offsets from the recalibrated anchor")
     if args_cli.input == "vr":
@@ -391,20 +403,27 @@ def run_collection(
                         fast_stepper.process_action(actions)
                         recorder.record_pre_step()
                         fast_stepper.advance()
+                        reset_buf, terminated, truncated = compute_fast_termination_status(
+                            env.termination_manager
+                        )
                         recorder.record_post_step()
-                    terminated = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-                    truncated = torch.zeros_like(terminated)
+                    episode_done = bool(reset_buf[0].item())
                 else:
                     with profiler.measure("env_step_ms"):
                         _, _, terminated, truncated, _ = env.step(actions)
+                    episode_done = bool(terminated[0].item()) or bool(truncated[0].item())
                 fisheye_display.update(env)
                 step_count += 1
 
-                if bool(terminated[0].item()) or bool(truncated[0].item()):
+                if episode_done:
                     print(
                         f"[Collect] episode ended: terminated={bool(terminated[0].item())} "
                         f"truncated={bool(truncated[0].item())}"
                     )
+                    if fast_stepper is not None:
+                        # Fast stepping bypasses ManagerBasedRLEnv.step(), which normally
+                        # resets terminated envs after recording their final frame.
+                        env.reset()
                     reset_episode_state()
 
                 if args_cli.max_steps > 0 and step_count >= args_cli.max_steps:

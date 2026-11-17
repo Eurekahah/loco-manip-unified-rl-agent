@@ -18,7 +18,7 @@ reward/observation/termination/event 管理链。
 --profile-detailed               拆分 action/policy/IK/scene/sim/render 计时
 ```
 
-Fast 遥操和 Fast 数采在单环境且用户未显式传 `--device` 时默认使用 CPU 物理。
+单环境遥操和数采（Fast 或 manager 路径）在用户未显式传 `--device` 时默认使用 CPU 物理。
 需要强制 GPU 时显式传 `--device cuda:0`。该默认值来自下面的同机 A/B，不是经验猜测。
 
 ## Fast path 结构
@@ -57,8 +57,10 @@ python scripts\data\collect_demonstrations.py `
   --profile-json outputs\fast_teleop\fast_profile.json
 ```
 
-Fast 模式自动 termination 关闭，结束时使用键盘 `K/L` 或 VR success/failure
-手动标记。HDF5 仍通过异步 writer 写入，控制线程只负责采样并入队。
+Fast 模式每个控制周期都会计算 termination term。`place_success` 触发后先记录
+当前帧和 termination flags，再调用 `env.reset()` finalize 当前 episode 并切换下一集。
+键盘 `K/L` 或 VR success/failure 仍作为手动覆盖。HDF5 仍通过异步 writer 写入，
+控制线程只负责采样和入队。
 
 ## 详细 profiling
 
@@ -235,7 +237,8 @@ IK 周期 A/B 的结论：`--ik-update-period 0.01` 与默认 0 的轨迹指标�
 
 - Fast path 已接入键盘、VR 遥操和通用 HDF5 数采；相机采样仍在主线程，异步 writer
   只负责磁盘写入。
-- Fast path 不执行训练 reward/termination/event manager，手动 reset 仍走完整环境。
+- Fast path 不执行训练 reward/event manager，但会执行 termination manager，
+  以便自动判定成功/失败并切换 episode；手动 reset 仍走完整环境。
 - 显式传 `--device cuda:0` 可复现旧 GPU 路径；多环境 Fast 路径不会自动切 CPU。
 - 相机 RGB/depth `.cpu()`、帧转换和预览仍在主线程，下一步应把 CPU 转换和有界队列
   从控制热路径移走。

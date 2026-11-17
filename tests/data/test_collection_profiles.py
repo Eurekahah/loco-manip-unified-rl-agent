@@ -12,6 +12,7 @@ from collection.profiles import (  # noqa: E402
     register_collection_profile,
     resolve_profile,
 )
+from collection.cli import build_collection_parser  # noqa: E402
 
 
 def test_explicit_collection_profile_is_task_isolated() -> None:
@@ -34,3 +35,14 @@ def test_explicit_collection_profile_is_task_isolated() -> None:
     assert resolved is profile
     assert resolved.matches_task("Isaac-M20-Piper-UnitTest-Collect-v0")
     assert not resolved.matches_task("Isaac-M20-Piper-Other-Collect-v0")
+
+
+def test_collection_ik_update_period_defaults_to_100_hz() -> None:
+    parser = build_collection_parser(
+        description="test",
+        default_task="Isaac-M20-Piper-UnitTest-Collect-v0",
+    )
+
+    args = parser.parse_args([])
+
+    assert args.ik_update_period == 0.01

@@ -24,7 +24,7 @@ parser.add_argument("--mode", choices=("normal", "fast", "fast_hot"), default="n
 parser.add_argument("--steps", type=int, default=100)
 parser.add_argument("--warmup", type=int, default=30)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--ik-update-period", type=float, default=0.02)
+parser.add_argument("--ik-update-period", type=float, default=0.01)
 parser.add_argument("--fast-render-hz", type=float, default=15.0)
 parser.add_argument("--fast-write-each-tick", action="store_true")
 parser.add_argument("--fast-robot-hot-period", type=float, default=0.005)

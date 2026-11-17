@@ -174,8 +174,9 @@ python scripts\data\collect_demonstrations.py `
   --record-hz 10 --output recordings\two_cylinder_place\fast.hdf5
 ```
 
-Fast 模式不自动运行 training termination manager，必须用键盘 `K/L` 或 VR
-success/failure 手动结束 episode。详细参数、profiling 和抖动 A/B 见
+Fast 模式会运行 termination manager。自动成功/失败触发后，先记录当前帧和
+termination flags，再 reset 并切换下一个 episode；键盘 `K/L` 或 VR
+success/failure 仍可手动覆盖。详细参数、profiling 和抖动 A/B 见
 `docs/teleop_fast_path_zh.md`。
 
 ## 回放

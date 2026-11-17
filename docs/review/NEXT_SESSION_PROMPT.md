@@ -91,8 +91,9 @@ source/rl_training/rl_training/datasets/hdf5.py
 - 不要通过降低 decimation、提高手柄灵敏度或调整死区来掩盖主循环问题。
 - 机械臂 target 默认每 10 ms 写入；5 ms 更平滑但更慢。
 - 数据采集的 HDF5 writer 是异步的，控制线程只负责采样和入队。
-- Fast 数采当前不自动运行 termination manager，结束时用键盘 `K/L` 或 VR
-  success/failure 手动标记。
+- Fast 数采每个控制周期运行 termination manager；自动成功/失败会记录终止帧、
+  finalize 当前 episode，再 reset 切换下一集。键盘 `K/L` 或 VR success/failure
+  仍可手动覆盖。
 
 ## 3. 当前实测结果
 
@@ -163,11 +164,13 @@ DEF-072：Fast 数采 common_step_counter 未推进，HDF5 只记录首帧
 ```text
 tests/data/test_hdf5_async.py
 tests/data/test_collection_profiles.py
+tests/data/test_collection_termination.py
 tests/data/test_replay_hdf5.py
 tests/fisheye/test_fisheye_gpu.py
+tests/teleop/test_teleop_cli.py
 tests/teleop/test_fast_teleop.py
 
-结果：10 passed
+结果：18 passed
 ```
 
 ### 2026-11-17 本轮补充结果

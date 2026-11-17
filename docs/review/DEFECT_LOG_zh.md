@@ -44,6 +44,46 @@
 | 2026-11-17 | 新增 **DEF-071**：Fast Teleop 初版虽然把主循环从约 5.6 FPS 提到 16 FPS，但机械臂持续抖动；轨迹探针证明 `apply_action` 降频导致低层策略降到约 12.5 Hz，随后发现 20 ms target 写入仍会使 target 二阶差分放大 5.5 万倍。最终默认改为 10 ms robot hot loop，稳定约 10.65 FPS，轨迹接近 normal | `codex/low-shelf-pick-place @ 18f2120` |
 | 2026-11-17 | 新增 **DEF-072**：Fast HDF5 数采的 `common_step_counter` 未推进，50 步冒烟只写出 1 帧且所有 `sim_time` 都停在 0；补齐 `episode_length_buf/common_step_counter` 后，同一命令写出 10 帧、`sim_time=0..0.9`，并新增 Fast stepper 单测 | 本次（工作区） |
 | 2026-11-17 | 新增 **DEF-073**：对照 Isaac Lab 官方遥操与单环境 CPU 建议，Fast 遥操从 GPU 的 12.94 FPS 提升到 CPU 的 51.13 FPS；IK 默认由 200 Hz 降为与 10 ms target 对齐的 100 Hz，固定轨迹抖动同时下降；腕部相机 10 Hz 数采约 34.7-38.5 FPS | 本次（工作区） |
+| 2026-11-17 | 新增 **DEF-074**：Fast 数采读取 termination term 但从未 `compute()`，成功标志会一直是旧值；且自动成功后没有显式 reset，episode 不会切换。改为每控制周期计算 termination、先记录终止帧再 reset，并保留最后 termination 摘要供 episode finalize 使用 | 本次（工作区） |
+
+---
+
+### DEF-074 `2026-11-17` Fast 数采 termination 未计算、自动成功后 episode 不切换
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **缺陷**（数采成功判定与 episode 生命周期错误） |
+| 状态 | 已修；Fast 路径自动计算 termination，成功后记录终止帧、finalize 并切换下一集 |
+| 关联 | `scripts/data/collection/runner.py`；`scripts/data/collection/termination.py`；`source/rl_training/rl_training/recorders/hdf5.py`；`source/rl_training/rl_training/datasets/outcomes.py`；`tests/data/test_collection_termination.py` |
+
+**1. 现象 / 根因**
+
+* Fast 数采绕过了 `ManagerBasedRLEnv.step()`，但 `record_post_step()` 仍直接读取
+  `termination_manager.get_term(...)`。由于没有调用 `termination_manager.compute()`，
+  flags 和 success 一直是初始化后的旧值。
+* Fast 分支把 `terminated/truncated` 写死为 False，即使 termination term 为真也不会
+  调用 `env.reset()`，因此不会 finalize 当前 episode 或进入下一集。
+* `record_post_step()` 入队后清空 pending frame，随后 `env.reset()` 的
+  `record_pre_reset()` 拿不到刚记录的 termination 摘要，episode 级 `success`
+  会错误退回 False。
+
+**2. 修正**
+
+* 每个 Fast 控制周期在 `advance()` 后调用 `termination_manager.compute()`，
+  快照 `reset/terminated/truncated`，再执行 `record_post_step()`。
+* Fast 路径检测到 reset 后显式调用 `env.reset()`，让 recorder 先 finalize 当前
+  episode，再 reset 场景、重新标定并进入下一集。
+* 校验 collection profile 的 `success_term_name` 必须是 active termination term，
+  且不能是 timeout term。
+* recorder 保存每个 env 最后一次 termination 摘要，供 pending frame 已消费后的
+  episode finalize 使用；手动 success/failure 仍覆盖自动判定。
+
+**3. 结果**
+
+* 默认 CPU + 100 Hz IK + 腕部相机 30 步 Fast 数采冒烟通过，写出 6 帧，
+  termination flags 形状为 `(6, 5)`，writer 队列为 0、无丢帧。
+* 单元测试覆盖 termination 只计算一次、success term 校验、自动 success 保留和
+  手动结果覆盖自动 success。
 
 ---
 
@@ -80,7 +120,7 @@
 
 **3. 修正**
 
-* 单环境 Fast 遥操/数采在用户未显式传 `--device` 时自动使用 CPU；
+* 单环境遥操/数采在用户未显式传 `--device` 时自动使用 CPU；
   显式 `--device cuda:0` 保留旧 GPU 路径。
 * `--ik-update-period` 默认由 `0.0` 改为 `0.01`，与 10 ms target 写入对齐。
 * 保持 `action_manager.apply_action()` 每 5 ms 执行，不降低低层策略/history 频率。

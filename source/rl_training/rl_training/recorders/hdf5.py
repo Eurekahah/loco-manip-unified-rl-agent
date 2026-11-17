@@ -28,6 +28,7 @@ from rl_training.datasets.hdf5 import (
     invert_transform,
     pose_to_matrix,
 )
+from rl_training.datasets.outcomes import resolve_episode_outcome
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -51,6 +52,9 @@ class HDF5Recorder(RecorderTerm):
             raise ValueError("HDF5RecorderCfg.tracked_entity_names must not be empty")
         self._pending_frames: dict[int, dict | None] = {
             env_id: None for env_id in range(env.num_envs)
+        }
+        self._last_outcomes: dict[int, dict] = {
+            env_id: {} for env_id in range(env.num_envs)
         }
         self._episode_names: dict[int, str | None] = {
             env_id: None for env_id in range(env.num_envs)
@@ -137,6 +141,7 @@ class HDF5Recorder(RecorderTerm):
         self._recording_active[int(env_id)] = bool(active)
         self._next_record_sim_time[int(env_id)] = 0.0
         self._last_sensor_frames[int(env_id)].clear()
+        self._last_outcomes[int(env_id)].clear()
 
     def has_open_episode(self, env_id: int = 0) -> bool:
         return self._episode_names.get(int(env_id)) is not None
@@ -362,28 +367,43 @@ class HDF5Recorder(RecorderTerm):
         return None, None
 
     def record_post_step(self):
-        """Attach flags and enqueue the single pending frame without retaining the episode."""
+        """Attach flags, retain the latest outcome, and enqueue any pending frame."""
         if not self._termination_names:
             self._termination_names = tuple(self._env.termination_manager.active_terms)
             self._writer.set_metadata(termination_names=self._termination_names)
         terminated = self._env.termination_manager.terminated
         truncated = self._env.termination_manager.time_outs
+        has_pending_frame = any(
+            frame is not None for frame in self._pending_frames.values()
+        )
+        has_reset = bool(terminated.any().item() or truncated.any().item())
+        if not has_pending_frame and not has_reset:
+            return None, None
         for env_id in range(self._env.num_envs):
             frame = self._pending_frames[env_id]
-            if frame is None:
-                continue
             flags = [
                 bool(self._env.termination_manager.get_term(name)[env_id].item())
                 for name in self._termination_names
             ]
-            frame["termination_flags"] = np.asarray(flags, dtype=bool)
-            frame["terminated"] = np.bool_(terminated[env_id].item())
-            frame["truncated"] = np.bool_(truncated[env_id].item())
-            frame["success"] = (
+            success = (
                 np.bool_(flags[self._termination_names.index(self.cfg.success_term_name)])
                 if self.cfg.success_term_name in self._termination_names
                 else np.bool_(False)
             )
+            self._last_outcomes[env_id] = {
+                "termination_flags": np.asarray(flags, dtype=bool).copy(),
+                "terminated": np.bool_(terminated[env_id].item()),
+                "truncated": np.bool_(truncated[env_id].item()),
+                "success": success,
+            }
+            if frame is None:
+                continue
+            frame["termination_flags"] = self._last_outcomes[env_id][
+                "termination_flags"
+            ]
+            frame["terminated"] = self._last_outcomes[env_id]["terminated"]
+            frame["truncated"] = self._last_outcomes[env_id]["truncated"]
+            frame["success"] = success
             if self._episode_names[env_id] is None:
                 self._episode_names[env_id] = self._writer.start_episode()
             enqueue_started = time.perf_counter()
@@ -431,26 +451,15 @@ class HDF5Recorder(RecorderTerm):
                 self._pending_frames[env_id] = None
             if episode_name is None:
                 continue
-            last = frame or {}
-            flags = np.asarray(
-                last.get(
-                    "termination_flags",
-                    np.zeros(len(self._termination_names), dtype=bool),
-                )
-            )
-            fired = [name for name, value in zip(self._termination_names, flags) if bool(value)]
+            last = frame if frame is not None else self._last_outcomes[env_id]
             manual_outcome = self._manual_outcomes.pop(env_id, None)
-            auto_success = bool(last.get("success", False))
-            success = auto_success if manual_outcome is None else manual_outcome
+            success, termination_label, auto_success, _ = resolve_episode_outcome(
+                last,
+                manual_outcome,
+                self._termination_names,
+            )
             if manual_outcome is True:
-                termination_label = "manual_success"
                 last["success"] = np.bool_(True)
-            elif manual_outcome is False:
-                termination_label = "manual_failure"
-            elif fired:
-                termination_label = "|".join(fired)
-            else:
-                termination_label = "manual_reset"
             self._writer.finalize_episode(
                 episode_name,
                 success=success,
@@ -466,6 +475,7 @@ class HDF5Recorder(RecorderTerm):
             self._episode_names[env_id] = None
             self._episode_step_counts[env_id] = 0
             self._last_sensor_frames[env_id].clear()
+            self._last_outcomes[env_id].clear()
             self._next_record_sim_time[env_id] = 0.0
         return None, None
 
@@ -485,23 +495,20 @@ class HDF5Recorder(RecorderTerm):
                 self._pending_frames[env_id] = None
             if episode_name is None:
                 continue
-            last = frame or {}
-            flags = np.asarray(
-                last.get(
-                    "termination_flags",
-                    np.zeros(len(self._termination_names), dtype=bool),
-                )
-            )
-            fired = [name for name, value in zip(self._termination_names, flags) if bool(value)]
+            last = frame if frame is not None else self._last_outcomes[env_id]
             manual_outcome = self._manual_outcomes.pop(env_id, None)
-            success = bool(manual_outcome) if manual_outcome is not None else bool(last.get("success", False))
+            success, _, auto_success, fired = resolve_episode_outcome(
+                last,
+                manual_outcome,
+                self._termination_names,
+            )
             label = "shutdown_success" if success else ("shutdown_manual_stop" if not fired else "|".join(fired))
             self._writer.finalize_episode(
                 episode_name,
                 success=success,
                 termination_label=label,
                 termination_names=self._termination_names,
-                episode_metadata={"env_id": env_id, "auto_success": bool(last.get("success", False))},
+                episode_metadata={"env_id": env_id, "auto_success": auto_success},
             )
             print(
                 f"[HDF5Recorder:{self.cfg.task_profile}] wrote open episode on close: "
@@ -509,6 +516,7 @@ class HDF5Recorder(RecorderTerm):
             )
             self._episode_names[env_id] = None
             self._episode_step_counts[env_id] = 0
+            self._last_outcomes[env_id].clear()
         self._writer.close()
 
 
