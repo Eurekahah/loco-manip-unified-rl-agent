@@ -41,6 +41,98 @@
 | 2026-10-08 | 新增 **DEF-064**（用户问"臂关节力矩也常打满，是 PD 没调好吗"）：新增**开环定目标**探针 `probe_arm_pd.py`（`policy_report` 的 EE 列跨配置不可比，实测软增益会把指令也拉向身体）⇒ 实测 **阻尼是主因**（\|qd\| 5 rad/s × 20 = 100 N·m 满限幅）、**延迟无关**；`damping 20 → 8` 后逐档 \|tau\| 均值 53.4→**22.5 N·m**、饱和 **23.5%→0%**，且跟踪还从 4.14→**2.19 cm**；再降刚度只会变差（150/8 → 2.89 cm） | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-08 | 新增 **DEF-065**（用户："改，顺便看看还有什么能做"）：① 夹爪开指令 ±0.04 → **±0.035**（超出行程 ⇒ 稳态误差 0.0050→0.0001、\|tau\| 1.25→0.55 N·m）；② 新增启动事件 `align_joint_velocity_limits` 把**臂**的 PhysX 速度上限对齐到 actuator cfg（USD 5 → **3.0 rad/s**）⇒ `\|qd\|` p99 5.00→3.00、超速 33%→5~18%、力矩再降到 14~17 N·m 且跟踪不劣化；三处冒烟 EXIT=0 | 分支 `codex/ll-train-detail-fix` |
 | 2026-10-08 | 新增 **DEF-066**（顺带清 known_issues ⑭）：EE 碰撞检查拿**世界坐标**比"机体盒子" ⇒ **只有 env 0 有效、其它 env 静默失效**；改成高度不变系局部坐标 + 盒子重定义为机体区域 ⇒ 拒绝率从 ≈0 变成 **24%**（204 个候选拒 49，AABB 5），三处冒烟 EXIT=0、臂负载不变差 | 分支 `codex/ll-train-detail-fix` |
+| 2026-11-17 | 新增 **DEF-071**：Fast Teleop 初版虽然把主循环从约 5.6 FPS 提到 16 FPS，但机械臂持续抖动；轨迹探针证明 `apply_action` 降频导致低层策略降到约 12.5 Hz，随后发现 20 ms target 写入仍会使 target 二阶差分放大 5.5 万倍。最终默认改为 10 ms robot hot loop，稳定约 10.65 FPS，轨迹接近 normal | `codex/low-shelf-pick-place @ 18f2120` |
+| 2026-11-17 | 新增 **DEF-072**：Fast HDF5 数采的 `common_step_counter` 未推进，50 步冒烟只写出 1 帧且所有 `sim_time` 都停在 0；补齐 `episode_length_buf/common_step_counter` 后，同一命令写出 10 帧、`sim_time=0..0.9`，并新增 Fast stepper 单测 | 本次（工作区） |
+
+---
+
+### DEF-071 `2026-11-17` Fast Teleop 机械臂持续抖动（低层策略/target 写入频率被错误降频）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **缺陷**（快速控制路径改变了训练语义） |
+| 状态 | 已修；默认 10 ms robot hot loop，轨迹接近 normal，约 10.65 FPS |
+| 关联 | `codex/low-shelf-pick-place @ 18f2120`；`scripts/teleoperation/fast_teleop.py`；`mdp/low_level_policy_action.py`；`mdp/teleop_ll_action.py`；`scripts/tools/profile_teleop_control.py`；`docs/teleop_fast_path_zh.md` |
+
+**1. 现象 / 根因**
+
+* Fast Teleop 启用后主循环明显变快，但机械臂持续高频抖动。
+* 初版为了减少写入，把 `action_manager.apply_action()` 也降到每 20 ms 一次。
+  低层策略依赖 `apply_action()` 内部 counter，实际策略频率因此从 50 Hz 掉到约 12.5 Hz。
+* 修正策略频率后，仅把 `scene.write_data_to_sim()` 降到 20 ms 仍会抖动。固定命令轨迹对比：
+
+  | 模式 | q range | target 二阶差分 RMS |
+  |---|---:|---:|
+  | normal | 0.002141 | 1.48e-6 |
+  | Fast，20 ms target | 0.257056 | 8.16e-2 |
+  | Fast hot，10 ms robot | 0.001852 | 1.64e-5 |
+  | Fast hot，5 ms robot | 0.000323 | 1.36e-6 |
+
+* 结论：`action_manager.apply_action()` 必须每个 5 ms 物理 tick 调用；机械臂 target
+  也不能长时间保持同一值，否则 IK/PD 会产生明显目标跳变。
+
+**2. 修正**
+
+* `LowLevelPolicyActionBase.apply_actions()` 增加可选 profiling hook。
+* `TeleopLLActionCfg` 增加 `ik_update_period_s`，可独立配置 IK 重算周期。
+* 新增 `FastTeleopStepper`：
+  * 每个 5 ms 物理 tick 推进 action manager；
+  * 每 20 ms 写一次 scene；
+  * 默认启用 10 ms robot hot loop，机械臂 target/actuator 每 10 ms 更新；
+  * 其他场景数据仍按 20 ms 控制 tick 更新；
+  * 渲染按墙钟频率执行。
+* 新增 `--fast-robot-hot-loop` 和 `--fast-robot-hot-period`。
+* 尝试过只重算 `piper_arm` actuator，但轨迹反而更差，已放弃。
+
+**3. 结果**
+
+* 默认 Fast 配置 100 步：约 **10.65 FPS**，`env_step mean 101.37 ms`。
+* 5 ms robot hot loop：约 **7.68 FPS**，轨迹最接近 normal。
+* 无 robot hot loop 的 20 ms 配置：约 **16.33 FPS**，但 target 二阶差分 RMS 比 normal 高约 5.5 万倍，不可用。
+* 测试：当前相关回归 `10 passed`；profile 和轨迹探针均正常退出。
+
+**4. 遗留**
+
+* 10 ms robot hot loop 仍比 normal 多约 11 倍 target 高频分量，需要继续做 PhysX/actuator 热路径优化。
+* 当前最平滑方案是 `--fast-robot-hot-period 0.005`，但性能只有约 7.7 FPS。
+* Fast path 已接入正式数据采集和异步 HDF5 writer；相机采集仍在主线程执行，下一步需要把
+  snapshot 转换与录制进一步移出控制热路径。
+
+---
+
+### DEF-072 `2026-11-17` Fast 数采时间轴不前进（HDF5 只记录首帧）
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **缺陷**（快速步进绕过了训练环境的计数器更新） |
+| 状态 | 已修；50 步冒烟从 1 帧恢复为 10 帧，时间戳连续 |
+| 关联 | `scripts/teleoperation/fast_teleop.py`；`scripts/data/collection/runner.py`；`source/rl_training/rl_training/recorders/hdf5.py`；`tests/teleop/test_fast_teleop.py` |
+
+**1. 现象 / 根因**
+
+* Fast collection 使用 `FastTeleopStepper` 代替 `env.step()`，但只推进了
+  `env._sim_step_counter`，没有推进 `ManagerBasedRLEnv` 的
+  `episode_length_buf` 和 `common_step_counter`。
+* HDF5 recorder 用 `common_step_counter * step_dt` 计算 `sim_time`。计数器停在 0 时，
+  `record_hz=10` 的 50 步冒烟只写出第一帧，后续帧都因 `sim_time` 未到下一次采样时间
+  被跳过；文件里看起来只有 1 个 step。
+
+**2. 修正**
+
+* `FastTeleopStepper.advance()` 在每个控制周期结束、scene 更新后推进两个计数器：
+  * `episode_length_buf += 1`
+  * `common_step_counter += 1`
+* 保持正常 `record_pre_step -> advance -> record_post_step` 顺序，动作/状态/相机
+  仍取同一控制周期，不改变数据 schema。
+* 新增 fake-env 单测，锁定“每个控制周期只推进一次”的语义。
+
+**3. 结果**
+
+* 修复前：`two_cylinder_fast_collect.hdf5` 只有 1 帧，`sim_dt=nan`。
+* 修复后：同一命令 50 个控制周期写出 **10 帧**，`sim_time=[0.0, 0.1, ..., 0.9]`，
+  `step_index=[0,5,10,...,45]`，腕部相机 RGB 形状为 `(10,224,224,3)`。
+* 新增 `--fast-robot-only-write` 做了 A/B，但 two_cylinder 场景没有 FPS 收益
+  （10.22 vs 10.43），默认关闭。
 
 ---
 

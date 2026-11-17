@@ -76,6 +76,7 @@ class FastTeleopStepper:
         write_targets_each_tick: bool = False,
         robot_hot_loop: bool = False,
         robot_hot_period_s: float = 0.005,
+        robot_only_write: bool = False,
         profiler=None,
     ) -> None:
         if render_hz <= 0.0:
@@ -84,6 +85,7 @@ class FastTeleopStepper:
         self.render_hz = float(render_hz)
         self.write_targets_each_tick = bool(write_targets_each_tick)
         self.robot_hot_loop = bool(robot_hot_loop)
+        self.robot_only_write = bool(robot_only_write)
         if robot_hot_period_s <= 0.0:
             raise ValueError("robot_hot_period_s must be positive")
         self.profiler = profiler
@@ -101,10 +103,15 @@ class FastTeleopStepper:
             self.profiler.record(name, (time.perf_counter() - started) * 1000.0)
 
     def step(self, action) -> None:
+        self.process_action(action)
+        self.advance()
+
+    def process_action(self, action) -> None:
         started = time.perf_counter()
         self.env.action_manager.process_action(action.to(self.env.device))
         self._measure("fast_action_process_ms", started)
 
+    def advance(self) -> None:
         now = time.perf_counter()
         render_due = now - self._last_render >= 1.0 / self.render_hz
         render_enabled = self.env.sim.has_gui() or self.env.sim.has_rtx_sensors()
@@ -121,8 +128,16 @@ class FastTeleopStepper:
 
             if self.write_targets_each_tick or index == 0:
                 started = time.perf_counter()
-                self.env.scene.write_data_to_sim()
-                self._measure("fast_scene_write_ms", started)
+                if self.robot_only_write:
+                    self._robot.write_data_to_sim()
+                else:
+                    self.env.scene.write_data_to_sim()
+                self._measure(
+                    "fast_robot_only_write_ms"
+                    if self.robot_only_write
+                    else "fast_scene_write_ms",
+                    started,
+                )
             elif self.robot_hot_loop and index % self._robot_hot_decimation == 0:
                 started = time.perf_counter()
                 self._write_robot_hot()
@@ -153,6 +168,14 @@ class FastTeleopStepper:
 
         if should_render:
             self._last_render = time.perf_counter()
+
+        # Match the counters maintained by ManagerBasedRLEnv.step().  The
+        # recorder uses common_step_counter to derive sim_time, and action
+        # terms use episode_length_buf to detect episode boundaries.
+        if hasattr(self.env, "episode_length_buf") and self.env.episode_length_buf is not None:
+            self.env.episode_length_buf += 1
+        if hasattr(self.env, "common_step_counter"):
+            self.env.common_step_counter += 1
 
     def _write_robot_hot(self) -> None:
         self._robot.write_data_to_sim()

@@ -28,6 +28,7 @@ parser.add_argument("--ik-update-period", type=float, default=0.02)
 parser.add_argument("--fast-render-hz", type=float, default=15.0)
 parser.add_argument("--fast-write-each-tick", action="store_true")
 parser.add_argument("--fast-robot-hot-period", type=float, default=0.005)
+parser.add_argument("--fast-robot-only-write", action="store_true")
 parser.add_argument("--output", default="outputs/fast_teleop/arm_trace.npz")
 parser.add_argument(
     "--action",
@@ -95,6 +96,7 @@ def main() -> None:
             write_targets_each_tick=args_cli.fast_write_each_tick,
             robot_hot_loop=args_cli.mode == "fast_hot",
             robot_hot_period_s=args_cli.fast_robot_hot_period,
+            robot_only_write=args_cli.fast_robot_only_write,
         )
 
     env.reset()

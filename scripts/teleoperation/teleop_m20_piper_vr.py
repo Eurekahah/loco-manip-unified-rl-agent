@@ -70,6 +70,12 @@ parser.add_argument(
     help="Robot target/actuator update period for the fast robot hot loop.",
 )
 parser.add_argument(
+    "--fast-robot-only-write",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help="Write only the robot articulation; enable only when no other articulation is commanded.",
+)
+parser.add_argument(
     "--ik-update-period",
     type=float,
     default=0.0,
@@ -301,6 +307,7 @@ def main():
             write_targets_each_tick=args.fast_write_each_tick,
             robot_hot_loop=args.fast_robot_hot_loop,
             robot_hot_period_s=args.fast_robot_hot_period,
+            robot_only_write=args.fast_robot_only_write,
             profiler=profiler,
         )
     # 摇杆斜率限制按仿真步长（而非墙钟）计算，不受仿真实时因子影响
