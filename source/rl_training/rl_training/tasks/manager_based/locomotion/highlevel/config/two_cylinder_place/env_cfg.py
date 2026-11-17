@@ -135,4 +135,3 @@ class TwoCylinderPlaceCollectEnvCfg(TwoCylinderPlaceTeleopEnvCfg):
             "gripper_joint1",
             "gripper_joint2",
         )
-        self.recorders.record_hdf5.legacy_env_attr_name = "low_shelf_hdf5_recorder"

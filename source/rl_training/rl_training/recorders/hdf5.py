@@ -120,8 +120,6 @@ class HDF5Recorder(RecorderTerm):
         # Expose the term for the interactive collection script without relying on
         # RecorderManager private state.
         setattr(env, cfg.env_attr_name, self)
-        if cfg.legacy_env_attr_name and cfg.legacy_env_attr_name != cfg.env_attr_name:
-            setattr(env, cfg.legacy_env_attr_name, self)
 
     @property
     def output_path(self) -> str:
@@ -536,7 +534,6 @@ class HDF5RecorderCfg(RecorderTermCfg):
     base_link_name: str = ""
     gripper_joint_names: tuple[str, ...] = ()
     env_attr_name: str = "hdf5_recorder"
-    legacy_env_attr_name: str | None = None
     extra_metadata: dict[str, object] = field(default_factory=dict)
     overwrite: bool = False
     record_hz: float = 10.0

@@ -28,7 +28,6 @@ register_collection_profile(
             "wrist_camera": make_low_shelf_wrist_camera,
             "workcell_camera": make_low_shelf_workcell_camera,
         },
-        legacy_recorder_attr_name="low_shelf_hdf5_recorder",
     )
 )
 
@@ -45,6 +44,5 @@ register_collection_profile(
             "wrist_camera": make_two_cylinder_wrist_camera,
             "workcell_camera": make_two_cylinder_workcell_camera,
         },
-        legacy_recorder_attr_name="low_shelf_hdf5_recorder",
     )
 )

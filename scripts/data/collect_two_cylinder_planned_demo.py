@@ -97,7 +97,7 @@ def main() -> None:
     obj = env.scene["object"]
     target = env.scene["target_pad"]
     action_term = env.action_manager.get_term("pre_trained_pick_action")
-    recorder = env.low_shelf_hdf5_recorder
+    recorder = env.hdf5_recorder
     recorder.set_recording_active(False)
     ee_body_id = robot.find_bodies("gripper_base")[0][0]
     finger_ids, _ = robot.find_bodies(["gripper_link1", "gripper_link2"], preserve_order=True)

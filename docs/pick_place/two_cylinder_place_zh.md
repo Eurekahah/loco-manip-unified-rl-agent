@@ -32,7 +32,7 @@ HighLevelFlatEnvCfg
 - `PreTrainedPickWBCAction` 与现有 WBC checkpoint。
 - `TeleopLLAction` 的统一绝对偏移语义：键盘增量由采集脚本累积成与 VR 相同的“标定锚点 + 偏移”，每次 reset 重新标定。
 - 低层货架任务的教师观测、目标垫相对位姿、机身姿态和夹爪状态观测。
-- 现有 `LowShelfHDF5Recorder`、RGB 相机工厂和 HDF5 检查/回放脚本。
+- 现有共享 `HDF5Recorder`、RGB 相机工厂和 HDF5 检查/回放脚本。
 
 三路相机固定映射到 SmolVLA 的键名，顺序不能按 HDF5 组的字母序推导：
 
@@ -203,7 +203,7 @@ recordings/two_cylinder_camera_smoke_final/camera_smoke.hdf5
 命令：
 
 ```powershell
-python scripts/data/collect_low_shelf_hdf5.py --task Isaac-M20-Piper-TwoCylinder-Collect-v0 --input keyboard --num_envs 1 --max_steps 3 --output recordings/two_cylinder_smoke/keyboard_gui.hdf5 --overwrite
+python scripts/data/collect_demonstrations.py --task Isaac-M20-Piper-TwoCylinder-Collect-v0 --input keyboard --num_envs 1 --max_steps 3 --output recordings/two_cylinder_smoke/keyboard_gui.hdf5 --overwrite
 ```
 
 结果：
@@ -265,19 +265,19 @@ python scripts/data/smoke_low_shelf_cameras.py --task Isaac-M20-Piper-TwoCylinde
 键盘与 VR 使用同一动作语义；`action` 中的 `delta_*` 字段表示相对重新标定锚点的偏移，不是逐帧滚动增量。
 
 ```powershell
-python scripts/data/collect_low_shelf_hdf5.py --task Isaac-M20-Piper-TwoCylinder-Collect-v0 --input keyboard --num_envs 1 --max_steps 3 --output recordings/two_cylinder_smoke/keyboard_gui.hdf5 --overwrite
+python scripts/data/collect_demonstrations.py --task Isaac-M20-Piper-TwoCylinder-Collect-v0 --input keyboard --num_envs 1 --max_steps 3 --output recordings/two_cylinder_smoke/keyboard_gui.hdf5 --overwrite
 ```
 
 正式键盘采集：
 
 ```powershell
-python scripts/data/collect_low_shelf_hdf5.py --task Isaac-M20-Piper-TwoCylinder-Collect-v0 --input keyboard --num_envs 1 --output recordings/two_cylinder_place/keyboard.hdf5
+python scripts/data/collect_demonstrations.py --task Isaac-M20-Piper-TwoCylinder-Collect-v0 --input keyboard --num_envs 1 --output recordings/two_cylinder_place/keyboard.hdf5
 ```
 
 ### 8.6 VR 采集
 
 ```powershell
-python scripts/data/collect_low_shelf_hdf5.py --task Isaac-M20-Piper-TwoCylinder-Collect-v0 --input vr --num_envs 1 --output recordings/two_cylinder_place/vr.hdf5
+python scripts/data/collect_demonstrations.py --task Isaac-M20-Piper-TwoCylinder-Collect-v0 --input vr --num_envs 1 --output recordings/two_cylinder_place/vr.hdf5
 ```
 
 ### 8.7 自动抓取 smoke
@@ -323,7 +323,7 @@ VR 采集（Windows 本机，仓库根目录）：
 
 ```powershell
 conda activate env_isaac_lab
-python scripts/data/collect_low_shelf_hdf5.py `
+python scripts/data/collect_demonstrations.py `
   --task Isaac-M20-Piper-TwoCylinder-Collect-v0 `
   --input vr `
   --num_envs 1 `

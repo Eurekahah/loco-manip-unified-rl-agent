@@ -183,7 +183,6 @@ def run_collection(
     recorder_cfg.base_link_name = profile.base_link_name
     recorder_cfg.gripper_joint_names = profile.gripper_joint_names
     recorder_cfg.env_attr_name = profile.recorder_attr_name
-    recorder_cfg.legacy_env_attr_name = profile.legacy_recorder_attr_name
     recorder_cfg.language_instruction = getattr(env_cfg, profile.instruction_attr, "")
     recorder_cfg.overwrite = args_cli.overwrite
     recorder_cfg.record_hz = args_cli.record_hz

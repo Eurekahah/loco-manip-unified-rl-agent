@@ -121,7 +121,7 @@ def main() -> None:
                     f"[camera-smoke] {name}: depth_min={finite.min():.4f} depth_max={finite.max():.4f}"
                 )
 
-    recorder = getattr(env, "low_shelf_hdf5_recorder", None)
+    recorder = getattr(env, "hdf5_recorder", None)
     if recorder is not None:
         if args_cli.mark_success:
             recorder.mark_outcome(True)

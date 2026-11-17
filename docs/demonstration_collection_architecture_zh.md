@@ -57,14 +57,8 @@ python scripts\data\collect_demonstrations.py `
   --profile two_cylinder
 ```
 
-旧入口仍兼容：
-
-```powershell
-python scripts\data\collect_low_shelf_hdf5.py `
-  --task Isaac-M20-Piper-TwoCylinder-Collect-v0
-```
-
-它现在只是 `collect_demonstrations.py` 的薄包装。
+旧的任务专用采集入口已经移除。所有任务统一使用
+`collect_demonstrations.py`。
 
 ## 新增任务
 

@@ -18,7 +18,6 @@ import numpy as np
 
 
 TELEOP_HDF5_SCHEMA = "teleop_manipulation/v1"
-LOW_SHELF_HDF5_SCHEMA = TELEOP_HDF5_SCHEMA
 ACTION_SEMANTICS = "absolute_offset_from_recalibrated_anchor"
 
 ACTION_LAYOUT = (
@@ -555,7 +554,3 @@ def _flatten_frame(frame: dict[str, Any], prefix: str = "") -> list[tuple[str, n
         else:
             flattened.append((path, np.asarray(value)))
     return flattened
-
-
-# Backward-compatible name for scripts and notebooks that predate the shared writer.
-LowShelfHDF5Writer = HDF5Writer

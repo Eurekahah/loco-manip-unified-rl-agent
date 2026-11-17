@@ -70,7 +70,6 @@ python scripts\teleoperation\teleop_m20_piper_vr.py `
 
 ```text
 scripts/data/collect_demonstrations.py
-scripts/data/collect_low_shelf_hdf5.py  # 兼容包装
 ```
 
 支持相同的 `--fisheye-rig`、分辨率、FOV、安装位置和更新时间参数。默认只记录原始腕部

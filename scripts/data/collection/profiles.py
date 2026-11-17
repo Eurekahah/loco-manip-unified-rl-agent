@@ -34,7 +34,6 @@ class CollectionTaskProfile:
     gripper_joint_names: tuple[str, ...] = ("gripper_joint1", "gripper_joint2")
     instruction_attr: str = "language_instruction"
     recorder_attr_name: str = "hdf5_recorder"
-    legacy_recorder_attr_name: str | None = None
     configure_env: EnvConfigurator | None = None
     configure_action_term: ActionConfigurator | None = None
     extra_metadata: Mapping[str, Any] = field(default_factory=dict)

@@ -68,7 +68,7 @@ git rev-parse --short HEAD
 
 - 使用 `TeleopLLAction`。
 - 显式启用场景相机和腕部 RGB-D。
-- 显式启用 `LowShelfHDF5Recorder`。
+- 显式启用共享 `HDF5Recorder`。
 - 不属于本次远程训练范围。
 
 ## 3. 两个新建训练任务

@@ -110,7 +110,7 @@ Isaac-M20-Piper-LowShelf-Collect-v0
 
 ### 4.2 记录生命周期
 
-使用 Isaac Lab 原生 `RecorderManager` + 自定义 `LowShelfHDF5Recorder`，不重写环境架构：
+使用 Isaac Lab 原生 `RecorderManager` + 共享 `HDF5Recorder`，不重写环境架构：
 
 - `record_pre_step`：在物理推进前记录当前状态、相机 RGB（可选深度）、内外参、时间戳和本步高层动作。
 - `record_post_step`：在环境自动 reset 前写入各终止项布尔值、`terminated`、`truncated` 和 `place_success`。
@@ -354,13 +354,13 @@ recordings/camera_smoke/camera_smoke.hdf5
 短 headless 采集：
 
 ```powershell
-python scripts/data/collect_low_shelf_hdf5.py --task Isaac-M20-Piper-LowShelf-Collect-v0 --input keyboard --headless --num_envs 1 --max_steps 5 --output recordings/collect_smoke/keyboard.hdf5 --overwrite
+python scripts/data/collect_demonstrations.py --task Isaac-M20-Piper-LowShelf-Collect-v0 --input keyboard --headless --num_envs 1 --max_steps 5 --output recordings/collect_smoke/keyboard.hdf5 --overwrite
 ```
 
 GUI 键盘遥操：
 
 ```powershell
-python scripts/data/collect_low_shelf_hdf5.py --task Isaac-M20-Piper-LowShelf-Collect-v0 --input keyboard --num_envs 1 --output recordings/low_shelf_place/keyboard.hdf5
+python scripts/data/collect_demonstrations.py --task Isaac-M20-Piper-LowShelf-Collect-v0 --input keyboard --num_envs 1 --output recordings/low_shelf_place/keyboard.hdf5
 ```
 
 键盘标签：
@@ -374,7 +374,7 @@ G  切换夹爪开合
 ### 8.5 VR 正式采集
 
 ```powershell
-python scripts/data/collect_low_shelf_hdf5.py --task Isaac-M20-Piper-LowShelf-Collect-v0 --input vr --num_envs 1 --output recordings/low_shelf_place/vr.hdf5
+python scripts/data/collect_demonstrations.py --task Isaac-M20-Piper-LowShelf-Collect-v0 --input vr --num_envs 1 --output recordings/low_shelf_place/vr.hdf5
 ```
 
 VR 标签：
@@ -498,7 +498,7 @@ HF_HOME=/path/to/hf-cache HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
 ```powershell
 cd D:\nvidia-isaac-sim\loco-manip-unified-rl-agent
 conda activate env_isaac_lab
-python scripts/data/collect_low_shelf_hdf5.py `
+python scripts/data/collect_demonstrations.py `
   --task Isaac-M20-Piper-LowShelf-Collect-v0 `
   --input vr `
   --num_envs 1 `

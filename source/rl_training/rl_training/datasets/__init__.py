@@ -7,8 +7,6 @@ from .hdf5 import (
     ACTION_SEMANTICS,
     ACTION_LAYOUT,
     HDF5Writer,
-    LOW_SHELF_HDF5_SCHEMA,
-    LowShelfHDF5Writer,
     TELEOP_HDF5_SCHEMA,
     quat_wxyz_to_matrix,
 )
@@ -17,8 +15,6 @@ __all__ = [
     "ACTION_SEMANTICS",
     "ACTION_LAYOUT",
     "HDF5Writer",
-    "LOW_SHELF_HDF5_SCHEMA",
-    "LowShelfHDF5Writer",
     "TELEOP_HDF5_SCHEMA",
     "quat_wxyz_to_matrix",
 ]

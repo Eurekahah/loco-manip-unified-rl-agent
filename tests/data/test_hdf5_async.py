@@ -16,7 +16,7 @@ MODULE_PATH = (
     / "datasets"
     / "hdf5.py"
 )
-SPEC = importlib.util.spec_from_file_location("low_shelf_hdf5_test_module", MODULE_PATH)
+SPEC = importlib.util.spec_from_file_location("hdf5_test_module", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
@@ -57,7 +57,7 @@ def test_async_writer_streams_extendable_camera_datasets(
     expected: str | None,
 ) -> None:
     path = tmp_path / f"stream_{compression}.hdf5"
-    writer = MODULE.LowShelfHDF5Writer(
+    writer = MODULE.HDF5Writer(
         str(path),
         task="test",
         instruction="test instruction",
