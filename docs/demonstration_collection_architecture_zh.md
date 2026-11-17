@@ -153,6 +153,31 @@ two_cylinder  -> profile=two_cylinder, schema=teleop_manipulation/v1
 
 两个任务均由同一个 `collect_demonstrations.py` 完成 headless HDF5 写入和正常关闭。
 
+## Fast 数采路径
+
+需要更低遥操延迟时，显式增加 `--fast-stepping`。它复用同一套 collection profile、
+recorder 和异步 HDF5 writer，只替换 `env.step()`：
+
+```text
+process_action -> record_pre_step -> FastTeleopStepper.advance -> record_post_step
+```
+
+Fast 路径仍每个物理 tick 推进 action manager，低层策略保持训练语义的 50 Hz；
+机械臂 target 默认每 10 ms 写一次，其他 scene 数据每 20 ms 写一次。控制周期结束会
+推进 `episode_length_buf` 和 `common_step_counter`，因此 HDF5 的 `step_index` 与
+`sim_time` 和图像/动作采样保持同一时间轴。
+
+```powershell
+python scripts\data\collect_demonstrations.py `
+  --task Isaac-M20-Piper-TwoCylinder-Collect-v0 `
+  --input keyboard --fast-stepping --fast-render-hz 15 `
+  --record-hz 10 --output recordings\two_cylinder_place\fast.hdf5
+```
+
+Fast 模式不自动运行 training termination manager，必须用键盘 `K/L` 或 VR
+success/failure 手动结束 episode。详细参数、profiling 和抖动 A/B 见
+`docs/teleop_fast_path_zh.md`。
+
 ## 回放
 
 回放同样与具体任务解耦：

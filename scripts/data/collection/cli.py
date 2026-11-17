@@ -63,6 +63,25 @@ def build_collection_parser(
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--fast-stepping",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use FastTeleopStepper for collection while keeping the async HDF5 writer.",
+    )
+    parser.add_argument("--fast-render-hz", type=float, default=15.0)
+    parser.add_argument("--fast-robot-hot-period", type=float, default=0.01)
+    parser.add_argument(
+        "--fast-robot-only-write",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "In fast stepping, write only the robot articulation instead of all scene "
+            "entities. Enable only when the task has no other commanded articulation."
+        ),
+    )
+    parser.add_argument("--ik-update-period", type=float, default=0.0)
+    parser.add_argument("--profile-detailed", action="store_true")
     return parser
 
 
@@ -88,6 +107,12 @@ def validate_collection_args(
         parser.error("--camera_width and --camera_height must be positive")
     if args.camera_update_period < 0.0:
         parser.error("--camera_update_period must be >= 0")
+    if args.fast_render_hz <= 0.0:
+        parser.error("--fast-render-hz must be > 0")
+    if args.fast_robot_hot_period <= 0.0:
+        parser.error("--fast-robot-hot-period must be > 0")
+    if args.ik_update_period < 0.0:
+        parser.error("--ik-update-period must be >= 0")
 
 
 def apply_rendering_default(args: argparse.Namespace) -> None:

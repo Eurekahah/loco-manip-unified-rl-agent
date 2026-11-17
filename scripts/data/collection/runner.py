@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
@@ -23,6 +25,12 @@ import rl_training.tasks  # noqa: F401
 
 from fisheye_profiler import RuntimeProfiler
 from fisheye_teleop import TeleopFisheyeDisplay, add_fisheye_rig
+
+TELEOP_DIR = Path(__file__).resolve().parents[2] / "teleoperation"
+if str(TELEOP_DIR) not in sys.path:
+    sys.path.insert(0, str(TELEOP_DIR))
+
+from fast_teleop import DetailedStepProfiler, FastTeleopStepper  # noqa: E402
 
 from .profiles import CollectionTaskProfile, resolve_profile
 
@@ -195,6 +203,16 @@ def run_collection(
     recorder_cfg.panorama_height = args_cli.panorama_height
 
     metadata = dict(profile.extra_metadata)
+    metadata["stepping_mode"] = "fast" if args_cli.fast_stepping else "manager"
+    if args_cli.fast_stepping:
+        metadata.update(
+            {
+                "fast_render_hz": args_cli.fast_render_hz,
+                "fast_robot_hot_period_s": args_cli.fast_robot_hot_period,
+                "fast_robot_only_write": args_cli.fast_robot_only_write,
+                "ik_update_period_s": args_cli.ik_update_period,
+            }
+        )
     if fisheye_spec.enabled:
         metadata.update(
             {
@@ -217,6 +235,8 @@ def run_collection(
         action_cfg.debug_vis = not args_cli.headless
     if action_cfg is not None and hasattr(action_cfg, "debug_vis_ee_target_only"):
         action_cfg.debug_vis_ee_target_only = True
+    if action_cfg is not None and hasattr(action_cfg, "ik_update_period_s"):
+        action_cfg.ik_update_period_s = args_cli.ik_update_period
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
     action_term = env.action_manager.get_term(profile.action_term_name)
@@ -224,6 +244,25 @@ def run_collection(
         action_term.cfg.absolute_commands = True
     if profile.configure_action_term is not None:
         profile.configure_action_term(action_term)
+
+    detailed_profiler = None
+    fast_stepper = None
+    if args_cli.profile_detailed:
+        detailed_profiler = DetailedStepProfiler(
+            env,
+            profiler,
+            action_term_name=profile.action_term_name,
+        )
+        detailed_profiler.install()
+    if args_cli.fast_stepping:
+        fast_stepper = FastTeleopStepper(
+            env,
+            render_hz=args_cli.fast_render_hz,
+            robot_hot_loop=True,
+            robot_hot_period_s=args_cli.fast_robot_hot_period,
+            robot_only_write=args_cli.fast_robot_only_write,
+            profiler=profiler,
+        )
 
     recorder = getattr(env, profile.recorder_attr_name)
     recorder.set_profiler(profiler)
@@ -301,6 +340,9 @@ def run_collection(
         f"  preview    : wrist={args_cli.show_wrist_camera} panorama={args_cli.show_panorama} "
         f"backend={args_cli.panorama_backend}"
     )
+    print(f"  stepping   : {'fast' if args_cli.fast_stepping else 'manager'}")
+    if args_cli.fast_stepping:
+        print("  fast note  : automatic termination is disabled; use manual success/failure reset")
     print(f"  HDF5       : {os.path.abspath(output_path)}")
     print("  action     : absolute offsets from the recalibrated anchor")
     if args_cli.input == "vr":
@@ -344,8 +386,17 @@ def run_collection(
                     .expand(env.num_envs, -1)
                     .clone()
                 )
-                with profiler.measure("env_step_ms"):
-                    _, _, terminated, truncated, _ = env.step(actions)
+                if fast_stepper is not None:
+                    with profiler.measure("env_step_ms"):
+                        fast_stepper.process_action(actions)
+                        recorder.record_pre_step()
+                        fast_stepper.advance()
+                        recorder.record_post_step()
+                    terminated = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+                    truncated = torch.zeros_like(terminated)
+                else:
+                    with profiler.measure("env_step_ms"):
+                        _, _, terminated, truncated, _ = env.step(actions)
                 fisheye_display.update(env)
                 step_count += 1
 
@@ -369,6 +420,8 @@ def run_collection(
     finally:
         fisheye_display.save_ui_snapshots()
         fisheye_display.close()
+        if detailed_profiler is not None:
+            detailed_profiler.uninstall()
         recorder.close(recorder.output_path)
         env.close()
         profiler.write(force=True)

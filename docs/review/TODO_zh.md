@@ -42,6 +42,7 @@
 | 2026-10-09 | **已合并到 main**（用户："先合并，我现在要进行部署了"）：按方案 ② 先把 **B3 坡度门控默认改回 0.0**（= 旧行为，等验证 run 出结果再单独启用），再 `git merge --ff-only` 把 `codex/ll-train-detail-fix` 快进进 `main`；合并后 flat WBC / History 两条冒烟 EXIT=0 | `main`（原 `7dce9e9`） |
 | 2026-10-16 | 历史编码器课题：真 env 探针定位"缓存时序"+ "特权向量量级失衡/死维/漏 COM"（DEF-067/068），实现 V4 特权向量 + 探索口径对齐参考实现 + `Latent/*` 监控；新增 P1-5（待云机实测） | `codex/hl-fix-adaptation`（工作区） |
 | 2026-10-27 | 最新 20k checkpoint 统一按 **0.55 m 高度上限**复核；归档 23 个不重复末 checkpoint 与参数清单；为每个 run 生成 md/png/npz 性能记录；清理 27 个云端 smoke/短测 run。结论迁入 DONE 第二十二节 | 云端 753/802/1029；`logs/cloud_20k_checkpoints/logs/rsl_rl/perf_summary.md` |
+| 2026-11-17 | Fast Teleop / 数采阶段：修复机械臂抖动（DEF-071）；补齐 Fast 控制时间轴，HDF5 不再只写首帧（DEF-072）；通用采集支持 `--fast-stepping`，异步 writer 保持不变；50 步腕部相机冒烟约 10.4 FPS、10 帧时间戳连续 | 分支 `codex/low-shelf-pick-place`（工作区） |
 
 **优先级定义**：P0 = 挡在"能部署/能继续训练"前面；P1 = 决定训练质量上限；
 P2 = 高层 replay 与工程债；P3 = 验证工具与文档。
