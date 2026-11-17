@@ -6,7 +6,14 @@
 scripts/tools/fisheye_cli.py       命令行参数与校验
 scripts/tools/fisheye_teleop.py    相机创建、全景拼接、omni.ui 窗口
 scripts/tools/fisheye_equirect.py  鱼眼投影与等距柱面 remap
+scripts/tools/fisheye_gpu.py       GPU grid_sample 全景投影与融合
+scripts/tools/fisheye_profiler.py  轻量 profiling
 ```
+
+完整架构、实测性能和 GUI 验证见
+[`fisheye_runtime_optimization_zh.md`](fisheye_runtime_optimization_zh.md)。
+任务与采集入口的隔离方式见
+[`demonstration_collection_architecture_zh.md`](demonstration_collection_architecture_zh.md)。
 
 默认 `--fisheye-rig none`，不创建额外相机，原有脚本行为不变。可选：
 
@@ -21,8 +28,9 @@ four   前左后右四路鱼眼，Scene key: fisheye_cam0..fisheye_cam3
 
 ## 遥操脚本
 
-以下三个脚本支持 `--fisheye-rig` 和独立全景窗口开关
-`--show-panorama / --no-show-panorama`：
+以下三个脚本支持 `--fisheye-rig`、独立全景窗口
+`--show-panorama / --no-show-panorama` 和腕部 UI 窗口
+`--show-wrist-camera / --no-show-wrist-camera`：
 
 ```text
 scripts/teleoperation/teleop_m20_piper_keyboard.py
@@ -35,9 +43,10 @@ scripts/teleoperation/teleop_m20_loco_keyboard.py
 ```powershell
 python scripts\teleoperation\teleop_m20_piper_keyboard.py `
   --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 `
-  --fisheye-rig dual --show-panorama `
+  --fisheye-rig dual --show-panorama --show-wrist-camera `
   --fisheye-width 480 --fisheye-height 300 `
-  --panorama-width 960 --panorama-height 480
+  --panorama-width 960 --panorama-height 480 `
+  --panorama-backend gpu --panorama-display-hz 12 --wrist-display-hz 20
 ```
 
 四路全景：
@@ -45,33 +54,41 @@ python scripts\teleoperation\teleop_m20_piper_keyboard.py `
 ```powershell
 python scripts\teleoperation\teleop_m20_piper_vr.py `
   --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 `
-  --fisheye-rig four --show-panorama `
+  --fisheye-rig four --show-panorama --show-wrist-camera `
   --fisheye-width 480 --fisheye-height 300 `
-  --panorama-width 960 --panorama-height 480
+  --panorama-width 960 --panorama-height 480 `
+  --panorama-backend gpu --panorama-display-hz 12 --wrist-display-hz 20
 ```
 
 只采集/渲染鱼眼，不打开拼接窗口时，去掉 `--show-panorama` 即可。启用任一鱼眼模式后，
-脚本会自动设置 `enable_cameras=True`。`--show-panorama` 只能用于 GUI；headless 模式会报错。
+脚本会自动设置 `enable_cameras=True`。鱼眼模式下若未显式传
+`--rendering_mode`，默认使用 `balanced`；仍可用
+`--rendering_mode performance/balanced/quality` 覆盖。`--show-panorama` 和
+`--show-wrist-camera` 只能用于 GUI；headless 模式会报错。
 
 ## 数据采集脚本
 
 ```text
-scripts/data/collect_low_shelf_hdf5.py
+scripts/data/collect_demonstrations.py
+scripts/data/collect_low_shelf_hdf5.py  # 兼容包装
 ```
 
-支持相同的 `--fisheye-rig`、分辨率、FOV、安装位置和更新时间参数，但数据采集侧只记录
-原始鱼眼 RGB，不计算拼接全景。`--record_depth` 开启时，鱼眼相机也会请求 depth。
+支持相同的 `--fisheye-rig`、分辨率、FOV、安装位置和更新时间参数。默认只记录原始腕部
+RGB 和原始鱼眼 RGB；`--record-panorama` 可显式追加拼接全景，
+`--record_depth` 可显式请求深度。状态、action 和所有相机按 `--record-hz` 统一采样。
+HDF5 由有界队列和后台 writer 逐帧扩展，默认 `lzf` 压缩。
 
 四路采集示例：
 
 ```powershell
-python scripts\data\collect_low_shelf_hdf5.py `
+python scripts\data\collect_demonstrations.py `
   --task Isaac-M20-Piper-LowShelf-Collect-v0 `
   --input keyboard --num_envs 1 `
   --no-scene_camera --no-wrist_camera --no-top_camera `
   --fisheye-rig four `
   --fisheye-width 480 --fisheye-height 300 `
-  --fisheye-update-period 0.1 `
+  --record-hz 10 --compression lzf --async-write `
+  --profile-json outputs\four_fisheye_profile.json `
   --output recordings\low_shelf_place\four_fisheye.hdf5
 ```
 
@@ -100,15 +117,28 @@ episodes/<episode>/camera/fisheye_cam3/rgb
 --fisheye-fov-deg                理想鱼眼全 FOV，默认 200
 --fisheye-mount-pos X Y Z        相对 base_link 的安装点
 --fisheye-lens-offset            双路前后镜头半间距，默认 0.02 m
---fisheye-update-period          传感器更新周期；0 表示每步更新
+--fisheye-update-period          传感器更新周期；0 自动跟随预览/采样频率
 --show-panorama                  遥操脚本显示独立等距柱面窗口
 --panorama-width                 全景宽度，默认 960
 --panorama-height                全景高度，默认 480
+--panorama-backend               auto / gpu / cpu，默认 auto
+--show-wrist-camera              显示已有腕部 sensor 的 omni.ui 窗口
+--wrist-display-hz               腕部 UI 刷新率，默认 20
+--panorama-display-hz            全景 UI 刷新率，默认 12
+--preview-hz                     GUI 预览参考频率，默认 15
+--record-hz                      统一采样率，默认 10
+--record-panorama                可选保存全景，默认关闭
+--compression                    none / lzf / gzip1 / gzip4，默认 lzf
+--async-write / --no-async-write 默认后台 writer
+--writer-queue-size              默认 8
+--profile-json                   输出轻量性能 JSON
+--ui-snapshot-dir                保存主 viewport 和 UI 验证图
 ```
 
 ## 转 LeRobot
 
-`scripts/data/convert_hdf5_to_lerobot.py` 会自动识别鱼眼组。只有鱼眼时从 `camera1`
+`scripts/data/convert_hdf5_to_lerobot.py` 会自动识别鱼眼组和可选
+`fisheye_panorama`。只有鱼眼时从 `camera1`
 开始编号；与原有 top/wrist/workcell 混采时，鱼眼从 `camera4` 开始编号。不同相机允许
 使用不同分辨率。
 
@@ -119,5 +149,6 @@ python scripts\data\convert_hdf5_to_lerobot.py `
   --overwrite
 ```
 
-当前 HDF5 保存的是原始鱼眼图像和相机位姿。鱼眼投影参数应以采集时的命令行配置为准，
-不要把它当成普通针孔相机内参使用。
+当前 HDF5 默认保存原始鱼眼图像和相机位姿，可选保存全景。鱼眼组明确记录
+`projection_model=fisheye_equidistant`、FOV、安装位置和镜头间距，不写普通针孔
+`intrinsics`；不要把它当成普通针孔相机使用。
