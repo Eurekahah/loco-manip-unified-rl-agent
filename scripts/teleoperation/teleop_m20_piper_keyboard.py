@@ -19,6 +19,8 @@ from teleop_cli import prefer_cpu_for_single_env_teleop
 parser = argparse.ArgumentParser()
 parser.add_argument("--task", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=1)
+parser.add_argument("--width", type=int, default=1280, help="GUI viewport width.")
+parser.add_argument("--height", type=int, default=720, help="GUI viewport height.")
 parser.add_argument(
     "--render-interval",
     type=int,
@@ -35,8 +37,8 @@ parser.add_argument("--max-steps", type=int, default=0, help="Stop after N envir
 parser.add_argument(
     "--fast-teleop",
     action=argparse.BooleanOptionalAction,
-    default=False,
-    help="Use the lightweight teleoperation stepping path without training managers.",
+    default=True,
+    help="Use the lightweight teleoperation path; enabled by default.",
 )
 parser.add_argument(
     "--fast-render-hz",
@@ -81,10 +83,12 @@ parser.add_argument(
 )
 add_fisheye_args(parser, include_panorama=True)
 AppLauncher.add_app_launcher_args(parser)
-parser.set_defaults(rendering_mode="performance")
+parser.set_defaults(rendering_mode="balanced")
 args = parser.parse_args()
 if args.render_interval < 1:
     parser.error("--render-interval 必须 >= 1")
+if args.width <= 0 or args.height <= 0:
+    parser.error("--width and --height must be positive")
 if args.headless and args.camera_view != "free":
     parser.error("--camera-view 需要 GUI；headless 模式只能使用 free。")
 if args.max_steps < 0:
@@ -104,12 +108,6 @@ args.enable_cameras = bool(
     or args.show_panorama
     or args.show_wrist_camera
 )
-if args.fisheye_rig != "none" and not any(
-    item.startswith("--rendering_mode") for item in sys.argv[1:]
-):
-    args.rendering_mode = "balanced"
-    print("[Teleop] fisheye enabled; using rendering_mode=balanced unless explicitly overridden")
-
 app_launcher = AppLauncher(args)
 simulation_app = app_launcher.app
 

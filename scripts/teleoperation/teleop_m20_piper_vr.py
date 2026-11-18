@@ -19,6 +19,8 @@ from teleop_cli import prefer_cpu_for_single_env_teleop
 parser = argparse.ArgumentParser()
 parser.add_argument("--task", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=1)
+parser.add_argument("--width", type=int, default=1280, help="GUI viewport width.")
+parser.add_argument("--height", type=int, default=720, help="GUI viewport height.")
 parser.add_argument(
     "--relative-ik",
     action="store_true",
@@ -43,8 +45,8 @@ parser.add_argument("--max-steps", type=int, default=0, help="Stop after N envir
 parser.add_argument(
     "--fast-teleop",
     action=argparse.BooleanOptionalAction,
-    default=False,
-    help="Use the lightweight teleoperation stepping path without training managers.",
+    default=True,
+    help="Use the lightweight teleoperation path; enabled by default.",
 )
 parser.add_argument(
     "--fast-render-hz",
@@ -94,12 +96,13 @@ parser.add_argument("--arm-clutch", action="store_true", help=argparse.SUPPRESS)
 parser.add_argument("--body-clutch", action="store_true", help=argparse.SUPPRESS)
 parser.add_argument("--no-stick-shaping", action="store_true", help=argparse.SUPPRESS)
 AppLauncher.add_app_launcher_args(parser)
-# 遥操优先低延迟；仍可用 --rendering_mode balanced/quality 显式覆盖。
-parser.set_defaults(rendering_mode="performance")
+parser.set_defaults(rendering_mode="balanced")
 args = parser.parse_args()
 camera_view = "chest" if args.follow_chest_camera else args.camera_view
 if args.headless and camera_view != "free":
     parser.error("--camera-view 需要 GUI；headless 模式只能使用 free。")
+if args.width <= 0 or args.height <= 0:
+    parser.error("--width and --height must be positive")
 if args.max_steps < 0:
     parser.error("--max-steps must be >= 0")
 if args.fast_render_hz <= 0.0:
@@ -117,12 +120,6 @@ args.enable_cameras = bool(
     or args.show_panorama
     or args.show_wrist_camera
 )
-if args.fisheye_rig != "none" and not any(
-    item.startswith("--rendering_mode") for item in sys.argv[1:]
-):
-    args.rendering_mode = "balanced"
-    print("[Teleop] fisheye enabled; using rendering_mode=balanced unless explicitly overridden")
-
 app_launcher = AppLauncher(args)
 simulation_app = app_launcher.app
 
