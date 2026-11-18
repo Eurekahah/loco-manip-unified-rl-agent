@@ -13,6 +13,7 @@ import numpy as np
 import torch
 
 from isaaclab_tasks.utils import parse_env_cfg
+from rl_training.datasets.sampling import align_period_to_step
 from rl_training.devices.keyboard_loco_manip_teleop import (
     KeyboardLocoManipTeleop,
     KeyboardLocoManipTeleopCfg,
@@ -94,6 +95,7 @@ def _configure_standard_cameras(
         "top_camera": args_cli.top_camera,
         "wrist_camera": args_cli.wrist_camera,
         "workcell_camera": args_cli.scene_camera,
+        "front_camera": args_cli.front_camera,
     }
     for camera_name, is_enabled in enabled.items():
         setattr(env_cfg.scene, camera_name, None)
@@ -143,17 +145,24 @@ def run_collection(
         profile.configure_env(env_cfg)
 
     record_period = 1.0 / float(args_cli.record_hz)
-    camera_update_period = min(
-        args_cli.camera_update_period
-        if args_cli.camera_update_period > 0.0
-        else record_period,
-        record_period,
+    control_dt = float(env_cfg.sim.dt) * int(env_cfg.decimation)
+    camera_update_period = align_period_to_step(
+        min(
+            args_cli.camera_update_period
+            if args_cli.camera_update_period > 0.0
+            else record_period,
+            record_period,
+        ),
+        control_dt,
     )
-    fisheye_update_period = min(
-        args_cli.fisheye_update_period
-        if args_cli.fisheye_update_period > 0.0
-        else record_period,
-        record_period,
+    fisheye_update_period = align_period_to_step(
+        min(
+            args_cli.fisheye_update_period
+            if args_cli.fisheye_update_period > 0.0
+            else record_period,
+            record_period,
+        ),
+        control_dt,
     )
 
     camera_names = _configure_standard_cameras(
@@ -162,6 +171,13 @@ def run_collection(
         args_cli,
         update_period=camera_update_period,
     )
+    default_fisheye_mount = (-0.44, 0.0, 0.34)
+    fisheye_mount_pos = (
+        profile.fisheye_mount_pos
+        if profile.fisheye_mount_pos is not None
+        and tuple(args_cli.fisheye_mount_pos) == default_fisheye_mount
+        else tuple(args_cli.fisheye_mount_pos)
+    )
     fisheye_spec = add_fisheye_rig(
         env_cfg,
         mode=args_cli.fisheye_rig,
@@ -169,7 +185,7 @@ def run_collection(
         height=args_cli.fisheye_height,
         update_period=fisheye_update_period,
         fov_deg=args_cli.fisheye_fov_deg,
-        mount_pos=args_cli.fisheye_mount_pos,
+        mount_pos=fisheye_mount_pos,
         lens_offset=args_cli.fisheye_lens_offset,
         with_depth=args_cli.record_depth,
     )
@@ -224,7 +240,7 @@ def run_collection(
                 "fisheye_rig": fisheye_spec.mode,
                 "fisheye_projection": "equidistant",
                 "fisheye_fov_deg": fisheye_spec.fov_deg,
-                "fisheye_mount_pos_base_link": list(args_cli.fisheye_mount_pos),
+                "fisheye_mount_pos_base_link": list(fisheye_mount_pos),
                 "fisheye_lens_offset_m": fisheye_spec.lens_offset,
                 "fisheye_camera_names": list(fisheye_spec.scene_keys),
                 "fisheye_projection_model": "ideal_equidistant",
@@ -269,7 +285,7 @@ def run_collection(
             render_hz=args_cli.fast_render_hz,
             robot_hot_loop=True,
             robot_hot_period_s=args_cli.fast_robot_hot_period,
-            robot_only_write=args_cli.fast_robot_only_write,
+            robot_only_write=args_cli.fast_robot_only_write or profile.fast_robot_only_write,
             profiler=profiler,
         )
 

@@ -36,6 +36,8 @@ class CollectionTaskProfile:
     recorder_attr_name: str = "hdf5_recorder"
     configure_env: EnvConfigurator | None = None
     configure_action_term: ActionConfigurator | None = None
+    fast_robot_only_write: bool = False
+    fisheye_mount_pos: tuple[float, float, float] | None = None
     extra_metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def matches_task(self, task_id: str) -> bool:

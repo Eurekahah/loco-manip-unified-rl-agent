@@ -37,6 +37,8 @@ def build_collection_parser(
     parser.add_argument("--input", choices=("keyboard", "vr"), default="keyboard")
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--num_envs", type=int, default=1)
+    parser.add_argument("--width", type=int, default=1280, help="GUI viewport width.")
+    parser.add_argument("--height", type=int, default=720, help="GUI viewport height.")
     parser.add_argument(
         "--max_steps",
         type=int,
@@ -45,7 +47,12 @@ def build_collection_parser(
     )
     parser.add_argument("--camera_width", type=int, default=224)
     parser.add_argument("--camera_height", type=int, default=224)
-    parser.add_argument("--camera_update_period", type=float, default=0.1)
+    parser.add_argument(
+        "--camera_update_period",
+        type=float,
+        default=0.0,
+        help="Camera update period; 0 follows --record-hz.",
+    )
     parser.add_argument(
         "--record_depth",
         action=argparse.BooleanOptionalAction,
@@ -55,20 +62,26 @@ def build_collection_parser(
     parser.add_argument("--scene_camera", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--wrist_camera", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--top_camera", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--front_camera",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable a task-provided forward camera. Off by default for legacy profiles.",
+    )
     add_fisheye_args(
         parser,
         include_panorama=True,
         width_default=480,
         height_default=300,
-        update_period_default=0.1,
+        update_period_default=0.0,
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--fast-stepping",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Use FastTeleopStepper for collection while keeping the async HDF5 writer.",
+        default=True,
+        help="Use FastTeleopStepper for collection; enabled by default.",
     )
     parser.add_argument("--fast-render-hz", type=float, default=15.0)
     parser.add_argument("--fast-robot-hot-period", type=float, default=0.01)
@@ -99,12 +112,15 @@ def validate_collection_args(
         not args.scene_camera
         and not args.wrist_camera
         and not args.top_camera
+        and not args.front_camera
         and args.fisheye_rig == "none"
     ):
         parser.error("At least one camera must be enabled")
     validate_fisheye_args(parser, args, include_panorama=True)
     if args.num_envs != 1:
         parser.error("Interactive collection currently requires --num_envs 1")
+    if args.width <= 0 or args.height <= 0:
+        parser.error("--width and --height must be positive")
     if args.show_wrist_camera and not args.wrist_camera:
         parser.error("--show-wrist-camera requires --wrist_camera")
     if args.max_steps < 0:
@@ -123,8 +139,5 @@ def validate_collection_args(
 
 def apply_rendering_default(args: argparse.Namespace) -> None:
     prefer_cpu_for_single_env_teleop(args)
-    if args.fisheye_rig != "none" and not any(
-        item.startswith("--rendering_mode") for item in sys.argv[1:]
-    ):
+    if not any(item.startswith("--rendering_mode") for item in sys.argv[1:]):
         args.rendering_mode = "balanced"
-        print("[Collect] fisheye enabled; using rendering_mode=balanced unless explicitly overridden")

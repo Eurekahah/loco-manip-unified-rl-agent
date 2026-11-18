@@ -12,6 +12,48 @@ from rl_training.tasks.manager_based.locomotion.highlevel.config.two_cylinder_pl
     make_two_cylinder_workcell_camera,
     make_two_cylinder_wrist_camera,
 )
+from rl_training.tasks.manager_based.locomotion.highlevel.config.rear_pick.scene_cfg import (
+    make_rear_pick_front_camera,
+    make_rear_pick_top_camera,
+    make_rear_pick_workcell_camera,
+    make_rear_pick_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.peek_over.scene_cfg import (
+    make_peek_over_front_camera,
+    make_peek_over_top_camera,
+    make_peek_over_workcell_camera,
+    make_peek_over_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.blind_intercept.scene_cfg import (
+    make_blind_intercept_front_camera,
+    make_blind_intercept_top_camera,
+    make_blind_intercept_workcell_camera,
+    make_blind_intercept_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.drawer_ladder.scene_cfg import (
+    make_drawer_ladder_front_camera,
+    make_drawer_ladder_top_camera,
+    make_drawer_ladder_workcell_camera,
+    make_drawer_ladder_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.door_brace.scene_cfg import (
+    make_door_brace_front_camera,
+    make_door_brace_top_camera,
+    make_door_brace_workcell_camera,
+    make_door_brace_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.high_low_serve.scene_cfg import (
+    make_high_low_front_camera,
+    make_high_low_top_camera,
+    make_high_low_workcell_camera,
+    make_high_low_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.home_mission.scene_cfg import (
+    make_home_mission_front_camera,
+    make_home_mission_top_camera,
+    make_home_mission_workcell_camera,
+    make_home_mission_wrist_camera,
+)
 
 from .profiles import CollectionTaskProfile, register_collection_profile
 
@@ -44,5 +86,135 @@ register_collection_profile(
             "wrist_camera": make_two_cylinder_wrist_camera,
             "workcell_camera": make_two_cylinder_workcell_camera,
         },
+    )
+)
+
+
+register_collection_profile(
+    CollectionTaskProfile(
+        key="rear_pick",
+        display_name="P1 RearPick",
+        task_ids=("Isaac-M20-Piper-RearPick-Collect-v0",),
+        output_dir="rear_pick",
+        action_term_name="pre_trained_pick_action",
+        camera_factories={
+            "top_camera": make_rear_pick_top_camera,
+            "wrist_camera": make_rear_pick_wrist_camera,
+            "workcell_camera": make_rear_pick_workcell_camera,
+            "front_camera": make_rear_pick_front_camera,
+        },
+        # The rear table and tray are kinematic scene objects. Fast stepping
+        # must not try to write linear/angular velocity into them.
+        fast_robot_only_write=True,
+    )
+)
+
+
+register_collection_profile(
+    CollectionTaskProfile(
+        key="peek_over",
+        display_name="P3 PeekOver",
+        task_ids=("Isaac-M20-Piper-PeekOver-Collect-v0",),
+        output_dir="peek_over",
+        action_term_name="pre_trained_pick_action",
+        camera_factories={
+            "top_camera": make_peek_over_top_camera,
+            "wrist_camera": make_peek_over_wrist_camera,
+            "workcell_camera": make_peek_over_workcell_camera,
+            "front_camera": make_peek_over_front_camera,
+        },
+        fast_robot_only_write=True,
+        fisheye_mount_pos=(-0.44, 0.0, 0.58),
+    )
+)
+
+
+register_collection_profile(
+    CollectionTaskProfile(
+        key="blind_intercept",
+        display_name="P2 BlindIntercept",
+        task_ids=("Isaac-M20-Piper-BlindIntercept-Collect-v0",),
+        output_dir="blind_intercept",
+        action_term_name="pre_trained_pick_action",
+        camera_factories={
+            "top_camera": make_blind_intercept_top_camera,
+            "wrist_camera": make_blind_intercept_wrist_camera,
+            "workcell_camera": make_blind_intercept_workcell_camera,
+            "front_camera": make_blind_intercept_front_camera,
+        },
+        fast_robot_only_write=True,
+    )
+)
+
+
+register_collection_profile(
+    CollectionTaskProfile(
+        key="drawer_ladder",
+        display_name="W1 DrawerLadder",
+        task_ids=("Isaac-M20-Piper-DrawerLadder-Collect-v0",),
+        output_dir="drawer_ladder",
+        action_term_name="pre_trained_pick_action",
+        camera_factories={
+            "top_camera": make_drawer_ladder_top_camera,
+            "wrist_camera": make_drawer_ladder_wrist_camera,
+            "workcell_camera": make_drawer_ladder_workcell_camera,
+            "front_camera": make_drawer_ladder_front_camera,
+        },
+        fast_robot_only_write=True,
+    )
+)
+
+
+register_collection_profile(
+    CollectionTaskProfile(
+        key="door_brace",
+        display_name="W2 DoorBrace",
+        task_ids=("Isaac-M20-Piper-DoorBrace-Collect-v0",),
+        output_dir="door_brace",
+        action_term_name="pre_trained_pick_action",
+        camera_factories={
+            "top_camera": make_door_brace_top_camera,
+            "wrist_camera": make_door_brace_wrist_camera,
+            "workcell_camera": make_door_brace_workcell_camera,
+            "front_camera": make_door_brace_front_camera,
+        },
+        fast_robot_only_write=True,
+    )
+)
+
+
+register_collection_profile(
+    CollectionTaskProfile(
+        key="high_low_serve",
+        display_name="W5 HighLowServe",
+        task_ids=("Isaac-M20-Piper-HighLowServe-Collect-v0",),
+        output_dir="high_low_serve",
+        action_term_name="pre_trained_pick_action",
+        camera_factories={
+            "top_camera": make_high_low_top_camera,
+            "wrist_camera": make_high_low_wrist_camera,
+            "workcell_camera": make_high_low_workcell_camera,
+            "front_camera": make_high_low_front_camera,
+        },
+        tracked_entity_names=("object", "object_high", "target_pad"),
+        fast_robot_only_write=True,
+    )
+)
+
+
+register_collection_profile(
+    CollectionTaskProfile(
+        key="home_mission",
+        display_name="L1 HomeMission",
+        task_ids=("Isaac-M20-Piper-HomeMission-Collect-v0",),
+        output_dir="home_mission",
+        action_term_name="pre_trained_pick_action",
+        camera_factories={
+            "top_camera": make_home_mission_top_camera,
+            "wrist_camera": make_home_mission_wrist_camera,
+            "workcell_camera": make_home_mission_workcell_camera,
+            "front_camera": make_home_mission_front_camera,
+        },
+        fast_robot_only_write=True,
     )
 )

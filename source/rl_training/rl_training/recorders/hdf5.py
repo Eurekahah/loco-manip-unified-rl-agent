@@ -29,6 +29,7 @@ from rl_training.datasets.hdf5 import (
     pose_to_matrix,
 )
 from rl_training.datasets.outcomes import resolve_episode_outcome
+from rl_training.datasets.sampling import advance_record_clock
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -65,8 +66,10 @@ class HDF5Recorder(RecorderTerm):
         self._last_sensor_frames: dict[int, dict[str, int]] = {
             env_id: {} for env_id in range(env.num_envs)
         }
-        self._next_record_sim_time: dict[int, float] = {
-            env_id: 0.0 for env_id in range(env.num_envs)
+        self._record_period = 1.0 / float(cfg.record_hz)
+        self._record_elapsed: dict[int, float] = {
+            env_id: max(self._record_period - float(env.step_dt), 0.0)
+            for env_id in range(env.num_envs)
         }
         self._recording_active: dict[int, bool] = {
             env_id: True for env_id in range(env.num_envs)
@@ -139,9 +142,16 @@ class HDF5Recorder(RecorderTerm):
     def set_recording_active(self, active: bool, env_id: int = 0) -> None:
         """Gate frame sampling without discarding already streamed data."""
         self._recording_active[int(env_id)] = bool(active)
-        self._next_record_sim_time[int(env_id)] = 0.0
+        self._reset_record_phase(int(env_id))
         self._last_sensor_frames[int(env_id)].clear()
         self._last_outcomes[int(env_id)].clear()
+
+    def _reset_record_phase(self, env_id: int) -> None:
+        """Align the first due sample with the first control step after reset."""
+        self._record_elapsed[env_id] = max(
+            self._record_period - float(self._env.step_dt),
+            0.0,
+        )
 
     def has_open_episode(self, env_id: int = 0) -> bool:
         return self._episode_names.get(int(env_id)) is not None
@@ -272,16 +282,23 @@ class HDF5Recorder(RecorderTerm):
 
     def record_pre_step(self):
         """Capture the observation/action pair before physics advances."""
-        period = 1.0 / float(self.cfg.record_hz)
+        period = self._record_period
+        step_dt = float(self._env.step_dt)
         sim_time = float(self._env.common_step_counter) * float(self._env.step_dt)
         if not any(self._recording_active.values()):
             return None, None
-        due_env_ids = [
-            env_id
-            for env_id in range(self._env.num_envs)
-            if self._recording_active[env_id]
-            and sim_time + 1e-9 >= self._next_record_sim_time[env_id]
-        ]
+        due_env_ids = []
+        for env_id in range(self._env.num_envs):
+            if not self._recording_active[env_id]:
+                continue
+            elapsed, due = advance_record_clock(
+                self._record_elapsed[env_id],
+                step_dt,
+                period,
+            )
+            self._record_elapsed[env_id] = elapsed
+            if due:
+                due_env_ids.append(env_id)
         if not due_env_ids:
             return None, None
 
@@ -312,7 +329,6 @@ class HDF5Recorder(RecorderTerm):
                     unchanged = True
                 camera_data[camera_name] = self._capture_camera(env_id, camera_name, sensor)
             if unchanged:
-                self._next_record_sim_time[env_id] = sim_time + period
                 if self._profiler is not None:
                     self._profiler.increment("skipped_duplicate_camera_ticks")
                 continue
@@ -363,7 +379,6 @@ class HDF5Recorder(RecorderTerm):
                 frame["target_pad"] = entities[self.cfg.primary_target_name]
             self._pending_frames[env_id] = frame
             self._last_sensor_frames[env_id] = sensor_frames
-            self._next_record_sim_time[env_id] = sim_time + period
         return None, None
 
     def record_post_step(self):
@@ -476,7 +491,7 @@ class HDF5Recorder(RecorderTerm):
             self._episode_step_counts[env_id] = 0
             self._last_sensor_frames[env_id].clear()
             self._last_outcomes[env_id].clear()
-            self._next_record_sim_time[env_id] = 0.0
+            self._reset_record_phase(env_id)
         return None, None
 
     def close(self, file_path: str):
