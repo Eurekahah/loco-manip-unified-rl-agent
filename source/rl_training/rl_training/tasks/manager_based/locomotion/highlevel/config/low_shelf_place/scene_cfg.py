@@ -21,6 +21,10 @@ SHELF_BACK_X = 1.05
 
 OBJECT_USD_PATH = f"{ISAAC_NUCLEUS_DIR}/Props/YCB/Axis_Aligned_Physics/004_sugar_box.usd"
 
+# RTX effectively treats this as an infinite far plane while the 1 mm near
+# plane keeps close contact surfaces visible instead of leaking to background.
+CAMERA_CLIP_RANGE = (0.001, 1.0e9)
+
 
 def _look_at_quat_world(
     eye: tuple[float, float, float],
@@ -102,7 +106,7 @@ def make_workcell_camera(
     pos: tuple[float, float, float] = (0.10, -1.05, 0.75),
     target: tuple[float, float, float] = (0.78, 0.0, 0.45),
     rot: tuple[float, float, float, float] | None = None,
-    clipping_range: tuple[float, float] = (0.1, 5.0),
+    clipping_range: tuple[float, float] = CAMERA_CLIP_RANGE,
 ) -> TiledCameraCfg:
     """Create the static scene camera used by data collection."""
     camera_rot = rot if rot is not None else _look_at_quat_world(pos, target)
@@ -140,7 +144,7 @@ def make_wrist_camera(
     # In the Piper gripper frame, +Z points forward and +X points down. Look
     # 30 degrees down while keeping image-up aligned with world +Z.
     rot: tuple[float, float, float, float] = (0.8660254, 0.0, -0.5, 0.0),
-    clipping_range: tuple[float, float] = (0.03, 2.0),
+    clipping_range: tuple[float, float] = CAMERA_CLIP_RANGE,
 ) -> TiledCameraCfg:
     """Create an RGB-D camera rigidly attached to the Piper gripper base."""
     return TiledCameraCfg(

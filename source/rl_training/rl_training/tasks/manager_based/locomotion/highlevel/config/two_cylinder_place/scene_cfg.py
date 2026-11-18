@@ -151,7 +151,6 @@ def make_two_cylinder_workcell_camera(
         with_depth=with_depth,
         pos=(0.12, -1.08, 0.80),
         target=(0.72, 0.0, 0.42),
-        clipping_range=(0.1, 4.0),
     )
 
 
