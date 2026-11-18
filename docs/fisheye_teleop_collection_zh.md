@@ -61,9 +61,8 @@ python scripts\teleoperation\teleop_m20_piper_vr.py `
 ```
 
 只采集/渲染鱼眼，不打开拼接窗口时，去掉 `--show-panorama` 即可。启用任一鱼眼模式后，
-脚本会自动设置 `enable_cameras=True`。鱼眼模式下若未显式传
-`--rendering_mode`，默认使用 `balanced`；仍可用
-`--rendering_mode performance/balanced/quality` 覆盖。`--show-panorama` 和
+脚本会自动设置 `enable_cameras=True`。`--rendering_mode` 默认就是 `balanced`；仍可用
+`--rendering_mode performance/quality` 覆盖。`--show-panorama` 和
 `--show-wrist-camera` 只能用于 GUI；headless 模式会报错。
 
 ## 数据采集脚本

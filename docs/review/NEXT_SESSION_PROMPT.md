@@ -35,8 +35,8 @@ git -c safe.directory=D:/nvidia-isaac-sim/loco-manip-unified-rl-agent status --s
 ### 训练和交互分离
 
 - 训练仍使用完整 `ManagerBasedRLEnv.step()`，不要改训练语义。
-- 遥操使用 opt-in 的 `--fast-teleop`。
-- 数据采集使用 opt-in 的 `--fast-stepping`。
+- 遥操和数采默认使用 Fast 路径；manager 对照用 `--no-fast-teleop` /
+  `--no-fast-stepping`。
 - Fast 路径跳过训练用的 reward、observation、termination、event、command manager，
   但保留 action manager、低层策略、history、IK 和 scene。
 
@@ -212,17 +212,10 @@ scripts/tools/benchmark_teleop_control.py
 $env:PYTHONIOENCODING='utf-8'
 python scripts\teleoperation\teleop_m20_piper_keyboard.py `
   --task Isaac-M20-Piper-Teleop-History-v0 `
-  --num_envs 1 `
-  --fast-teleop `
-  --fast-render-hz 15 `
-  --fast-robot-hot-loop `
-  --fast-robot-hot-period 0.01 `
-  --ik-update-period 0.01 `
   --fisheye-rig four `
   --show-panorama `
   --fisheye-width 480 --fisheye-height 300 `
-  --panorama-width 960 --panorama-height 480 `
-  --rendering_mode balanced
+  --panorama-width 960 --panorama-height 480
 ```
 
 two-cylinder 遥操把 task 换成：
@@ -231,18 +224,15 @@ two-cylinder 遥操把 task 换成：
 Isaac-M20-Piper-TwoCylinder-Teleop-v0
 ```
 
-VR 遥操把入口换成 `scripts\teleoperation\teleop_m20_piper_vr.py`，Fast 参数相同。
+VR 遥操只把入口换成 `scripts\teleoperation\teleop_m20_piper_vr.py`。
 
-Fast 数采（注意参数名是 `--fast-stepping`，不是 `--fast-teleop`）：
+数采（Fast 默认开启；manager 对照传 `--no-fast-stepping`）：
 
 ```powershell
 python scripts\data\collect_demonstrations.py `
   --task Isaac-M20-Piper-TwoCylinder-Collect-v0 `
-  --profile auto --input keyboard --headless `
+  --headless `
   --no-top_camera --no-scene_camera --wrist_camera `
-  --record-hz 10 --compression lzf `
-  --fast-stepping --fast-render-hz 15 `
-  --fast-robot-hot-period 0.01 --ik-update-period 0.01 `
   --output recordings\fast_teleop\two_cylinder_fast.hdf5 `
   --profile-json outputs\fast_teleop\fast_profile.json
 ```
@@ -334,7 +324,8 @@ Isaac 采集器。
 在提速前先确认以下不变量：
 
 - 训练路径仍走完整 `ManagerBasedRLEnv.step()`。
-- Fast 路径必须显式 opt-in。
+- Fast 路径默认开启；manager 路径必须显式传 `--no-fast-teleop` /
+  `--no-fast-stepping`。
 - `apply_action()` 不能降频。
 - `record_hz`、相机分辨率、相机 update period 不能为了提高 FPS 被静默降低。
 - HDF5 的 `sim_time` 单调递增，`step_index` 与动作/图像采样一致。

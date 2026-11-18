@@ -155,8 +155,8 @@ two_cylinder  -> profile=two_cylinder, schema=teleop_manipulation/v1
 
 ## Fast 数采路径
 
-需要更低遥操延迟时，显式增加 `--fast-stepping`。它复用同一套 collection profile、
-recorder 和异步 HDF5 writer，只替换 `env.step()`：
+数采默认使用 Fast stepping，复用同一套 collection profile、recorder 和异步
+HDF5 writer，只替换 `env.step()`；需要 manager 对照时传 `--no-fast-stepping`：
 
 ```text
 process_action -> record_pre_step -> FastTeleopStepper.advance -> record_post_step
@@ -170,8 +170,7 @@ Fast 路径仍每个物理 tick 推进 action manager，低层策略保持训练
 ```powershell
 python scripts\data\collect_demonstrations.py `
   --task Isaac-M20-Piper-TwoCylinder-Collect-v0 `
-  --input keyboard --fast-stepping --fast-render-hz 15 `
-  --record-hz 10 --output recordings\two_cylinder_place\fast.hdf5
+  --output recordings\two_cylinder_place\fast.hdf5
 ```
 
 Fast 模式会运行 termination manager。自动成功/失败触发后，先记录当前帧和

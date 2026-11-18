@@ -1,14 +1,13 @@
 # Fast Teleop / Fast 数采与热路径 profiling
 
-训练环境继续使用完整的 `ManagerBasedRLEnv.step()`。遥操新增 opt-in 的
-`--fast-teleop`，数据采集新增 opt-in 的 `--fast-stepping`。两者复用现有 robot、
-scene、action manager、低层策略和 history，但跳过完整
-reward/observation/termination/event 管理链。
+训练环境继续使用完整的 `ManagerBasedRLEnv.step()`。遥操和数采默认使用 Fast 路径；
+需要对照 manager 路径时传 `--no-fast-teleop` 或 `--no-fast-stepping`。Fast 路径复用
+现有 robot、scene、action manager、低层策略和 history。
 
-## 新增参数
+## 默认配置与高级覆盖
 
 ```text
---fast-teleop / --no-fast-teleop
+--fast-teleop / --no-fast-teleop    默认开启
 --fast-render-hz                 墙钟渲染频率，默认 15 Hz
 --fast-write-each-tick           默认关闭；关闭时每 20 ms 控制 tick 写一次目标
 --fast-robot-hot-loop            默认开启；机械臂/robot target 以 hot period 更新
@@ -16,6 +15,7 @@ reward/observation/termination/event 管理链。
 --fast-robot-only-write          实验开关；只写 robot，不写其它 scene 实体
 --ik-update-period               IK 重算周期（仿真秒），默认 0.01，与 10 ms target 写入对齐
 --profile-detailed               拆分 action/policy/IK/scene/sim/render 计时
+--rendering_mode                 默认 balanced
 ```
 
 单环境遥操和数采（Fast 或 manager 路径）在用户未显式传 `--device` 时默认使用 CPU 物理。
@@ -49,10 +49,8 @@ Fast 数采保持同一个控制时间轴：`record_pre_step()` 在推进前取�
 $env:PYTHONIOENCODING='utf-8'
 python scripts\data\collect_demonstrations.py `
   --task Isaac-M20-Piper-TwoCylinder-Collect-v0 `
-  --profile auto --input keyboard --headless `
+  --headless `
   --no-top_camera --no-scene_camera --wrist_camera `
-  --record-hz 10 --compression lzf `
-  --fast-stepping --fast-render-hz 15 `
   --output recordings\fast_teleop\two_cylinder_fast.hdf5 `
   --profile-json outputs\fast_teleop\fast_profile.json
 ```
