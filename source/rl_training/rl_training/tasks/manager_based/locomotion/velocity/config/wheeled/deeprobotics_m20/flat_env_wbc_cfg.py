@@ -1124,10 +1124,18 @@ class WBCObservationsV2Cfg(WBCObservationsCfg):
 class FlatEnvWBCConfigV2(FlatEnvWBCConfig):
     observations: WBCObservationsV2Cfg = WBCObservationsV2Cfg()
 
+    def __post_init__(self):
+        super().__post_init__()
+        self.disable_zero_weight_rewards()
+
 
 @configclass
 class FlatEnvWBCConfigV2_PLAY(FlatEnvWBCConfig_PLAY):
     observations: WBCObservationsV2Cfg = WBCObservationsV2Cfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.disable_zero_weight_rewards()
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════
@@ -1169,10 +1177,18 @@ class FlatEnvWBCConfigV4(FlatEnvWBCConfig):
 
     observations: WBCObservationsV4Cfg = WBCObservationsV4Cfg()
 
+    def __post_init__(self):
+        super().__post_init__()
+        self.disable_zero_weight_rewards()
+
 
 @configclass
 class FlatEnvWBCConfigV4_PLAY(FlatEnvWBCConfig_PLAY):
     observations: WBCObservationsV4Cfg = WBCObservationsV4Cfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.disable_zero_weight_rewards()
 
 
 # ── P1-7 无历史对照臂：V4 的一切不变，只把 history 观测整窗置零（同宽）─────────────
