@@ -1,5 +1,6 @@
 # mdp/actions.py
 from __future__ import annotations
+import math
 import os
 import torch
 from dataclasses import dataclass, field
@@ -10,6 +11,17 @@ from isaaclab.managers import ActionTerm, ActionTermCfg
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 from isaaclab.utils import configclass
 import rl_training.tasks.manager_based.locomotion.velocity.mdp as mdp
+from rl_training.tasks.manager_based.locomotion.velocity.mdp.ik import (
+    ProjectedIKOptions,
+    make_seed_candidates,
+    normalize_quat,
+    orientation_error,
+    projected_ik_step,
+    quat_conjugate,
+    quat_from_matrix,
+    quat_mul,
+    solve_multi_start,
+)
 from isaaclab.envs.mdp.actions.task_space_actions import DifferentialInverseKinematicsAction
 import isaaclab.utils.math as math_utils
 from isaaclab.markers import VisualizationMarkers
@@ -17,6 +29,43 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
+
+@configclass
+class RobustIKCfg:
+    """Configuration for the projected/multi-start arm IK controller."""
+
+    enabled: bool = True
+    urdf_path: str | None = None
+    arm_root_link_name: str = "arm_base_link"
+    ee_link_name: str | None = None
+
+    position_tolerance: float = 0.01
+    orientation_tolerance: float = 0.08
+    position_weight: float = 1.0
+    orientation_weight: float = 0.35
+
+    step_gain: float = 0.45
+    max_joint_step: float = 0.05
+    adaptive_damping: bool = True
+    damping_min: float = 0.002
+    damping_max: float = 0.15
+    singular_value_threshold: float = 0.06
+
+    full_solve_interval_s: float = 1.0
+    retarget_position_threshold: float = 0.15
+    retarget_orientation_threshold: float = 0.50
+    full_solve_iterations: int = 20
+    full_step_gain: float = 0.70
+    full_max_joint_step: float = 0.35
+    num_restarts: int = 1
+    random_seed: int = 0
+    seed_travel_weight: float = 0.02
+
+    stall_patience: int = 12
+    improvement_tolerance: float = 5.0e-4
+    orientation_fallback: bool = True
+    joint_limit_margin: float = 0.01
+    debug: bool = False
 
 
 class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
@@ -34,11 +83,13 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
     cfg: CommandDrivenIKActionCfg
 
     def __init__(self, cfg, env: ManagerBasedRLEnv):
-        
         self._ee_vis_markers: VisualizationMarkers | None = None
         self._command_override: torch.Tensor | None = None
+        self._robust_ready = False
+        self._full_ik_ready = False
         super().__init__(cfg, env)
         self._init_joint_protection()
+        self._init_robust_ik()
 
     def process_actions(self, actions: torch.Tensor):
         if self._command_override is None:
@@ -55,6 +106,10 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
         ee_pos_curr, ee_quat_curr = self._compute_frame_pose()
 
         self._ik_controller.set_command(command, ee_pos_curr, ee_quat_curr)
+        if self._robust_ready:
+            self._target_pos_b[:] = self._ik_controller.ee_pos_des
+            self._target_quat_b[:] = normalize_quat(self._ik_controller.ee_quat_des)
+            self._maybe_run_full_ik()
 
     def set_command_override(self, command: torch.Tensor | None) -> None:
         """覆盖 command_manager 的输入（Teleop 相对 IK 用）。``None`` 恢复默认来源。"""
@@ -63,6 +118,23 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
     def reset(self, env_ids=None):
         super().reset(env_ids)
         self._command_override = None
+        if getattr(self, "_robust_ready", False):
+            ids = slice(None) if env_ids is None else env_ids
+            joint_pos = self._asset.data.joint_pos[:, self._joint_ids]
+            self._q_cmd[ids] = joint_pos[ids]
+            self._q_goal[ids] = joint_pos[ids]
+            self._q_solution[ids] = joint_pos[ids]
+            self._q_last_feasible[ids] = joint_pos[ids]
+            self._tracking_blocked[ids] = False
+            self._orientation_relaxed[ids] = False
+            self._full_solution_valid[ids] = False
+            self._has_full_solve[ids] = False
+            self._solve_timer[ids] = float(self.cfg.robust_ik.full_solve_interval_s)
+            self._stall_count[ids] = 0
+            self._last_weighted_error[ids] = float("inf")
+            self._last_solve_target_pos_b[ids] = self._target_pos_b[ids]
+            self._last_solve_target_quat_b[ids] = self._target_quat_b[ids]
+            self._relaxed_quat_b[ids] = self._target_quat_b[ids]
 
     # ------------------------------------------------------------------
     # B2-②/⑤：IK 输出的"关节保护"（DEF-049）
@@ -123,6 +195,336 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
             _v = "off" if self._jvel_max is None else \
                 "/".join(f"{float(x):.2f}" for x in self._jvel_max[:4])
             print(f"[IK protect] 位置 clamp={_p}；速度限幅={_v}（前 4 个关节）")
+
+    def _init_robust_ik(self) -> None:
+        """Initialize projected DLS state and the optional full multi-start IK chain."""
+        r_cfg: RobustIKCfg = self.cfg.robust_ik
+        if not bool(r_cfg.enabled):
+            if bool(r_cfg.debug):
+                print("[IK robust] disabled; falling back to the stock one-step DLS")
+            return
+
+        num_envs = self.num_envs
+        num_joints = self._num_protected_joints()
+        joint_pos = self._asset.data.joint_pos[:, self._joint_ids].clone()
+        limits = self._asset.data.joint_pos_limits[:, self._joint_ids, :]
+        lower = limits[..., 0].max(dim=0).values
+        upper = limits[..., 1].min(dim=0).values
+        finite = torch.isfinite(lower) & torch.isfinite(upper) & (upper > lower)
+        if not bool(finite.all()):
+            if bool(r_cfg.debug):
+                print(f"[IK robust] {int((~finite).sum())} joints have invalid limits; disabled")
+            return
+        margin = float(r_cfg.joint_limit_margin)
+        lower = lower + margin
+        upper = upper - margin
+        if not bool((upper > lower).all()):
+            raise ValueError("[IK robust] joint_limit_margin is too large for the configured arm")
+
+        self._robust_joint_lower = lower.to(self.device)
+        self._robust_joint_upper = upper.to(self.device)
+        self._q_cmd = joint_pos.clone()
+        self._q_goal = joint_pos.clone()
+        self._q_solution = joint_pos.clone()
+        self._q_last_feasible = joint_pos.clone()
+        self._target_pos_b = torch.zeros(num_envs, 3, device=self.device)
+        self._target_quat_b = torch.zeros(num_envs, 4, device=self.device)
+        self._target_quat_b[:, 0] = 1.0
+        self._relaxed_quat_b = self._target_quat_b.clone()
+        self._last_solve_target_pos_b = self._target_pos_b.clone()
+        self._last_solve_target_quat_b = self._target_quat_b.clone()
+        self._has_full_solve = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
+        self._tracking_blocked = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
+        self._orientation_relaxed = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
+        self._full_solution_valid = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
+        self._solve_timer = torch.full(
+            (num_envs,),
+            float(r_cfg.full_solve_interval_s),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._stall_count = torch.zeros(num_envs, dtype=torch.long, device=self.device)
+        self._last_weighted_error = torch.full(
+            (num_envs,), float("inf"), dtype=torch.float32, device=self.device
+        )
+        self._projected_options = self._make_projected_options()
+        self._seed_generator = torch.Generator(device=self.device)
+        self._seed_generator.manual_seed(int(r_cfg.random_seed))
+        self._robust_stats = {
+            "full_success": 0,
+            "position_fallback": 0,
+            "unreachable": 0,
+            "stall_latched": 0,
+        }
+
+        self._chain_joint_indices = None
+        if r_cfg.urdf_path:
+            try:
+                import pytorch_kinematics as pk
+
+                with open(r_cfg.urdf_path, "rb") as urdf_file:
+                    urdf = urdf_file.read()
+                ee_link_name = r_cfg.ee_link_name or self.cfg.body_name
+                chain = pk.build_serial_chain_from_urdf(
+                    urdf,
+                    ee_link_name,
+                    root_link_name=r_cfg.arm_root_link_name,
+                ).to(dtype=torch.float32, device=self.device)
+                chain_names = list(chain.get_joint_parameter_names())
+                action_names = self._protect_joint_names()
+                missing = [name for name in chain_names if name not in action_names]
+                if missing:
+                    raise ValueError(f"URDF chain joints are missing from the action term: {missing}")
+                if len(chain_names) != num_joints:
+                    raise ValueError(
+                        f"URDF chain has {len(chain_names)} joints but IK controls {num_joints}"
+                    )
+                self._chain_joint_indices = [action_names.index(name) for name in chain_names]
+                self._fk_chain = chain
+                self._fk_joint_names = chain_names
+                self._chain_lower = lower[self._chain_joint_indices].contiguous()
+                self._chain_upper = upper[self._chain_joint_indices].contiguous()
+                self._chain_q_rest = 0.5 * (self._chain_lower + self._chain_upper)
+                body_names = list(self._asset.data.body_names)
+                self._arm_root_body_idx = body_names.index(r_cfg.arm_root_link_name)
+                self._full_ik_ready = True
+            except Exception as exc:  # noqa: BLE001 - projected DLS remains usable
+                print(
+                    f"[IK robust] full multi-start IK disabled "
+                    f"({type(exc).__name__}: {exc}); projected DLS remains enabled"
+                )
+
+        self._robust_ready = True
+        if bool(r_cfg.debug):
+            print(
+                f"[IK robust] projected DLS enabled; full_ik={self._full_ik_ready}, "
+                f"joints={num_joints}, interval={r_cfg.full_solve_interval_s:.2f}s"
+            )
+
+    def _make_projected_options(self) -> ProjectedIKOptions:
+        r_cfg: RobustIKCfg = self.cfg.robust_ik
+        return ProjectedIKOptions(
+            position_tolerance=float(r_cfg.position_tolerance),
+            orientation_tolerance=float(r_cfg.orientation_tolerance),
+            position_weight=float(r_cfg.position_weight),
+            orientation_weight=0.0
+            if self.cfg.controller.command_type == "position"
+            else float(r_cfg.orientation_weight),
+            step_gain=float(r_cfg.step_gain),
+            max_joint_step=float(r_cfg.max_joint_step),
+            adaptive_damping=bool(r_cfg.adaptive_damping),
+            damping_min=float(r_cfg.damping_min),
+            damping_max=float(r_cfg.damping_max),
+            singular_value_threshold=float(r_cfg.singular_value_threshold),
+        )
+
+    def _maybe_run_full_ik(self) -> None:
+        """Retry full IK periodically or after a large target jump."""
+        if not self._full_ik_ready:
+            self._solve_timer += float(self._env.step_dt)
+            if bool((self._solve_timer >= float(self.cfg.robust_ik.full_solve_interval_s)).any()):
+                retry = self._solve_timer >= float(self.cfg.robust_ik.full_solve_interval_s)
+                self._tracking_blocked[retry] = False
+                self._stall_count[retry] = 0
+                self._last_weighted_error[retry] = float("inf")
+                self._solve_timer[retry] = 0.0
+            return
+        r_cfg: RobustIKCfg = self.cfg.robust_ik
+        self._solve_timer += float(self._env.step_dt)
+        position_jump = torch.linalg.vector_norm(
+            self._target_pos_b - self._last_solve_target_pos_b, dim=-1
+        )
+        orientation_jump = torch.linalg.vector_norm(
+            orientation_error(self._last_solve_target_quat_b, self._target_quat_b), dim=-1
+        )
+        retry_due = self._tracking_blocked & (
+            self._solve_timer >= float(r_cfg.full_solve_interval_s)
+        )
+        jumped = (~self._has_full_solve) | (
+            position_jump >= float(r_cfg.retarget_position_threshold)
+        ) | (orientation_jump >= float(r_cfg.retarget_orientation_threshold))
+        env_ids = (retry_due | jumped).nonzero(as_tuple=False).squeeze(-1)
+        if env_ids.numel() > 0:
+            self._run_full_ik(env_ids)
+
+    def _run_full_ik(self, env_ids: torch.Tensor) -> None:
+        """Solve full pose, then position-only fallback, for the selected environments."""
+        if not self._full_ik_ready or env_ids.numel() == 0:
+            return
+        r_cfg: RobustIKCfg = self.cfg.robust_ik
+        chain_indices = self._chain_joint_indices
+        target_pos, target_quat = self._target_to_chain_root(
+            env_ids, self._target_pos_b[env_ids], self._target_quat_b[env_ids]
+        )
+        current_joint_pos = self._asset.data.joint_pos[:, self._joint_ids][env_ids][
+            :, chain_indices
+        ]
+        previous_solution = self._q_solution[env_ids][:, chain_indices]
+        seeds = make_seed_candidates(
+            current_joint_pos,
+            previous_solution,
+            self._chain_q_rest.expand(env_ids.numel(), -1),
+            self._chain_lower,
+            self._chain_upper,
+            int(r_cfg.num_restarts),
+            self._seed_generator,
+        )
+        result = solve_multi_start(
+            self._fk_chain,
+            target_pos,
+            target_quat,
+            seeds,
+            current_joint_pos,
+            self._chain_lower,
+            self._chain_upper,
+            self._chain_q_rest,
+            self._projected_options,
+            max_iterations=int(r_cfg.full_solve_iterations),
+            full_step_gain=float(r_cfg.full_step_gain),
+            full_max_joint_step=float(r_cfg.full_max_joint_step),
+            seed_travel_weight=float(r_cfg.seed_travel_weight),
+        )
+
+        solved_joint_pos = torch.zeros(
+            (env_ids.numel(), self._num_protected_joints()),
+            dtype=result.joint_pos.dtype,
+            device=self.device,
+        )
+        solved_joint_pos[:, chain_indices] = result.joint_pos
+        full_success = result.success.clone()
+
+        fallback_success = torch.zeros_like(full_success)
+        if bool(r_cfg.orientation_fallback) and bool((~full_success).any()):
+            fallback_ids = (~full_success).nonzero(as_tuple=False).squeeze(-1)
+            fallback = solve_multi_start(
+                self._fk_chain,
+                target_pos[fallback_ids],
+                target_quat[fallback_ids],
+                seeds[:, fallback_ids],
+                current_joint_pos[fallback_ids],
+                self._chain_lower,
+                self._chain_upper,
+                self._chain_q_rest,
+                self._projected_options,
+                max_iterations=int(r_cfg.full_solve_iterations),
+                full_step_gain=float(r_cfg.full_step_gain),
+                full_max_joint_step=float(r_cfg.full_max_joint_step),
+                seed_travel_weight=float(r_cfg.seed_travel_weight),
+                position_only=True,
+            )
+            fallback_solution = torch.zeros(
+                (fallback_ids.numel(), self._num_protected_joints()),
+                dtype=fallback.joint_pos.dtype,
+                device=self.device,
+            )
+            fallback_solution[:, chain_indices] = fallback.joint_pos
+            fallback_success[fallback_ids] = fallback.success
+            solved_joint_pos[fallback_ids] = torch.where(
+                fallback.success.unsqueeze(-1), fallback_solution, solved_joint_pos[fallback_ids]
+            )
+
+        full_success_ids = env_ids[full_success]
+        fallback_ids = env_ids[fallback_success]
+        failed_ids = env_ids[~(full_success | fallback_success)]
+        full_solutions = solved_joint_pos[full_success]
+        fallback_solutions = solved_joint_pos[fallback_success]
+
+        if full_success_ids.numel() > 0:
+            self._q_solution[full_success_ids] = full_solutions
+            self._q_goal[full_success_ids] = full_solutions
+            self._q_cmd[full_success_ids] = full_solutions
+            self._q_last_feasible[full_success_ids] = full_solutions
+            self._tracking_blocked[full_success_ids] = False
+            self._orientation_relaxed[full_success_ids] = False
+            self._full_solution_valid[full_success_ids] = True
+            self._stall_count[full_success_ids] = 0
+            self._last_weighted_error[full_success_ids] = float("inf")
+
+        if fallback_ids.numel() > 0:
+            self._q_solution[fallback_ids] = fallback_solutions
+            self._q_goal[fallback_ids] = fallback_solutions
+            self._q_cmd[fallback_ids] = fallback_solutions
+            self._q_last_feasible[fallback_ids] = fallback_solutions
+            self._tracking_blocked[fallback_ids] = False
+            self._orientation_relaxed[fallback_ids] = True
+            self._full_solution_valid[fallback_ids] = True
+            self._stall_count[fallback_ids] = 0
+            self._last_weighted_error[fallback_ids] = float("inf")
+            _, relaxed_quat = self._chain_pose_to_root(
+                fallback_ids, fallback_solutions[:, chain_indices]
+            )
+            self._relaxed_quat_b[fallback_ids] = relaxed_quat
+
+        if failed_ids.numel() > 0:
+            self._q_goal[failed_ids] = self._q_last_feasible[failed_ids]
+            self._tracking_blocked[failed_ids] = True
+            self._orientation_relaxed[failed_ids] = False
+            self._full_solution_valid[failed_ids] = False
+
+        self._last_solve_target_pos_b[env_ids] = self._target_pos_b[env_ids]
+        self._last_solve_target_quat_b[env_ids] = self._target_quat_b[env_ids]
+        self._has_full_solve[env_ids] = True
+        self._solve_timer[env_ids] = 0.0
+        self._robust_stats["full_success"] += int(full_success_ids.numel())
+        self._robust_stats["position_fallback"] += int(fallback_ids.numel())
+        self._robust_stats["unreachable"] += int(failed_ids.numel())
+        if bool(r_cfg.debug):
+            print(
+                f"[IK robust] solve envs={env_ids.numel()} full={full_success_ids.numel()} "
+                f"position_only={fallback_ids.numel()} failed={failed_ids.numel()}"
+            )
+
+    def _target_to_chain_root(
+        self, env_ids: torch.Tensor, target_pos_b: torch.Tensor, target_quat_b: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Convert root-frame EE targets to the URDF chain root frame."""
+        target_pos_w, target_quat_w = math_utils.combine_frame_transforms(
+            self._asset.data.root_pos_w[env_ids],
+            self._asset.data.root_quat_w[env_ids],
+            target_pos_b,
+            target_quat_b,
+        )
+        offset_pos = self._offset_for_envs(env_ids)
+        offset_quat = self._offset_rot_for_envs(env_ids)
+        body_quat_w = normalize_quat(quat_mul(target_quat_w, quat_conjugate(offset_quat)))
+        body_pos_w = target_pos_w - math_utils.quat_apply(body_quat_w, offset_pos)
+        arm_pos_w = self._asset.data.body_pos_w[env_ids, self._arm_root_body_idx]
+        arm_quat_w = self._asset.data.body_quat_w[env_ids, self._arm_root_body_idx]
+        return math_utils.subtract_frame_transforms(
+            arm_pos_w, arm_quat_w, body_pos_w, body_quat_w
+        )
+
+    def _chain_pose_to_root(
+        self, env_ids: torch.Tensor, chain_joint_pos: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the EE pose in the articulation root frame for a chain configuration."""
+        transform = self._fk_chain.forward_kinematics(chain_joint_pos).get_matrix()
+        body_pos_ab = transform[:, :3, 3]
+        body_quat_ab = quat_from_matrix(transform[:, :3, :3])
+        offset_pos = self._offset_for_envs(env_ids)
+        offset_quat = self._offset_rot_for_envs(env_ids)
+        ee_pos_ab, ee_quat_ab = math_utils.combine_frame_transforms(
+            body_pos_ab, body_quat_ab, offset_pos, offset_quat
+        )
+        arm_pos_b, arm_quat_b = math_utils.subtract_frame_transforms(
+            self._asset.data.root_pos_w[env_ids],
+            self._asset.data.root_quat_w[env_ids],
+            self._asset.data.body_pos_w[env_ids, self._arm_root_body_idx],
+            self._asset.data.body_quat_w[env_ids, self._arm_root_body_idx],
+        )
+        return math_utils.combine_frame_transforms(
+            arm_pos_b, arm_quat_b, ee_pos_ab, ee_quat_ab
+        )
+
+    def _offset_for_envs(self, env_ids: torch.Tensor) -> torch.Tensor:
+        if self._offset_pos.shape[0] == self.num_envs:
+            return self._offset_pos[env_ids]
+        return self._offset_pos.expand(env_ids.numel(), -1)
+
+    def _offset_rot_for_envs(self, env_ids: torch.Tensor) -> torch.Tensor:
+        if self._offset_rot.shape[0] == self.num_envs:
+            return self._offset_rot[env_ids]
+        return self._offset_rot.expand(env_ids.numel(), -1)
 
     def _num_protected_joints(self) -> int:
         return (self._asset.num_joints if isinstance(self._joint_ids, slice)
@@ -192,10 +594,14 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
         return des
 
     def apply_actions(self):
-        """与基类同流程，但在写 PD 目标前先过 `_protect_joint_target()`。"""
+        """Compute a projected IK target, then latch it if the target is unreachable."""
         ee_pos_curr, ee_quat_curr = self._compute_frame_pose()
         joint_pos = self._asset.data.joint_pos[:, self._joint_ids]
-        if ee_quat_curr.norm() != 0:
+        if self._robust_ready and ee_quat_curr.norm() != 0:
+            joint_pos_des = self._robust_joint_target(
+                ee_pos_curr, ee_quat_curr, joint_pos
+            )
+        elif ee_quat_curr.norm() != 0:
             jacobian = self._compute_frame_jacobian()
             joint_pos_des = self._ik_controller.compute(ee_pos_curr, ee_quat_curr, jacobian, joint_pos)
         else:
@@ -203,9 +609,156 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
         joint_pos_des = self._protect_joint_target(joint_pos, joint_pos_des)
         self._asset.set_joint_position_target(joint_pos_des, self._joint_ids)
 
+    def _robust_joint_target(
+        self,
+        ee_pos_curr: torch.Tensor,
+        ee_quat_curr: torch.Tensor,
+        joint_pos: torch.Tensor,
+    ) -> torch.Tensor:
+        """Run projected DLS and enforce continuity around the actual joint state."""
+        r_cfg: RobustIKCfg = self.cfg.robust_ik
+        target_pos = self._target_pos_b
+        target_quat = self._target_quat_b
+        if bool(self._orientation_relaxed.any()):
+            target_quat = torch.where(
+                self._orientation_relaxed.unsqueeze(-1),
+                self._relaxed_quat_b,
+                target_quat,
+            )
+        position_only = torch.full_like(self._tracking_blocked, self.cfg.controller.command_type == "position")
+        position_only |= self._orientation_relaxed
+        jacobian = self._compute_frame_jacobian()
+
+        # A single call handles mixed position-only/full-pose environments by running
+        # the full-pose step and then replacing relaxed rows with a position-only step.
+        step = projected_ik_step(
+            ee_pos_curr,
+            ee_quat_curr,
+            target_pos,
+            target_quat,
+            jacobian,
+            joint_pos,
+            self._robust_joint_lower,
+            self._robust_joint_upper,
+            self._projected_options,
+        )
+        candidate = step.joint_pos
+        if bool(position_only.any()):
+            pos_step = projected_ik_step(
+                ee_pos_curr,
+                ee_quat_curr,
+                target_pos,
+                target_quat,
+                jacobian,
+                joint_pos,
+                self._robust_joint_lower,
+                self._robust_joint_upper,
+                self._projected_options,
+                position_only=True,
+            )
+            candidate = torch.where(position_only.unsqueeze(-1), pos_step.joint_pos, candidate)
+            step = step._replace(
+                position_error=step.position_error,
+                orientation_error=torch.where(
+                    position_only, torch.zeros_like(step.orientation_error), step.orientation_error
+                ),
+            )
+
+        max_step = float(r_cfg.max_joint_step)
+        commanded = self._q_cmd + torch.clamp(candidate - self._q_cmd, -max_step, max_step)
+        # Keep the internally accumulated target close to the measured state. This avoids
+        # "target wind-up" when the PD loop lags behind the IK command.
+        commanded = joint_pos + torch.clamp(
+            commanded - joint_pos, -2.0 * max_step, 2.0 * max_step
+        )
+        commanded = commanded.clamp(self._robust_joint_lower, self._robust_joint_upper)
+
+        if bool(self._tracking_blocked.any()):
+            held = joint_pos + torch.clamp(
+                self._q_last_feasible - joint_pos, -max_step, max_step
+            )
+            commanded = torch.where(self._tracking_blocked.unsqueeze(-1), held, commanded)
+        self._q_cmd[:] = commanded
+        self._update_tracking_state(
+            joint_pos,
+            commanded,
+            target_pos,
+            target_quat,
+            ee_pos_curr,
+            ee_quat_curr,
+            position_only,
+        )
+        return commanded
+
+    def _update_tracking_state(
+        self,
+        joint_pos: torch.Tensor,
+        joint_pos_des: torch.Tensor,
+        target_pos: torch.Tensor,
+        target_quat: torch.Tensor,
+        ee_pos_curr: torch.Tensor,
+        ee_quat_curr: torch.Tensor,
+        position_only: torch.Tensor,
+    ) -> None:
+        """Update success, progress and failure-latch state from the current tracking error."""
+        r_cfg: RobustIKCfg = self.cfg.robust_ik
+        position_error = torch.linalg.vector_norm(target_pos - ee_pos_curr, dim=-1)
+        ori_error = torch.linalg.vector_norm(
+            orientation_error(ee_quat_curr, target_quat), dim=-1
+        )
+        active = ~self._tracking_blocked
+        weighted_error = math.sqrt(self._projected_options.position_weight) * position_error
+        weighted_error += torch.where(
+            position_only,
+            torch.zeros_like(ori_error),
+            math.sqrt(self._projected_options.orientation_weight) * ori_error,
+        )
+        improved = (
+            self._last_weighted_error - weighted_error
+        ) > float(r_cfg.improvement_tolerance)
+        stall = torch.where(
+            improved & active,
+            torch.zeros_like(self._stall_count),
+            self._stall_count + 1,
+        )
+        success = (position_error <= float(r_cfg.position_tolerance)) & (
+            position_only | (ori_error <= float(r_cfg.orientation_tolerance))
+        )
+        stall = torch.where(success, torch.zeros_like(stall), stall)
+        newly_blocked = active & (~success) & (
+            stall >= int(r_cfg.stall_patience)
+        )
+        self._stall_count[:] = stall
+        self._last_weighted_error[:] = torch.where(
+            active, weighted_error, self._last_weighted_error
+        )
+        if bool(success.any()):
+            self._q_last_feasible[success] = joint_pos_des[success]
+        if bool(newly_blocked.any()):
+            self._tracking_blocked |= newly_blocked
+            self._q_goal[newly_blocked] = self._q_last_feasible[newly_blocked]
+            self._robust_stats["stall_latched"] += int(newly_blocked.sum())
+            if bool(r_cfg.debug):
+                print(
+                    f"[IK robust] latency latch: {int(newly_blocked.sum())} env(s), "
+                    f"total={self._robust_stats['stall_latched']}"
+                )
+
     @property
     def action_dim(self) -> int:
         return 0
+
+    @property
+    def robust_ik_stats(self) -> dict[str, int]:
+        """Cumulative robust-IK outcome counters for diagnostics."""
+
+        return dict(self._robust_stats) if getattr(self, "_robust_stats", None) else {}
+
+    @property
+    def tracking_blocked(self) -> torch.Tensor:
+        """Per-environment failure latch. Blocked environments hold the last feasible pose."""
+
+        return self._tracking_blocked
 
     def _compute_frame_jacobian(self):
         jacobian = self.jacobian_b
@@ -337,5 +890,9 @@ class CommandDrivenIKActionCfg(ActionTermCfg):
 
     vel_limit_scale: float = 1.0
     """限速系数的额外缩放（>1 更宽松，用于消融；1.0 = 直接用 actuator 的 velocity_limit）"""
+
+    robust_ik: RobustIKCfg = RobustIKCfg()
+    """Projected DLS + optional multi-start full IK configuration."""
+
     class_type: type = CommandDrivenIKAction
     command_name: str = "ee_pose"  # 对应CommandsCfg里的key

@@ -18,6 +18,7 @@ from rl_training.tasks.manager_based.locomotion.velocity.velocity_env_cfg import
     CommandsCfg,
 )
 from isaaclab.controllers import DifferentialIKControllerCfg
+from rl_training.assets import ISAACLAB_ASSETS_DATA_DIR
 ##
 # Pre-defined configs
 ##
@@ -88,6 +89,15 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
         ),
         scale=1.0,
         debug_vis=True,
+        robust_ik=mdp.RobustIKCfg(
+            enabled=True,
+            urdf_path=f"{ISAACLAB_ASSETS_DATA_DIR}/M20_Piper_own/urdf/M20_Piper_own.urdf",
+            arm_root_link_name="arm_base_link",
+            ee_link_name="gripper_base",
+            full_solve_interval_s=1.0,
+            full_solve_iterations=20,
+            num_restarts=1,
+        ),
     )
 
     # gripper_action = mdp.BinaryJointPositionActionCfg(
