@@ -534,6 +534,12 @@ class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
         self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.0)
         self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        # B0：平地 history 的速度分析固定在该范围内，关闭后续扩到 ±2~±5 的课程。
+        # 这些课程会让训练分布与固定低速评测不可比，并掩盖零速漂移问题。
+        self.curriculum.base_velocity_lin_vel_x_s4 = None
+        self.curriculum.base_velocity_lin_vel_x_s5 = None
+        self.curriculum.base_velocity_lin_vel_x_s6 = None
+        self.curriculum.base_velocity_lin_vel_x_s7 = None
         # self.rewards.body_height_tracking.weight = 0.8
         # self.rewards.body_pitch_tracking.weight = 0.8
         # self.rewards.body_roll_tracking.weight = 0.0
