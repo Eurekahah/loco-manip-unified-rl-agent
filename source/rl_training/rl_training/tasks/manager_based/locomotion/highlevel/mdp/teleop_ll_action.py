@@ -9,7 +9,11 @@ import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation
 from isaaclab.managers import ActionTerm, ActionTermCfg, ObservationGroupCfg, ObservationManager
 from isaaclab.markers import VisualizationMarkers
-from isaaclab.markers.config import BLUE_ARROW_X_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG
+from isaaclab.markers.config import (
+    BLUE_ARROW_X_MARKER_CFG,
+    FRAME_MARKER_CFG,
+    GREEN_ARROW_X_MARKER_CFG,
+)
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import check_file_path, read_file
 import rl_training.tasks.manager_based.locomotion.highlevel.mdp as mdp
@@ -93,6 +97,11 @@ class TeleopLLAction(LowLevelPolicyActionBase):
         self._default_body_pose[:, 0] = 0.51  # height 默认 0.51，pitch/roll 默认 0
         
         self.arm_link_ids = self.robot.find_bodies(["arm.*"])[0]
+        self._wheel_body_ids = torch.as_tensor(
+            self.robot.find_bodies([".*wheel"])[0],
+            dtype=torch.long,
+            device=self.device,
+        )
         ik_period = float(getattr(self.cfg, "ik_update_period_s", 0.0))
         physics_dt = float(self._env.physics_dt)
         self._ik_update_decimation = (
@@ -407,22 +416,37 @@ class TeleopLLAction(LowLevelPolicyActionBase):
                     marker_cfg.prim_path = "/Visuals/Actions/velocity_current"
                     marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
                     self.base_vel_visualizer = VisualizationMarkers(marker_cfg)
+                    marker_cfg = GREEN_ARROW_X_MARKER_CFG.copy()
+                    marker_cfg.prim_path = "/Visuals/Actions/body_pose_disc_command"
+                    self.body_pose_goal_visualizer = VisualizationMarkers(marker_cfg)
+                    marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy()
+                    marker_cfg.prim_path = "/Visuals/Actions/body_pose_disc_actual"
+                    self.body_pose_visualizer = VisualizationMarkers(marker_cfg)
             if not hasattr(self, "ee_goal_visualizer"):
-                from isaaclab.markers.config import RED_ARROW_X_MARKER_CFG
-                marker_cfg = RED_ARROW_X_MARKER_CFG.copy()
-                marker_cfg.prim_path = "/Visuals/Actions/ee_goal"
-                marker_cfg.markers["arrow"].scale = (0.3, 0.3, 0.3)
+                marker_cfg = FRAME_MARKER_CFG.replace(
+                    prim_path="/Visuals/Actions/ee_goal_frame"
+                )
                 self.ee_goal_visualizer = VisualizationMarkers(marker_cfg)
+                marker_cfg = FRAME_MARKER_CFG.replace(
+                    prim_path="/Visuals/Actions/ee_current_frame"
+                )
+                self.ee_current_visualizer = VisualizationMarkers(marker_cfg)
             if not self.cfg.debug_vis_ee_target_only:
                 self.base_vel_goal_visualizer.set_visibility(True)
                 self.base_vel_visualizer.set_visibility(True)
+                self.body_pose_goal_visualizer.set_visibility(True)
+                self.body_pose_visualizer.set_visibility(True)
             self.ee_goal_visualizer.set_visibility(True)
+            self.ee_current_visualizer.set_visibility(True)
         else:
             if hasattr(self, "base_vel_goal_visualizer"):
                 self.base_vel_goal_visualizer.set_visibility(False)
                 self.base_vel_visualizer.set_visibility(False)
+                self.body_pose_goal_visualizer.set_visibility(False)
+                self.body_pose_visualizer.set_visibility(False)
             if hasattr(self, "ee_goal_visualizer"):
                 self.ee_goal_visualizer.set_visibility(False)
+                self.ee_current_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
         if not self.robot.is_initialized:
@@ -436,13 +460,77 @@ class TeleopLLAction(LowLevelPolicyActionBase):
             )
             self.base_vel_goal_visualizer.visualize(base_pos_w, vel_des_arrow_quat, vel_des_arrow_scale)
             self.base_vel_visualizer.visualize(base_pos_w, vel_arrow_quat, vel_arrow_scale)
-        ee_goal_pos  = self.ll_command[:, 3:6]
-        ee_goal_quat = self.ll_command[:, 6:10]
+            (
+                body_disc_pos,
+                body_goal_quat,
+                body_actual_quat,
+                body_disc_scale,
+            ) = self._body_pose_discs_world()
+            self.body_pose_goal_visualizer.visualize(
+                body_disc_pos, body_goal_quat, body_disc_scale
+            )
+            self.body_pose_visualizer.visualize(
+                body_disc_pos,
+                body_actual_quat,
+                body_disc_scale,
+            )
+        # VisualizationMarkers expects world-frame poses. ``ll_command`` stores the
+        # EE target in the robot root frame, which is close to the map origin for a
+        # single environment and makes the marker appear stationary at the centre.
+        ee_goal_pos = self.ll_command_w[:, 3:6]
+        ee_goal_quat = self.ll_command_w[:, 6:10]
+        # Both EE frames must use exactly the same scale so their arrow lengths
+        # encode orientation differences rather than marker-size differences.
+        ee_frame_scale = torch.tensor(
+            [[0.3, 0.3, 0.3]], device=self.device
+        ).expand(self.num_envs, -1)
         valid_mask = torch.norm(ee_goal_quat, dim=-1) > 0.1
         if valid_mask.any():
             ee_goal_quat_norm = torch.nn.functional.normalize(ee_goal_quat, dim=-1)
-            ee_marker_scale = torch.tensor([[0.3, 0.3, 0.3]], device=self.device).expand(self.num_envs, -1)
-            self.ee_goal_visualizer.visualize(ee_goal_pos, ee_goal_quat_norm, ee_marker_scale)
+            self.ee_goal_visualizer.visualize(ee_goal_pos, ee_goal_quat_norm, ee_frame_scale)
+        self.ee_current_visualizer.visualize(
+            self.robot.data.body_pos_w[:, self._ee_body_idx],
+            self.robot.data.body_quat_w[:, self._ee_body_idx],
+            ee_frame_scale,
+        )
+
+    def _body_pose_discs_world(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Build the command/actual body-pose discs used by BodyPoseCommand."""
+        root_pos_w = self.robot.data.root_pos_w
+        root_quat_w = self.robot.data.root_quat_w
+        if self._wheel_body_ids.numel() > 0:
+            wheel_height_w = self.robot.data.body_pos_w[:, self._wheel_body_ids, 2].mean(dim=1)
+            current_height = root_pos_w[:, 2] - wheel_height_w + 0.09
+        else:
+            current_height = root_pos_w[:, 2]
+
+        target_height = self.ll_command[:, 10]
+        target_pos_w = root_pos_w.clone()
+        target_pos_w[:, 2] += target_height - current_height
+
+        zeros = torch.zeros(self.num_envs, device=self.device)
+        half_pi = torch.full((self.num_envs,), -torch.pi / 2, device=self.device)
+        q_base = math_utils.quat_from_euler_xyz(zeros, half_pi, zeros)
+        _, _, yaw = math_utils.euler_xyz_from_quat(root_quat_w)
+        q_yaw = math_utils.quat_from_euler_xyz(zeros, zeros, yaw)
+        q_body_command = math_utils.quat_from_euler_xyz(
+            self.ll_command[:, 12], self.ll_command[:, 11], zeros
+        )
+        cmd_disc_quat = math_utils.quat_mul(
+            math_utils.quat_mul(q_yaw, q_body_command), q_base
+        )
+        actual_disc_quat = math_utils.quat_mul(root_quat_w, q_base)
+
+        disc_scale = torch.ones(self.num_envs, 3, device=self.device)
+        disc_scale[:, 0] = 0.01
+        disc_scale[:, 1] = 10.0
+        disc_scale[:, 2] = 1.0
+        # Both discs share the commanded height. Only their orientation differs,
+        # matching the BodyPoseCommand visualization used by the low-level task.
+        # Return one shared centre so command and actual discs cannot drift apart.
+        return target_pos_w, cmd_disc_quat, actual_disc_quat, disc_scale
 
     def _resolve_xy_velocity_to_arrow(self, xy_velocity: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         default_scale = self.base_vel_goal_visualizer.cfg.markers["arrow"].scale

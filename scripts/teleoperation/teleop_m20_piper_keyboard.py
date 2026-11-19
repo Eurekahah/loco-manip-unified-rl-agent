@@ -83,6 +83,24 @@ parser.add_argument(
     action="store_true",
     help="Profile action manager, low-level policy, IK, scene, simulation and render separately.",
 )
+parser.add_argument(
+    "--keyboard-step-scale",
+    type=float,
+    default=0.2,
+    help=(
+        "Scale keyboard body/EE incremental commands. Default 0.2 maps the old "
+        "0.05 step to 0.01 m or 0.01 rad per control step; use 1.0 for old behavior."
+    ),
+)
+parser.add_argument(
+    "--show-teleop-command-state",
+    action="store_true",
+    default=False,
+    help=(
+        "Show command and measured-state indicators for base velocity, body pose "
+        "and end-effector pose. Disabled by default."
+    ),
+)
 add_fisheye_args(parser, include_panorama=True)
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(rendering_mode="balanced")
@@ -101,6 +119,8 @@ if args.ik_update_period < 0.0:
     parser.error("--ik-update-period must be >= 0")
 if args.fast_robot_hot_period <= 0.0:
     parser.error("--fast-robot-hot-period must be > 0")
+if args.keyboard_step_scale <= 0.0:
+    parser.error("--keyboard-step-scale must be > 0")
 validate_fisheye_args(parser, args, include_panorama=True)
 prefer_cpu_for_single_env_teleop(args)
 args.enable_cameras = bool(
@@ -216,17 +236,30 @@ def main():
         lens_offset=args.fisheye_lens_offset,
     )
 
-    env_cfg.actions.pre_trained_pick_action.debug_vis = False
-    env_cfg.actions.pre_trained_pick_action.debug_vis_ee_target_only = False
+    teleop_action_cfg = env_cfg.actions.pre_trained_pick_action
+    teleop_action_cfg.debug_vis = bool(args.show_teleop_command_state)
+    if hasattr(teleop_action_cfg, "debug_vis_ee_target_only"):
+        teleop_action_cfg.debug_vis_ee_target_only = False
     if getattr(env_cfg, "commands", None) is not None and hasattr(env_cfg.commands, "ee_pose"):
+        # The command term's marker denotes its sampling frame, not the live target.
         env_cfg.commands.ee_pose.debug_vis = False
-    env_cfg.actions.pre_trained_pick_action.low_level_ee_actions.debug_vis = False
+    if hasattr(teleop_action_cfg, "low_level_ee_actions"):
+        teleop_action_cfg.low_level_ee_actions.debug_vis = False
     env_cfg.actions.pre_trained_pick_action.ik_update_period_s = args.ik_update_period
     env = gym.make(args.task, cfg=env_cfg).unwrapped
     env.cfg.sim.render_interval = int(args.render_interval)
     env.sim.cfg.render_interval = int(args.render_interval)
     env.command_manager.set_debug_vis(False)
-    env.action_manager.set_debug_vis(False)
+    env.action_manager.set_debug_vis(bool(args.show_teleop_command_state))
+    if args.show_teleop_command_state:
+        print(
+            "[Teleop] command/state indicators ON: "
+            "velocity green=cmd blue=actual; "
+            "body pose discs green=cmd blue=actual; "
+            "EE larger RGB frame=target, smaller RGB frame=actual"
+        )
+    else:
+        print("[Teleop] command/state indicators OFF")
 
     import omni.usd
     from pxr import UsdGeom
@@ -256,18 +289,23 @@ def main():
     )
 
     # ── 2. 创建键盘设备 ────────────────────────────────────────────────
+    keyboard_step = 0.05 * args.keyboard_step_scale
     device_cfg = KeyboardLocoManipTeleopCfg(
         v_x_sensitivity=0.6,
         v_y_sensitivity=0.4,
         omega_z_sensitivity=0.8,
-        height_sensitivity=0.05,
-        pitch_sensitivity=0.05,
-        roll_sensitivity=0.05,
-        ee_pos_sensitivity=0.05,
-        ee_orn_sensitivity=0.05,
+        height_sensitivity=keyboard_step,
+        pitch_sensitivity=keyboard_step,
+        roll_sensitivity=keyboard_step,
+        ee_pos_sensitivity=keyboard_step,
+        ee_orn_sensitivity=keyboard_step,
     )
     teleop_interface = KeyboardLocoManipTeleop(device_cfg)
     print(teleop_interface)
+    print(
+        f"[Keyboard] incremental step: {keyboard_step:.3f} "
+        f"(scale={args.keyboard_step_scale:g})"
+    )
     detailed_profiler = None
     fast_stepper = None
     if args.profile_detailed:

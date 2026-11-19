@@ -146,6 +146,7 @@ class KeyboardLocoManipTeleop(DeviceBase):
         #   [11]   delta_roll
         #   [12]   gripper  (0 or 1)
         self._base_command = np.zeros(13, dtype=np.float32)
+        self._pressed_keys: set[str] = set()
 
         # gripper is a toggle, not a held key
         self._gripper_state: float = 1.0   # 1 = open, -1 = closed
@@ -198,6 +199,7 @@ class KeyboardLocoManipTeleop(DeviceBase):
     def reset(self):
         """Reset all command buffers (including gripper) to zero."""
         self._base_command.fill(0.0)
+        self._pressed_keys.clear()
         self._gripper_state = 0.0
 
     def add_callback(self, key: str, func: Callable):
@@ -238,23 +240,36 @@ class KeyboardLocoManipTeleop(DeviceBase):
             L → :py:meth:`reset`
             G → toggle gripper state
         """
+        # Carb versions differ: newer events expose ``input.name`` while some
+        # keyboard paths pass the key name as a plain string.
+        event_input = event.input
+        key_name = event_input if isinstance(event_input, str) else getattr(event_input, "name", None)
+        if not isinstance(key_name, str):
+            return True
         if event.type == carb.input.KeyboardEventType.KEY_PRESS:
-            if event.input.name == "L":
+            # Some backends emit repeated KEY_PRESS events while a key is held.
+            # Count only the first press until the corresponding release arrives.
+            new_press = key_name not in self._pressed_keys
+            if key_name == "L" and new_press:
                 self.reset()
-            elif event.input.name == "G":
+            elif key_name == "G" and new_press:
                 self._gripper_state = -1.0 if self._gripper_state >= 0.0 else 1.0
                 state_str = "OPEN" if self._gripper_state > 0 else "CLOSED"
                 print(f"[KeyboardLocoManipTeleop] Gripper → {state_str}")
-            elif event.input.name in self._INPUT_KEY_MAPPING:
-                self._base_command += self._INPUT_KEY_MAPPING[event.input.name]
+            elif key_name in self._INPUT_KEY_MAPPING and new_press:
+                self._base_command += self._INPUT_KEY_MAPPING[key_name]
 
             # user-registered callbacks
-            if event.input.name in self._additional_callbacks:
-                self._additional_callbacks[event.input.name]()
+            if key_name in self._additional_callbacks and new_press:
+                self._additional_callbacks[key_name]()
+            if new_press:
+                self._pressed_keys.add(key_name)
 
         elif event.type == carb.input.KeyboardEventType.KEY_RELEASE:
-            if event.input.name in self._INPUT_KEY_MAPPING:
-                self._base_command -= self._INPUT_KEY_MAPPING[event.input.name]
+            if key_name in self._pressed_keys:
+                if key_name in self._INPUT_KEY_MAPPING:
+                    self._base_command -= self._INPUT_KEY_MAPPING[key_name]
+                self._pressed_keys.remove(key_name)
 
         return True  # no error
 
