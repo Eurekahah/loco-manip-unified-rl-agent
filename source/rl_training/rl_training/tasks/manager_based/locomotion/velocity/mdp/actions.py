@@ -660,7 +660,9 @@ class CommandDrivenIKAction(DifferentialInverseKinematicsAction):
             step = step._replace(
                 position_error=step.position_error,
                 orientation_error=torch.where(
-                    position_only, torch.zeros_like(step.orientation_error), step.orientation_error
+                    position_only.unsqueeze(-1),
+                    torch.zeros_like(step.orientation_error),
+                    step.orientation_error,
                 ),
             )
 
