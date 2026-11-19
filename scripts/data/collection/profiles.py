@@ -37,6 +37,9 @@ class CollectionTaskProfile:
     configure_env: EnvConfigurator | None = None
     configure_action_term: ActionConfigurator | None = None
     fast_robot_only_write: bool = False
+    default_front_camera: bool = False
+    default_wrist_preview: bool = False
+    default_fisheye_rig: str = "none"
     fisheye_mount_pos: tuple[float, float, float] | None = None
     extra_metadata: Mapping[str, Any] = field(default_factory=dict)
 

@@ -83,6 +83,34 @@ def _default_output_path(profile: CollectionTaskProfile, source: str) -> str:
     return os.path.join("recordings", profile.output_dir, f"{stamp}_{source}.hdf5")
 
 
+def _cli_option_was_provided(*option_names: str) -> bool:
+    for argument in sys.argv[1:]:
+        option = argument.split("=", maxsplit=1)[0]
+        if option in option_names:
+            return True
+    return False
+
+
+def _bind_main_viewport_to_camera(env, scene_key: str) -> bool:
+    """Bind the active desktop viewport to a robot-mounted camera."""
+    import omni.kit.commands
+    from omni.kit.viewport.utility import get_active_viewport
+
+    if scene_key not in env.scene.sensors:
+        return False
+    viewport = get_active_viewport()
+    if viewport is None:
+        return False
+    camera_path = str(env.scene.sensors[scene_key]._view.prim_paths[0])
+    omni.kit.commands.execute(
+        "SetViewportCamera",
+        camera_path=camera_path,
+        viewport_api=viewport,
+    )
+    print(f"[Collect] main viewport follows robot via {scene_key}: {camera_path}", flush=True)
+    return True
+
+
 def _configure_standard_cameras(
     env_cfg,
     profile: CollectionTaskProfile,
@@ -143,6 +171,18 @@ def run_collection(
     env_cfg.scene.num_envs = 1
     if profile.configure_env is not None:
         profile.configure_env(env_cfg)
+    if profile.default_front_camera and not _cli_option_was_provided(
+        "--front_camera",
+        "--no-front_camera",
+    ):
+        args_cli.front_camera = True
+    if profile.default_wrist_preview and not args_cli.headless and not _cli_option_was_provided(
+        "--show-wrist-camera",
+        "--no-show-wrist-camera",
+    ):
+        args_cli.show_wrist_camera = True
+    if profile.default_fisheye_rig != "none" and not _cli_option_was_provided("--fisheye-rig"):
+        args_cli.fisheye_rig = profile.default_fisheye_rig
 
     record_period = 1.0 / float(args_cli.record_hz)
     control_dt = float(env_cfg.sim.dt) * int(env_cfg.decimation)
@@ -260,6 +300,8 @@ def run_collection(
         action_cfg.ik_update_period_s = args_cli.ik_update_period
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
+    if not args_cli.headless and args_cli.follow_robot and "front_camera" in camera_names:
+        _bind_main_viewport_to_camera(env, "front_camera")
     action_term = env.action_manager.get_term(profile.action_term_name)
     validate_success_termination_term(
         env.termination_manager,

@@ -1,0 +1,1301 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "Root"
+{
+    def Xform "Crop"
+    {
+        double3 xformOp:translate = (-23.81, 0.8, 0)
+        token[] xformOpOrder = ["xformOp:translate"]
+
+        def Xform "Geo_M1_SideWall_720" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_M1_SideWall_11.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (20.76, 2.85, 0.0010000000000000143)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_O_DoorWall_918" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_O_DoorWall_18.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (20.76000244140625, -4.349998779296875, 0.0010000000000000143)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_O_SideWall_922" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_O_SideWall_19.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (20.76000244140625, -4.350001220703125, 0.0010006103515625142)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_O_WindowWall_926" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_O_WindowWall_20.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (25.46000244140625, -4.350001220703125, 0.000999961853027358)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_O_WindowWall2" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_O_WindowWall_20.usd@
+        )
+        {
+            quatd xformOp:orient = (6.123233995736766e-17, 0, 1, 0)
+            double3 xformOp:scale = (-1, -1, -1)
+            double3 xformOp:translate = (25.46000244140625, 2.849991455078125, 0.0010000000000000143)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_O_SideWall2" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_O_SideWall_21.usd@
+        )
+        {
+            quatd xformOp:orient = (-8.940696717915525e-7, 0, 0, 0.9999999999996003)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (25.46000244140625, 2.85, 0.0010006103515625142)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_o_Floor_936" (
+            delete apiSchemas = ["PhysicsCollisionAPI", "PhysxCollisionAPI", "PhysxCookedDataAPI:convexHull", "PhysxCookedDataAPI:convexDecomposition", "PhysxCookedDataAPI:triangleMesh", "PhysxCookedDataAPI:clothConstaint"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = false
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_o_Floor_22.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (20.75999755859375, -4.349998779296875, 0.0010006103515625142)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+
+            over "Geo_o_Floor" (
+                delete apiSchemas = ["PhysicsCollisionAPI", "PhysxCollisionAPI", "PhysxCookedDataAPI:convexHull", "PhysxCookedDataAPI:convexDecomposition", "PhysxCookedDataAPI:triangleMesh", "PhysxCookedDataAPI:clothConstaint"]
+            )
+            {
+                over "Geo_o_Floor" (
+                    delete apiSchemas = ["PhysicsCollisionAPI", "PhysxCollisionAPI", "PhysicsMeshCollisionAPI", "PhysxConvexHullCollisionAPI", "PhysxConvexDecompositionCollisionAPI", "PhysxTriangleMeshSimplificationCollisionAPI", "PhysxTriangleMeshCollisionAPI", "PhysxCookedDataAPI:convexHull", "PhysxCookedDataAPI:convexDecomposition", "PhysxCookedDataAPI:triangleMesh", "PhysxCookedDataAPI:clothConstaint"]
+                )
+                {
+                }
+            }
+        }
+
+        def Xform "Geo_M_DoorFrame26" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_M_DoorFrame_77.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.7071061134338381, 0, 0, 0.7071074489386263)
+            double3 xformOp:scale = (1, 1.0545399188995361, 1)
+            double3 xformOp:translate = (20.90942626953125, -0.06000244140625, 0.0010007629394531393)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_M1_TrimInsideSide24" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_M1_TrimInsideSide_81.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (20.850283203125, 2.94738037109375, 0.0009995422363281393)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_M_DoorFloor23" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_M_DoorFloor_90.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.7071065902709964, 0, 0, 0.7071069721020472)
+            double3 xformOp:scale = (1.0382782220840454, 1, 1)
+            double3 xformOp:translate = (20.86576904296875, -0.16105346679687502, 0.00004083251953126421)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_M1_TrimInsideSide47" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_M1_TrimInsideSide_81.usd@
+        )
+        {
+            quatd xformOp:orient = (6.123233995736766e-17, 0.999999999999936, -3.5762792543452266e-7, 0)
+            double3 xformOp:scale = (-1, -0.5798850059509277, -1)
+            double3 xformOp:translate = (26.76974365234375, 3.011871337890625, 0.0009995422363281393)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_M1_SideWallPanel23" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_M1_SideWallPanel_95.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 0.5427799820899963, 1)
+            double3 xformOp:translate = (20.850283203125, 3.00009033203125, 0.0010054931640625143)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_O_Roof_955" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_O_Roof_99.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (20.7378515625, -4.3610400390625, 3.0101043090820316)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_M1_TrimInsideSide48" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_M1_TrimInsideSide_81.usd@
+        )
+        {
+            quatd xformOp:orient = (3.5762786871356846e-7, 0, 0, 0.999999999999936)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (26.76974365234375, 2.71760498046875, 0.0009995422363281393)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_M1_TrimInsideSide49" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_M1_TrimInsideSide_81.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071086764335632, 0, 0, 0.707104885934452)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (25.35832763671875, -2.9267919921875, 0.0009993896484375142)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_M1_TrimInsideSide50" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_M1_TrimInsideSide_81.usd@
+        )
+        {
+            quatd xformOp:orient = (6.123233995736766e-17, 0.999999999999936, -3.5762792543452266e-7, 0)
+            double3 xformOp:scale = (-1, -1, -1)
+            double3 xformOp:translate = (26.76974365234375, -4.217615966796875, 0.0009995422363281393)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_W_TrimStrateCorner10" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_W_TrimStrateCorner_89.usd@
+        )
+        {
+            quatd xformOp:orient = (6.123233995736766e-17, 0.7071075085431537, 0.7071060538291931, 0)
+            double3 xformOp:scale = (-1, -1, -1)
+            double3 xformOp:translate = (20.86168212890625, -4.21880126953125, 0.0009991607666015767)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_W_TrimStrateBase1_972" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_W_TrimStrateBase1_8_100.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431276, 0, 0, 0.7071073297295419)
+            double3 xformOp:scale = (1.2514986991882324, 1, 1)
+            double3 xformOp:translate = (20.86168701171875, -1.5079150390625, 0.0010005340576172018)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_W_TrimStrateCorner11" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_W_TrimStrateCorner_89.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071075085431537, 0, 0, 0.7071060538291932)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (20.86168212890625, 2.715030517578125, 0.0009991607666015767)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_W_TrimStrateBase1_18" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_W_TrimStrateBase1_8_100.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431276, 0, 0, 0.7071073297295419)
+            double3 xformOp:scale = (1.4526053667068481, 1, 1)
+            double3 xformOp:translate = (20.86168701171875, 0.615101318359375, 0.0010005340576172018)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_W_TrimStrateBase1_977" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_W_TrimStrateBase1_2_59.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.7071061134338378, 0, 0, 0.7071074489386266)
+            double3 xformOp:scale = (1, 0.3073693513870239, 1)
+            double3 xformOp:translate = (20.75999755859375, -4.350003662109375, 0.0010045776367187643)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_W_TrimStrateBase2_983" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_W_TrimStrateBase2_8_61.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.7071061134338378, 0, 0, 0.7071074489386266)
+            double3 xformOp:scale = (0.8906729817390442, 0.2908203601837158, 1)
+            double3 xformOp:translate = (20.75999755859375, -2.3499353027343752, 0.0010046157836914205)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_W_TrimStrateBase1_20" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_W_TrimStrateBase1_2_59.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.7071061134338378, 0, 0, 0.7071074489386266)
+            double3 xformOp:scale = (1, 0.3375333845615387, 1)
+            double3 xformOp:translate = (20.75999755859375, -0.11130126953125, 0.0010045776367187643)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_W_TrimStrateBase2_25" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_W_TrimStrateBase2_8_61.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.7071061134338378, 0, 0, 0.7071074489386266)
+            double3 xformOp:scale = (1.0087788105010986, 0.3375333845615387, 1)
+            double3 xformOp:translate = (20.75999755859375, 1.88863037109375, 0.0010046157836914205)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_M_Window19" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_M_Window.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (25.5380712890625, -0.639013671875, 0.9695513305664062)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Geo_M_Window20" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Geo_M_Window.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (25.5380712890625, -4.13900634765625, 0.9695513305664062)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Door_02b2" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Door_02b.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.0000020265579225227064, 0, 0, 0.9999999999979465)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (20.81083984375, -0.191461181640625, 1.127729278564453)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Desk_04a_112" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Desk_04a.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431274, 0, 0, 0.707107329729542)
+            double3 xformOp:scale = (1.2999999523162842, 2, 1)
+            double3 xformOp:translate = (23.2869140625, -3.228524169921875, 0.0010079345703125143)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Desk_04d_115" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Desk_04d.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071064710617067, 0, 0, 0.7071070913112524)
+            double3 xformOp:scale = (1.2999999523162842, 1, 1)
+            double3 xformOp:translate = (23.70939697265625, -2.617716064453125, 0.4436976013183594)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Desk_04d2" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Desk_04d.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071064710617067, 0, 0, 0.7071070913112524)
+            double3 xformOp:scale = (1.2999999523162842, 1, 1)
+            double3 xformOp:translate = (23.75613037109375, -2.617716064453125, 0.22001824951171878)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Desk_04d3" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Desk_04d.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071064710617067, 0, 0, 0.7071070913112524)
+            double3 xformOp:scale = (1.2999999523162842, 1, 1)
+            double3 xformOp:translate = (23.70939697265625, -2.617716064453125, -0.0002666320800781108)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_ReceptionDesk_01b2_120" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_ReceptionDesk_01b.usd@
+        )
+        {
+            quatd xformOp:orient = (-6.556510926900621e-7, 0, 0, 0.9999999999997851)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (23.00455078125, -2.865841064453125, 0.8252567443847656)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Desk_04a2" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Desk_04a.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431274, 0, 0, 0.707107329729542)
+            double3 xformOp:scale = (1.2999999523162842, 2, 1)
+            double3 xformOp:translate = (23.2869140625, 1.7360076904296875, 0.0010070190429687642)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Desk_04d4" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Desk_04d.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071064710617067, 0, 0, 0.7071070913112524)
+            double3 xformOp:scale = (1.2999999523162842, 1, 1)
+            double3 xformOp:translate = (23.70939697265625, 2.3468157958984377, 0.4436966857910156)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Desk_04d5" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Desk_04d.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071064710617067, 0, 0, 0.7071070913112524)
+            double3 xformOp:scale = (1.2999999523162842, 1, 1)
+            double3 xformOp:translate = (23.75613037109375, 2.3468157958984377, 0.220017333984375)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Desk_04d6" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Desk_04d.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071064710617067, 0, 0, 0.7071070913112524)
+            double3 xformOp:scale = (1.2999999523162842, 1, 1)
+            double3 xformOp:translate = (23.70939697265625, 2.3468157958984377, -0.0002675476074218608)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Chair_04a4" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Chair_04a.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.17364943027496324, 0, 0, 0.9848075321427943)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (23.712265625, 1.6220172119140626, 0.0010071716308593893)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_BedSideTable_01b_132" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_BedSideTable_01b.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (25.0680322265625, -0.055982666015625, 0.0010007629394531393)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_BedSideTable_01b2" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_BedSideTable_01b.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (25.0680322265625, 0.44805053710937504, 0.0010007629394531393)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_BedSideTable_01b3" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_BedSideTable_01b.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (25.0680322265625, 0.959229736328125, 0.0010007629394531393)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Container_01a2_143" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Container_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (23.0814892578125, -2.424075927734375, 0.8252565917968749)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Computer_02a_146" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Computer_02a.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7660440802574158, 0, 0, 0.6427880421278619)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (23.1413916015625, 1.673133544921875, 0.8252565917968749)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Intercom_01a8_152" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Intercom_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (20.86168212890625, -0.93140380859375, 2.5731398925781255)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_MedicalBox_01g_155" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_MedicalBox_01g.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431274, 0, 0, 0.707107329729542)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (20.86168212890625, -1.63008544921875, 1.170655303955078)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_MedicalCabinet_01a3_158" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_MedicalCabinet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431274, 0, 0, 0.707107329729542)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.5169677734375, 1.7448797607421875, 0.0010006103515625142)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_MedicalCabinet_01a4" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_MedicalCabinet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431274, 0, 0, 0.707107329729542)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.5169677734375, 0.8092523193359376, 0.0010006103515625142)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_BedSideTable_01b4" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_BedSideTable_01b.usd@
+        )
+        {
+            quatd xformOp:orient = (-3.576278688131484e-7, 0, 0, 0.999999999999936)
+            double3 xformOp:scale = (1, 1, 0.9068499803543091)
+            double3 xformOp:translate = (23.37725830078125, -1.9989575195312501, 0.0010007629394531393)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_BedSideTable_01b5" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_BedSideTable_01b.usd@
+        )
+        {
+            quatd xformOp:orient = (-3.576278688131484e-7, 0, 0, 0.999999999999936)
+            double3 xformOp:scale = (1, 1, 0.9068499803543091)
+            double3 xformOp:translate = (23.19863037109375, 0.509193115234375, 0.0010007629394531393)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_SupplyCabinet_01c_167" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_SupplyCabinet_01c.usd@
+        )
+        {
+            quatd xformOp:orient = (8.940696716919726e-7, 0, 0, 0.9999999999996003)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (24.99341552734375, 1.964073486328125, 0.0010006103515625142)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_SupplyCart_02a9_170" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_SupplyCart_02a.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.6427866220474242, 0, 0, 0.7660452718455103)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (25.0451904296875, -0.8353369140625, 0.0010006103515625142)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Toolkit_02i2_173" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Toolkit_02i.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (23.356669921875, -2.674678955078125, 0.8252565917968749)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Xraylightbox_01c_176" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Xraylightbox_01c.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431274, 0, 0, 0.707107329729542)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (22.44787109375, -4.21761474609375, 1.6468793640136719)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Xraylightbox_01c2" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Xraylightbox_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431274, 0, 0, 0.707107329729542)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (23.21850830078125, -4.21761474609375, 1.6468793640136719)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a16" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.28471435546875, 1.0167584228515625, 1.7058437499999999)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a17" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (0.000003218650817926769, 0, 0, 0.9999999999948201)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.284711914062502, 1.4399505615234376, 1.7058437499999999)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a18" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (0.000003218650817926769, 0, 0, 0.9999999999948201)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.28471435546875, 1.4314239501953125, 1.41751611328125)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a19" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.28470947265625, 1.008233642578125, 1.41751611328125)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a20" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.328283691406252, 1.1812652587890626, 1.41751611328125)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01e14" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431274, 0, 0, 0.707107329729542)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.26331298828125, 1.481468505859375, 1.1668761596679686)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01e15" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431274, 0, 0, 0.707107329729542)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.263310546875, 0.963963623046875, 1.1668761596679686)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01e16" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7660449743270875, 0, 0, -0.6427869766168354)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.26330810546875, 1.0648822021484374, 1.1668761596679686)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01e17" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (0.000003218650817926769, 0, 0, 0.9999999999948201)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.263310546875, 1.34676025390625, 1.1668761596679686)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a21" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.28470947265625, 1.28705810546875, 0.9317131958007812)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a22" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.32828125, 1.4600836181640626, 0.9317131958007812)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01e18" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431274, 0, 0, 0.707107329729542)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.263310546875, 1.1120654296875, 0.9347718200683593)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01e19" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (0.000003218650817926769, 0, 0, 0.9999999999948201)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.263310546875, 0.9773583984375, 0.9347718200683593)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a23" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (3.5762786871356846e-7, 0, 0, 0.999999999999936)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.241904296875, 2.374140625, 1.7058437499999999)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a24" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.24190673828125, 1.9509490966796876, 1.7058437499999999)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a25" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.241904296875, 1.9594781494140625, 1.41751611328125)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a26" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (0.000004291534423876184, 0, 0, 0.9999999999907914)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.24191162109375, 2.3826617431640624, 1.41751611328125)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a27" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (0.000004291534423876184, 0, 0, 0.9999999999907914)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.198339843750002, 2.2096343994140626, 1.41751611328125)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01e20" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.7071059346199035, 0, 0, 0.7071076277521781)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.26330810546875, 1.9094329833984376, 1.1668761596679686)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01e21" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.7071059346199035, 0, 0, 0.7071076277521781)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.26331298828125, 2.4269384765625, 1.1668761596679686)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01e22" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (0.6427882909774781, 0, 0, 0.7660438714474865)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.26331298828125, 2.326016845703125, 1.1668761596679686)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01e23" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.263310546875, 2.0441436767578125, 1.1668761596679686)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a28" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (0.000004291534423876184, 0, 0, 0.9999999999907914)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.24190673828125, 2.1038427734375, 0.9317131958007812)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01a29" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01a.usd@
+        )
+        {
+            quatd xformOp:orient = (0.000004291534423876184, 0, 0, 0.9999999999907914)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.198339843750002, 1.9308099365234375, 0.9317131958007812)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01e24" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.7071059346199035, 0, 0, 0.7071076277521781)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.263310546875, 2.278834228515625, 0.9347718200683593)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_PillBottleSet_01e25" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.263310546875, 2.4135418701171876, 0.9347718200683593)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_UtilitiesTray_01e2_208" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_UtilitiesTray_01e.usd@
+        )
+        {
+            quatd xformOp:orient = (-0.6427870988845826, 0, 0, 0.7660448717324215)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (25.0417138671875, -0.006094970703125, 0.9010007629394531)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Toolkit_02f_211" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Toolkit_02f.usd@
+        )
+        {
+            quatd xformOp:orient = (0.9659256339073181, 0, 0, -0.2588197630799195)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (25.06983642578125, 0.551378173828125, 0.9010007629394531)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_BooksSet_2" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_BooksSet_26.usd@
+        )
+        {
+            quatd xformOp:orient = (0.4999999403953551, 0, 0, 0.8660254381971938)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (23.15462646484375, -3.757666015625, 0.8252565917968749)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Frame11_5" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Frame11.usd@
+        )
+        {
+            quatd xformOp:orient = (0.9659256339073181, 0, 0, 0.2588197630799195)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (23.1982958984375, -3.449798583984375, 0.8252567443847656)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Frame17_8" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Frame17.usd@
+        )
+        {
+            quatd xformOp:orient = (0.9848076701164246, 0, 0, -0.17364864779162403)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (23.22064453125, -2.811905517578125, 0.8252565917968749)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Frame15_11" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Frame15.usd@
+        )
+        {
+            quatd xformOp:orient = (0.9396923780441284, 0, 0, 0.34202081025249154)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (23.25239501953125, 0.9641925048828125, 0.8252556762695312)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Frame12_17" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Frame12.usd@
+        )
+        {
+            quatd xformOp:orient = (0.9848077297210693, 0, 0, 0.17364830975749015)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (23.15309326171875, 1.119564208984375, 0.8252556762695312)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "SM_Chart_Rack_01c4_20" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_Chart_Rack_01c.usd@
+        )
+        {
+            quatd xformOp:orient = (0.7071062326431274, 0, 0, 0.707107329729542)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (21.212534179687502, -3.016839599609375, 0.0010007629394531393)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Light_test62" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Light_test_111.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (22.72701904296875, -2.894871826171875, 2.987978759765625)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Light_test63" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Light_test_111.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (24.51781005859375, -2.894871826171875, 2.987978759765625)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Light_test64" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Light_test_111.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (24.51781005859375, 0.62385498046875, 2.987978759765625)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Xform "Light_test65" (
+            delete apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = ["PhysicsMeshCollisionAPI"]
+            instanceable = true
+            kind = "group"
+            prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/Light_test_111.usd@
+        )
+        {
+            quatd xformOp:orient = (1, 0, 0, 0)
+            double3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (22.72701904296875, 0.62385498046875, 2.9879802856445314)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+}
+

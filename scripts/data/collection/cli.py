@@ -68,6 +68,12 @@ def build_collection_parser(
         default=False,
         help="Enable a task-provided forward camera. Off by default for legacy profiles.",
     )
+    parser.add_argument(
+        "--follow-robot",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Bind the main GUI viewport to the robot-mounted front camera.",
+    )
     add_fisheye_args(
         parser,
         include_panorama=True,

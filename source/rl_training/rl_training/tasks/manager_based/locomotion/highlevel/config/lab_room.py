@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, NVIDIA_NUCLEUS_DIR
@@ -24,6 +26,9 @@ _CEILING_COLOR = (0.80, 0.80, 0.78)
 # lifted before it can replace the default dark grid floor.
 SIMPLE_ROOM_Z_OFFSET = 0.78
 INTERIOR_HDRI = f"{NVIDIA_NUCLEUS_DIR}/Assets/Skies/Indoor/hospital_room_4k.hdr"
+HOSPITAL_WARD_USD_PATH = str(
+    Path(__file__).resolve().parents[6] / "assets" / "hospital_ward.usda"
+)
 
 _WOOD_MDL = f"{NVIDIA_NUCLEUS_DIR}/Materials/Base/Wood/Oak.mdl"
 _PAINT_MDL = f"{NVIDIA_NUCLEUS_DIR}/Materials/Base/Miscellaneous/Paint_Matte.mdl"
@@ -184,7 +189,12 @@ def make_lab_room_fill_light() -> AssetBaseCfg:
     )
 
 
-def make_official_room(room: str = "Simple_Room") -> AssetBaseCfg:
+def make_official_room(
+    room: str = "Simple_Room",
+    *,
+    position: tuple[float, float, float] | None = None,
+    rotation: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
+) -> AssetBaseCfg:
     """Use an Isaac-provided textured room instead of primitive gray-box walls."""
     room_specs = {
         "Simple_Room": (
@@ -193,6 +203,7 @@ def make_official_room(room: str = "Simple_Room") -> AssetBaseCfg:
         ),
         "Office": (f"{ISAAC_NUCLEUS_DIR}/Environments/Office/office.usd", 0.0),
         "Hospital": (f"{ISAAC_NUCLEUS_DIR}/Environments/Hospital/hospital.usd", 0.0),
+        "HospitalWard": (HOSPITAL_WARD_USD_PATH, 0.0),
         "Simple_Warehouse": (
             f"{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/warehouse.usd",
             0.0,
@@ -201,11 +212,12 @@ def make_official_room(room: str = "Simple_Room") -> AssetBaseCfg:
     if room not in room_specs:
         raise ValueError(f"unsupported official room: {room}")
     usd_path, z_offset = room_specs[room]
+    room_position = (0.0, 0.0, z_offset) if position is None else position
     return AssetBaseCfg(
         prim_path="/World/WBCRoom",
         spawn=sim_utils.UsdFileCfg(usd_path=usd_path),
         init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(0.0, 0.0, z_offset),
-            rot=(1.0, 0.0, 0.0, 0.0),
+            pos=room_position,
+            rot=rotation,
         ),
     )

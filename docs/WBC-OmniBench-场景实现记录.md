@@ -363,6 +363,19 @@ conda run --no-capture-output -n env_isaac_lab python -u `
 
 ## 后续环境主题任务
 
-环境主题任务不使用 `Simple_Room`。接待厅、医院和厨房任务分别在 `Office`、`Hospital`
-和独立 `KitchenRoom` 场景资产中制作对应任务处理资产。设计见
+环境主题任务不使用 `Simple_Room`。接待厅、医院和厨房任务分别在 `Office`、
+由官方 `Hospital` 裁剪的 `HospitalWard` 和独立 `KitchenRoom` 场景组合中制作对应
+任务处理资产。设计见
 [WBC-OmniBench 环境主题任务设计](WBC-OmniBench-环境主题任务设计.md)。
+
+首轮环境主题任务已实现：
+
+| 任务 | Gym task | 主题场景 | 验证 |
+|---|---|---|---|
+| R1 FrontDeskPickup | `Isaac-M20-Piper-FrontDeskPickup-*-v0` | `Office` | quality 四视角、全景、鱼眼通过 |
+| H1 WardDelivery | `Isaac-M20-Piper-WardDelivery-*-v0` | `Hospital` | quality 四视角、全景、鱼眼通过 |
+| K1 KitchenDrawerServe | `Isaac-M20-Piper-KitchenDrawerServe-*-v0` | 独立 `KitchenRoom` | quality 四视角、全景、鱼眼通过 |
+| H2 SupplyRestock | `Isaac-M20-Piper-SupplyRestock-*-v0` | `Hospital` | quality 四视角、全景、鱼眼通过 |
+
+实现细节、开源检索和场景坐标见
+[WBC-OmniBench 环境主题任务实现记录](WBC-OmniBench-环境主题任务实现记录.md)。

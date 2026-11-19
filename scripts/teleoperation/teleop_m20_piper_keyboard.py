@@ -1,7 +1,6 @@
 # scripts/teleoperation/teleop_m20_piper_keyboard.py
 
 import argparse
-import copy
 import sys
 from pathlib import Path
 
@@ -29,9 +28,12 @@ parser.add_argument(
 )
 parser.add_argument(
     "--camera-view",
-    choices=("free", "chest", "wrist", "both"),
-    default="free",
-    help="GUI 视角：free=自由视角，chest=胸前，wrist=腕部，both=胸前主视口 + 独立腕部视口。",
+    choices=("free", "chest", "front", "wrist", "both"),
+    default="both",
+    help=(
+        "GUI 视角：free=自由视角，chest/front=随机器人运动的前视主视口，"
+        "wrist=腕部，both=前视主视口 + 独立腕部视口。"
+    ),
 )
 parser.add_argument("--max-steps", type=int, default=0, help="Stop after N environment steps; 0 runs until exit.")
 parser.add_argument(
@@ -133,17 +135,19 @@ class _TeleopCameraRig:
         from omni.kit.viewport.utility import get_active_viewport
 
         active_viewport = get_active_viewport()
-        nav_camera_path = (
-            str(env.scene["nav_camera"]._view.prim_paths[0])
-            if mode in {"chest", "both"}
+        front_camera_path = (
+            str(env.scene["front_camera"]._view.prim_paths[0])
+            if mode in {"chest", "front", "both"}
             else None
         )
-        arm_camera_path = (
-            str(env.scene["arm_camera"]._view.prim_paths[0])
+        wrist_camera_path = (
+            str(env.scene["wrist_camera"]._view.prim_paths[0])
             if mode in {"wrist", "both"}
             else None
         )
-        primary_path = nav_camera_path if mode in {"chest", "both"} else arm_camera_path
+        primary_path = (
+            front_camera_path if mode in {"chest", "front", "both"} else wrist_camera_path
+        )
         omni.kit.commands.execute(
             "SetViewportCamera",
             camera_path=primary_path,
@@ -155,10 +159,10 @@ class _TeleopCameraRig:
 
             self.extra_viewport = create_viewport_for_camera(
                 "Wrist Camera",
-                arm_camera_path,
+                wrist_camera_path,
                 width=640,
                 height=480,
-                position_x=80,
+                position_x=max(0, args.width - 660),
                 position_y=80,
             )
 
@@ -176,18 +180,18 @@ def main():
     env_cfg.sim.render_interval = int(args.render_interval)
 
     if args.camera_view != "free" or args.show_wrist_camera:
-        if args.camera_view in {"chest", "both"}:
-            from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import (
-                HighLevelSceneCfg,
+        if args.camera_view in {"chest", "front", "both"}:
+            from rl_training.tasks.manager_based.locomotion.highlevel.config.rear_pick.scene_cfg import (
+                make_rear_pick_front_camera,
             )
 
-            reference_scene_cfg = HighLevelSceneCfg(
-                num_envs=args.num_envs, env_spacing=5.0
+            front_cfg = make_rear_pick_front_camera(
+                width=640,
+                height=480,
+                update_period=0.0,
             )
-            nav_cfg = copy.deepcopy(reference_scene_cfg.nav_camera)
-            nav_cfg.prim_path = "{ENV_REGEX_NS}/Robot/base_link/nav_camera"
-            nav_cfg.data_types = ["rgb"]
-            env_cfg.scene.nav_camera = nav_cfg
+            front_cfg.data_types = ["rgb"]
+            env_cfg.scene.front_camera = front_cfg
         if args.camera_view in {"wrist", "both"} or args.show_wrist_camera:
             from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place.scene_cfg import (
                 make_wrist_camera,
@@ -199,7 +203,7 @@ def main():
                 update_period=0.0,
             )
             arm_cfg.data_types = ["rgb"]
-            env_cfg.scene.arm_camera = arm_cfg
+            env_cfg.scene.wrist_camera = arm_cfg
 
     fisheye_spec = add_fisheye_rig(
         env_cfg,
@@ -238,7 +242,7 @@ def main():
         panorama_width=args.panorama_width,
         panorama_height=args.panorama_height,
         show_wrist_camera=args.show_wrist_camera,
-        wrist_scene_key="arm_camera",
+        wrist_scene_key="wrist_camera",
         wrist_display_hz=args.wrist_display_hz,
         panorama_display_hz=args.panorama_display_hz,
         preview_hz=args.preview_hz,

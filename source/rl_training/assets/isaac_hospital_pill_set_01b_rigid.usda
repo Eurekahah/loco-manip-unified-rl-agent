@@ -1,0 +1,27 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "Root" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+)
+{
+    bool physics:rigidBodyEnabled = true
+    float physics:mass = 0.22
+
+    def Xform "Visual" (
+        prepend references = @https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Environments/Hospital/Props/SM_PillBottleSet_01b.usd@
+    )
+    {
+        double3 xformOp:translate = (0, 0, -0.05175)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        over "SM_PillBottleSet_01b"
+        {
+            token physics:approximation = "convexHull"
+        }
+    }
+}

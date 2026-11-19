@@ -76,3 +76,35 @@ class SimpleTaskEventCfg(HighLevelEventCfg):
             "velocity_range": (0.0, 0.0),
         },
     )
+
+
+@configclass
+class ThemeTaskEventCfg(HighLevelEventCfg):
+    """Reset robot and joints while preserving an authored theme-scene layout."""
+
+    reset_object_position_discontinuous = None
+
+    reset_base = EventTerm(
+        func=vel_mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (-0.02, 0.02)},
+            "velocity_range": {
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+                "z": (0.0, 0.0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (0.0, 0.0),
+            },
+        },
+    )
+
+    reset_joints_default = EventTerm(
+        func=vel_mdp.reset_joints_by_scale,
+        mode="reset",
+        params={
+            "position_range": (1.0, 1.0),
+            "velocity_range": (0.0, 0.0),
+        },
+    )

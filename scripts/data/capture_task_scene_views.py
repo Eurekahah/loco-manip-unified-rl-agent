@@ -21,8 +21,12 @@ parser.add_argument(
         "Isaac-M20-Piper-BlindIntercept-Teleop-v0",
         "Isaac-M20-Piper-DrawerLadder-Teleop-v0",
         "Isaac-M20-Piper-DoorBrace-Teleop-v0",
+        "Isaac-M20-Piper-FrontDeskPickup-Teleop-v0",
         "Isaac-M20-Piper-HighLowServe-Teleop-v0",
         "Isaac-M20-Piper-HomeMission-Teleop-v0",
+        "Isaac-M20-Piper-KitchenDrawerServe-Teleop-v0",
+        "Isaac-M20-Piper-SupplyRestock-Teleop-v0",
+        "Isaac-M20-Piper-WardDelivery-Teleop-v0",
     ),
 )
 parser.add_argument("--output_dir", type=str, required=True)
@@ -90,6 +94,30 @@ from rl_training.tasks.manager_based.locomotion.highlevel.config.home_mission.sc
     make_home_mission_workcell_camera,
     make_home_mission_wrist_camera,
 )
+from rl_training.tasks.manager_based.locomotion.highlevel.config.front_desk_pickup.scene_cfg import (  # noqa: E402
+    make_front_desk_pickup_front_camera,
+    make_front_desk_pickup_top_camera,
+    make_front_desk_pickup_workcell_camera,
+    make_front_desk_pickup_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.ward_delivery.scene_cfg import (  # noqa: E402
+    make_ward_delivery_front_camera,
+    make_ward_delivery_top_camera,
+    make_ward_delivery_workcell_camera,
+    make_ward_delivery_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.kitchen_drawer_serve.scene_cfg import (  # noqa: E402
+    make_kitchen_drawer_serve_front_camera,
+    make_kitchen_drawer_serve_top_camera,
+    make_kitchen_drawer_serve_workcell_camera,
+    make_kitchen_drawer_serve_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.supply_restock.scene_cfg import (  # noqa: E402
+    make_supply_restock_front_camera,
+    make_supply_restock_top_camera,
+    make_supply_restock_workcell_camera,
+    make_supply_restock_wrist_camera,
+)
 
 
 REGISTRY = {
@@ -114,6 +142,14 @@ REGISTRY = {
         "front": make_door_brace_front_camera,
         "wrist": make_door_brace_wrist_camera,
     },
+    "Isaac-M20-Piper-FrontDeskPickup-Teleop-v0": {
+        "prefix": "front_desk_pickup",
+        "top": make_front_desk_pickup_top_camera,
+        "workcell": make_front_desk_pickup_workcell_camera,
+        "front": make_front_desk_pickup_front_camera,
+        "wrist": make_front_desk_pickup_wrist_camera,
+        "fisheye_mount": (-0.44, 0.0, 0.58),
+    },
     "Isaac-M20-Piper-HighLowServe-Teleop-v0": {
         "prefix": "high_low_serve",
         "top": make_high_low_top_camera,
@@ -127,6 +163,30 @@ REGISTRY = {
         "workcell": make_home_mission_workcell_camera,
         "front": make_home_mission_front_camera,
         "wrist": make_home_mission_wrist_camera,
+    },
+    "Isaac-M20-Piper-KitchenDrawerServe-Teleop-v0": {
+        "prefix": "kitchen_drawer_serve",
+        "top": make_kitchen_drawer_serve_top_camera,
+        "workcell": make_kitchen_drawer_serve_workcell_camera,
+        "front": make_kitchen_drawer_serve_front_camera,
+        "wrist": make_kitchen_drawer_serve_wrist_camera,
+        "fisheye_mount": (-0.44, 0.0, 0.58),
+    },
+    "Isaac-M20-Piper-SupplyRestock-Teleop-v0": {
+        "prefix": "supply_restock",
+        "top": make_supply_restock_top_camera,
+        "workcell": make_supply_restock_workcell_camera,
+        "front": make_supply_restock_front_camera,
+        "wrist": make_supply_restock_wrist_camera,
+        "fisheye_mount": (-0.44, 0.0, 0.58),
+    },
+    "Isaac-M20-Piper-WardDelivery-Teleop-v0": {
+        "prefix": "ward_delivery",
+        "top": make_ward_delivery_top_camera,
+        "workcell": make_ward_delivery_workcell_camera,
+        "front": make_ward_delivery_front_camera,
+        "wrist": make_ward_delivery_wrist_camera,
+        "fisheye_mount": (-0.44, 0.0, 0.58),
     },
 }
 
@@ -197,7 +257,7 @@ def main() -> None:
         height=args_cli.fisheye_height,
         update_period=0.1,
         fov_deg=200.0,
-        mount_pos=(-0.44, 0.0, 0.34),
+        mount_pos=spec.get("fisheye_mount", (-0.44, 0.0, 0.34)),
         lens_offset=0.02,
         with_depth=False,
     )

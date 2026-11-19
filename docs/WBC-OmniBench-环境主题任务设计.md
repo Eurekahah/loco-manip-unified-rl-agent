@@ -3,16 +3,21 @@
 版本：v0.1  
 日期：2026-11-18
 
+> 实现进展：R1、H1、K1、H2 的场景、Teacher/Teleop/Collect 注册、相机和采集 profile
+> 已完成首版，详见 [环境主题任务实现记录](WBC-OmniBench-环境主题任务实现记录.md)。
+> 本页继续作为主题资产、布局和后续 L1 的设计基线。
+
 ## 1. 设计原则
 
 环境主题任务与通用核心任务分离。通用核心任务可以使用 `Simple_Room`，但环境主题任务
 必须使用各自对应的场景资产：
 
 - 接待厅主题加载 `Office` 场景资产；
-- 医院主题加载 `Hospital` 场景资产；
+- 医院主题加载 `Hospital` 场景资产，或其按空间裁剪得到的 `HospitalWard` 派生资产；
 - 厨房主题使用独立的 `KitchenRoom` 场景资产，不复用 `Simple_Room`；
 - 每个主题场景单独制作任务处理资产，包括台面、柜体、病床、托盘、碰撞体和目标区域；
-- 任务物体优先使用 YCB，家具和医疗道具优先使用 Isaac 自带资产；
+- 任务物体优先使用对应主题的官方资产；接待厅/厨房可继续使用 YCB，医院任务优先使用
+  Hospital Props 中的药品瓶、药盒和耗材容器；
 - 所有主题场景继续共享机器人、相机名称、动作空间、HDF5 schema 和评测入口。
 
 **禁止事项**：环境主题任务不得把 `Simple_Room` 作为 `room_scene` 加载，也不得在
@@ -46,7 +51,7 @@
 | 医疗柜 | `Environments/Hospital/Props/SM_MedicalCabinet_01a.usd` |
 | 耗材柜 | `Environments/Hospital/Props/SM_SupplyCabinet_01c.usd` |
 | 轮椅障碍 | `Environments/Hospital/Props/SM_WheelChair_01a.usd` |
-| 药品/样本代理 | YCB sugar box、mustard bottle、small can |
+| 药品/样本代理 | `Props/SM_PillBottleSet_01b.usd`、`Props/SM_BottleA.usd`；必要时包一层刚体根节点 |
 
 推荐布局：
 
@@ -54,6 +59,12 @@
 - 轮椅横放在通道一侧，形成局部窄道；
 - 目标在医疗柜或床头柜，目标托盘在病床另一侧；
 - 高位医疗柜迫使机器人调整机身高度和 pitch。
+
+医院整场景由约 1500 个顶层 prim 组成，直接加载全部楼层、走廊和重复病房会显著拖慢
+启动。实施时使用 `scripts/tools/crop_isaac_hospital_room.py` 按世界坐标裁剪单个病房，
+保留结构、纹理引用和当前任务需要的家具，输出为
+`source/rl_training/assets/hospital_ward.usda`。这是对官方 Hospital 的派生裁剪，
+不是 `Simple_Room` 回退。
 
 ### 2.3 厨房
 
@@ -199,7 +210,8 @@
 ## 6. 验收标准
 
 - 主题任务不得加载 `Simple_Room`；
-- 接待厅、医院、厨房任务分别加载 `Office`、`Hospital` 和 `KitchenRoom`；
+- 接待厅、医院、厨房任务分别加载 `Office`、`Hospital`/`HospitalWard` 和
+  `KitchenRoom`；
 - 每个主题场景包含自己的任务处理资产和可放置区域；
 - 主题道具不覆盖机器人出生点和主要相机视线；
 - 地板、墙面、天花板和主要家具均有纹理材质；

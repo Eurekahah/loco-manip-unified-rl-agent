@@ -54,6 +54,30 @@ from rl_training.tasks.manager_based.locomotion.highlevel.config.home_mission.sc
     make_home_mission_workcell_camera,
     make_home_mission_wrist_camera,
 )
+from rl_training.tasks.manager_based.locomotion.highlevel.config.front_desk_pickup.scene_cfg import (
+    make_front_desk_pickup_front_camera,
+    make_front_desk_pickup_top_camera,
+    make_front_desk_pickup_workcell_camera,
+    make_front_desk_pickup_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.ward_delivery.scene_cfg import (
+    make_ward_delivery_front_camera,
+    make_ward_delivery_top_camera,
+    make_ward_delivery_workcell_camera,
+    make_ward_delivery_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.kitchen_drawer_serve.scene_cfg import (
+    make_kitchen_drawer_serve_front_camera,
+    make_kitchen_drawer_serve_top_camera,
+    make_kitchen_drawer_serve_workcell_camera,
+    make_kitchen_drawer_serve_wrist_camera,
+)
+from rl_training.tasks.manager_based.locomotion.highlevel.config.supply_restock.scene_cfg import (
+    make_supply_restock_front_camera,
+    make_supply_restock_top_camera,
+    make_supply_restock_workcell_camera,
+    make_supply_restock_wrist_camera,
+)
 
 from .profiles import CollectionTaskProfile, register_collection_profile
 
@@ -216,5 +240,118 @@ register_collection_profile(
             "front_camera": make_home_mission_front_camera,
         },
         fast_robot_only_write=True,
+    )
+)
+
+
+register_collection_profile(
+    CollectionTaskProfile(
+        key="front_desk_pickup",
+        display_name="R1 FrontDeskPickup",
+        task_ids=("Isaac-M20-Piper-FrontDeskPickup-Collect-v0",),
+        output_dir="front_desk_pickup",
+        action_term_name="pre_trained_pick_action",
+        camera_factories={
+            "top_camera": make_front_desk_pickup_top_camera,
+            "wrist_camera": make_front_desk_pickup_wrist_camera,
+            "workcell_camera": make_front_desk_pickup_workcell_camera,
+            "front_camera": make_front_desk_pickup_front_camera,
+        },
+        tracked_entity_names=("object", "target_pad", "distractor_cracker", "distractor_can"),
+        fast_robot_only_write=True,
+        default_front_camera=True,
+        default_wrist_preview=True,
+        default_fisheye_rig="four",
+        fisheye_mount_pos=(-0.44, 0.0, 0.58),
+        extra_metadata={
+            "theme": "office_reception",
+            "pano_causal_condition": "reception desk starts behind the robot",
+            "body_arm_requirement": "reception-height transfer to visitor-side low table",
+        },
+    )
+)
+
+
+register_collection_profile(
+    CollectionTaskProfile(
+        key="ward_delivery",
+        display_name="H1 WardDelivery",
+        task_ids=("Isaac-M20-Piper-WardDelivery-Collect-v0",),
+        output_dir="ward_delivery",
+        action_term_name="pre_trained_pick_action",
+        camera_factories={
+            "top_camera": make_ward_delivery_top_camera,
+            "wrist_camera": make_ward_delivery_wrist_camera,
+            "workcell_camera": make_ward_delivery_workcell_camera,
+            "front_camera": make_ward_delivery_front_camera,
+        },
+        tracked_entity_names=("object", "target_pad", "distractor_bottle"),
+        fast_robot_only_write=True,
+        default_front_camera=True,
+        default_wrist_preview=True,
+        default_fisheye_rig="four",
+        fisheye_mount_pos=(-0.44, 0.0, 0.58),
+        extra_metadata={
+            "theme": "hospital_ward",
+            "pano_causal_condition": "medicine shelf starts outside the front view",
+            "body_arm_requirement": "high shelf to bedside table with wheelchair aisle",
+        },
+    )
+)
+
+
+register_collection_profile(
+    CollectionTaskProfile(
+        key="kitchen_drawer_serve",
+        display_name="K1 KitchenDrawerServe",
+        task_ids=("Isaac-M20-Piper-KitchenDrawerServe-Collect-v0",),
+        output_dir="kitchen_drawer_serve",
+        action_term_name="pre_trained_pick_action",
+        camera_factories={
+            "top_camera": make_kitchen_drawer_serve_top_camera,
+            "wrist_camera": make_kitchen_drawer_serve_wrist_camera,
+            "workcell_camera": make_kitchen_drawer_serve_workcell_camera,
+            "front_camera": make_kitchen_drawer_serve_front_camera,
+        },
+        tracked_entity_names=("object", "target_pad", "distractor_box"),
+        fast_robot_only_write=True,
+        default_front_camera=True,
+        default_wrist_preview=True,
+        default_fisheye_rig="four",
+        fisheye_mount_pos=(-0.44, 0.0, 0.58),
+        extra_metadata={
+            "theme": "kitchen_room",
+            "pano_causal_condition": "drawer, counter and upper-door constraint share one 360-degree scene",
+            "body_arm_requirement": "low drawer plus partially open overhead cabinet",
+        },
+    )
+)
+
+
+register_collection_profile(
+    CollectionTaskProfile(
+        key="supply_restock",
+        display_name="H2 SupplyRestock",
+        task_ids=("Isaac-M20-Piper-SupplyRestock-Collect-v0",),
+        output_dir="supply_restock",
+        action_term_name="pre_trained_pick_action",
+        camera_factories={
+            "top_camera": make_supply_restock_top_camera,
+            "wrist_camera": make_supply_restock_wrist_camera,
+            "workcell_camera": make_supply_restock_workcell_camera,
+            "front_camera": make_supply_restock_front_camera,
+        },
+        tracked_entity_names=("object", "target_pad", "distractor_bottle"),
+        fast_robot_only_write=True,
+        default_front_camera=True,
+        default_wrist_preview=True,
+        default_fisheye_rig="four",
+        fisheye_mount_pos=(-0.44, 0.0, 0.58),
+        extra_metadata={
+            "theme": "hospital_supply_room",
+            "pano_causal_condition": "high cabinet starts outside the front view",
+            "body_arm_requirement": "1.4 m shelf to floor tray through bed, wheelchair and cart",
+            "regrasp_policy": "one recovery attempt is permitted by the task protocol",
+        },
     )
 )
