@@ -45,8 +45,57 @@
 | 2026-11-17 | 新增 **DEF-072**：Fast HDF5 数采的 `common_step_counter` 未推进，50 步冒烟只写出 1 帧且所有 `sim_time` 都停在 0；补齐 `episode_length_buf/common_step_counter` 后，同一命令写出 10 帧、`sim_time=0..0.9`，并新增 Fast stepper 单测 | 本次（工作区） |
 | 2026-11-17 | 新增 **DEF-073**：对照 Isaac Lab 官方遥操与单环境 CPU 建议，Fast 遥操从 GPU 的 12.94 FPS 提升到 CPU 的 51.13 FPS；IK 默认由 200 Hz 降为与 10 ms target 对齐的 100 Hz，固定轨迹抖动同时下降；腕部相机 10 Hz 数采约 34.7-38.5 FPS | 本次（工作区） |
 | 2026-11-17 | 新增 **DEF-074**：Fast 数采读取 termination term 但从未 `compute()`，成功标志会一直是旧值；且自动成功后没有显式 reset，episode 不会切换。改为每控制周期计算 termination、先记录终止帧再 reset，并保留最后 termination 摘要供 episode finalize 使用 | 本次（工作区） |
+| 2026-11-22 | 新增 **DEF-075**：`HeightInvariantEECommand` 重采样终点 `pose_end_cart` 的更新被 `69ff05b` 插到 `reachability_check()` 的 `return bad` 之后，成为死代码 ⇒ EE 目标终点永不更新，History-Adaptation 训练 300 iters 摔倒率恒 ≈0.90；移回正常路径后 300 iters 降到 **0.080**（教师模式 100 iters **0.134**） | 本次（工作区）；引入 commit `69ff05b` |
 
 ---
+
+### DEF-075 `2026-11-22` EE 重采样终点 `pose_end_cart` 被 `return bad` 挡成死代码 —— History-Adaptation 训练全程摔倒率 ≈0.9、完全学不起来
+
+| 项 | 内容 |
+|---|---|
+| 类型 | **缺陷**（控制流插入位置错误 / 静默失效） |
+| 状态 | 已修（工作区，未提交）；`pose_end_cart` 更新已移回 `_resample_ee_goal()` 正常路径 |
+| 关联 | 引入 commit `69ff05b`；`velocity/mdp/commands.py`；验证 run `2026-11-22_01-05-38_diag_pose_end_fix300`、`2026-11-22_01-35-50_diag_pose_end_fix_teacher100` |
+
+**1. 现象**
+
+- 当前分支 `History-Adaptation-Deeprobotics-M20-v0`（4096 envs / headless）300 iters：`bad_orientation_2 + root_height_below_minimum` ≈ **0.90**，`mean_episode_length` ≈200，reward ≈6；9.30 参考 run（`cloud_cap12_20k`）同口径 300 iters 只有 **0.25**、ep_len 869、reward 19.9。
+- 与 `hist_encoding` 无关：教师模式（HEAD 默认 `hist_encoding=False`）≈0.904，学生模式（`hist_encoding=True`）≈0.921，两者都失效。
+- 关闭可达性过滤器（`urdf_path=None`）或删除 `reachability_check()` 调用仍失效；把 `commands.py` 整体换回 `7b57281` 则立刻正常。
+
+**2. 根因**
+
+`69ff05b` 在 `HeightInvariantEECommand` 中新增 `reachability_check()` 时，把原本位于 `_resample_ee_goal()` 末尾的：
+
+```python
+self.pose_end_cart[init_env_ids] = torch.cat(
+    [self.ee_end_pos_cart[init_env_ids], self.ee_end_orn_quat[init_env_ids]], dim=-1
+)
+```
+
+留在了新方法 `return bad` 之后，变成永不执行的死代码。于是每次重采样后 `_resample_ee_goal()` 只更新 `ee_end_pos_cart`，不再同步 `pose_end_cart`；`_resample_command()` 读到的 `pose_end_cart` 始终是旧值/零值 ⇒ EE 目标终点不更新，策略在错误的命令上学 300 iters，表现就是"怎么练都摔"。
+
+**3. 修正**
+
+- 将上述 3 行移回 `_resample_ee_goal()` 中 `self.ee_end_pos_cart[...] = sphere2cart(...)` 之后；
+- 删除 `reachability_check()` 中 `return bad` 之后的死代码；
+- 用 AST 扫描全仓 `return/raise/break/continue` 后的同层语句，确认无其它同类问题（0 处）。
+
+**4. 验证（4096 envs / seed 42 / headless）**
+
+| run | 口径 | iter 44-45 | iter 100 | iter 299-300 | peak |
+|---|---|---:|---:|---:|---:|
+| `hist_ctrl300`（修复前） | hist=True | 0.986 | 0.911 | 0.921 | 0.993 @63 |
+| `diag_pose_end_fix300`（修复后） | hist=True | 0.223 | 0.141 | **0.080** | 0.227 @43 |
+| `diag_pose_end_fix_teacher100`（修复后） | HEAD 教师模式 | 0.199 | **0.134** | — | — |
+| 9.30 `cloud_cap12_20k`（参考） | 旧代码 | 0.667 | 0.377 | 0.250 | 0.668 @47 |
+
+修复后 ep_len/reward 同步恢复：300 iters 时 ep_len 983、reward 36.3（修复前 189 / 5.9）。
+
+**5. 教训**
+
+- 在 `return` 前插入新方法时，必须检查被顶到后面的原方法尾部语句；建议 CI 加"不可达语句"静态检查。
+- 该 bug 不会被 `urdf_path=None` / 关可达过滤绕过：它与是否调用 `reachability_check()` 无关，只看 `pose_end_cart` 是否仍在正常执行路径上。
 
 ### DEF-074 `2026-11-17` Fast 数采 termination 未计算、自动成功后 episode 不切换
 

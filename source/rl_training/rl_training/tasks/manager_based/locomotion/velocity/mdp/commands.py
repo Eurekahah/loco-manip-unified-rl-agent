@@ -616,6 +616,9 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
                 break
         self._resample_ee_goal_orn(init_env_ids)
         self.ee_end_pos_cart[init_env_ids,:] = sphere2cart(self.ee_end_pos_sphere[init_env_ids,:])
+        self.pose_end_cart[init_env_ids] = torch.cat(
+            [self.ee_end_pos_cart[init_env_ids], self.ee_end_orn_quat[init_env_ids]], dim=-1
+        )  # (N, 7)
 
     def _build_reach_grid(self) -> None:
         """用 FK 采样建"末端位置可达占用栅格"（B2-①）。"""
@@ -688,9 +691,6 @@ class HeightInvariantEECommand(mdp.UniformPoseCommand):
             print(f"[EE reach] 已检查 {st['checked']} 个候选目标，其中不可达 "
                   f"{st['rejected']}（{frac:.1f}%）；重采样轮次 {st['attempts']}")
         return bad
-        self.pose_end_cart[init_env_ids] = torch.cat(
-            [self.ee_end_pos_cart[init_env_ids], self.ee_end_orn_quat[init_env_ids]], dim=-1
-        )  # (N, 7)
     
     @property
     def command(self) -> torch.Tensor:
