@@ -555,6 +555,12 @@ class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
 
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "FlatEnvWBCConfig":
+            # 2026-11-22：本任务取消 vx 课程（-1,1 -> -5,5），全程固定在 (-1,1)。
+            # 只作用于本类；V2/V4/消融等子类仍保留各自课程。
+            self.curriculum.base_velocity_lin_vel_x_s4 = None
+            self.curriculum.base_velocity_lin_vel_x_s5 = None
+            self.curriculum.base_velocity_lin_vel_x_s6 = None
+            self.curriculum.base_velocity_lin_vel_x_s7 = None
             self.disable_zero_weight_rewards()
 from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.deeprobotics_m20.rough_env_cfg import DeeproboticsM20RoughEnvCfg
 
