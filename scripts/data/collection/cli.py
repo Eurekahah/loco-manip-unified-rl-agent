@@ -80,6 +80,10 @@ def build_collection_parser(
         width_default=480,
         height_default=300,
         update_period_default=0.0,
+        rig_default="none",
+        show_wrist_default=False,
+        show_panorama_default=False,
+        show_front_default=False,
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--seed", type=int, default=42)

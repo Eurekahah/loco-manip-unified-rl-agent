@@ -134,8 +134,8 @@ conda run --no-capture-output -n env_isaac_lab python `
 
 - 前视：继续复用 `base_link` 前方 `(0.58, 0.0, 0.12)` 的 RGB-D 安装。
 - 腕部：继续复用 Piper `gripper_base` 安装。
-- 键盘 Teleop 默认 `--camera-view both`：主视口绑定 `front_camera`，随机器人移动和转向；
-  独立视口绑定 `wrist_camera`。`--show-panorama` 可再打开全景窗口。
+- 键盘/VR Teleop 默认 `--camera-view free`：主视口保持原来的自由相机位置；全景、腕部、
+  前视在底部自动排成一行。需要主视口跟随前视时再显式使用 `--camera-view chest/front/both`。
 - 全景：四个主题任务 profile 均将四路鱼眼 rig 提高到 `base_link=(-0.44, 0.0, 0.58) m`，
   避免低安装位被病床、轮椅或接待台遮挡。
 - 全景默认记录原始鱼眼 RGB；需要拼接图时加 `--record-panorama`。

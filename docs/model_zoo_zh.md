@@ -215,7 +215,7 @@ python scripts\teleoperation\teleop_m20_piper_vr.py --task Isaac-M20-Piper-Teleo
 :: 默认 render-interval=4（每个 env step 渲染一次，性能渲染模式）
 :: 若只关心控制、接受更低画面刷新率，可增大该值：
 python scripts\teleoperation\teleop_m20_piper_vr.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 --render-interval 8
-:: GUI 视角：free=自由，chest=胸前，wrist=腕部，both=胸前主视口+腕部独立视口
+:: GUI 视角：默认 free=自由；chest=胸前，wrist=腕部，both=胸前主视口 + 底部腕部预览
 python scripts\teleoperation\teleop_m20_piper_vr.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 --camera-view chest
 python scripts\teleoperation\teleop_m20_piper_vr.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 --camera-view wrist
 python scripts\teleoperation\teleop_m20_piper_vr.py --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 --camera-view both

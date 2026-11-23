@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 
 
-FISHEYE_RIG_CHOICES = ("none", "dual", "four")
+FISHEYE_RIG_CHOICES = ("none", "two", "dual", "four")
 PANORAMA_BACKEND_CHOICES = ("auto", "gpu", "cpu")
 HDF5_COMPRESSION_CHOICES = ("none", "lzf", "gzip1", "gzip4")
 
@@ -17,13 +17,20 @@ def add_fisheye_args(
     width_default: int = 480,
     height_default: int = 300,
     update_period_default: float = 0.0,
+    rig_default: str = "four",
+    show_wrist_default: bool = True,
+    show_panorama_default: bool = True,
+    show_front_default: bool = True,
 ) -> None:
     """Add optional dual/four fisheye sensor arguments to a script parser."""
     parser.add_argument(
         "--fisheye-rig",
         choices=FISHEYE_RIG_CHOICES,
-        default="none",
-        help="Optional fisheye rig: none, dual front/back, or four-camera horizontal ring.",
+        default=rig_default,
+        help=(
+            "Fisheye rig: four (default horizontal ring), two/dual (front/back), "
+            "or none to disable."
+        ),
     )
     parser.add_argument("--fisheye-width", type=int, default=width_default)
     parser.add_argument("--fisheye-height", type=int, default=height_default)
@@ -58,7 +65,7 @@ def add_fisheye_args(
         parser.add_argument(
             "--show-panorama",
             action=argparse.BooleanOptionalAction,
-            default=False,
+            default=show_panorama_default,
             help="Show the stitched equirectangular panorama in a separate omni.ui window.",
         )
         parser.add_argument("--panorama-width", type=int, default=960)
@@ -66,8 +73,11 @@ def add_fisheye_args(
         parser.add_argument(
             "--panorama-backend",
             choices=PANORAMA_BACKEND_CHOICES,
-            default="auto",
-            help="Panorama projection backend. auto uses CUDA when available and keeps CPU cv2.remap as fallback.",
+            default="gpu",
+            help=(
+                "Panorama projection backend. gpu falls back to CPU when CUDA is "
+                "unavailable; auto also prefers CUDA."
+            ),
         )
         parser.add_argument(
             "--panorama-display-hz",
@@ -79,9 +89,21 @@ def add_fisheye_args(
             "--panorama-window-pos",
             type=int,
             nargs=2,
-            default=(980, 80),
+            default=None,
             metavar=("X", "Y"),
-            help="Desktop panorama window position.",
+            help="Optional fixed panorama window position; default is the bottom row.",
+        )
+        parser.add_argument(
+            "--panorama-window-width",
+            type=int,
+            default=560,
+            help="Panorama preview width in desktop pixels.",
+        )
+        parser.add_argument(
+            "--panorama-window-height",
+            type=int,
+            default=280,
+            help="Panorama preview height in desktop pixels.",
         )
         parser.add_argument(
             "--record-panorama",
@@ -93,7 +115,7 @@ def add_fisheye_args(
     parser.add_argument(
         "--show-wrist-camera",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=show_wrist_default,
         help="Show the existing wrist sensor in a throttled omni.ui window.",
     )
     parser.add_argument(
@@ -105,22 +127,54 @@ def add_fisheye_args(
     parser.add_argument(
         "--wrist-window-width",
         type=int,
-        default=320,
+        default=240,
         help="Wrist preview width in desktop pixels.",
     )
     parser.add_argument(
         "--wrist-window-height",
         type=int,
-        default=320,
+        default=240,
         help="Wrist preview height in desktop pixels.",
     )
     parser.add_argument(
         "--wrist-window-pos",
         type=int,
         nargs=2,
-        default=(640, 80),
+        default=None,
         metavar=("X", "Y"),
-        help="Desktop wrist window position.",
+        help="Optional fixed wrist window position; default is the bottom row.",
+    )
+    parser.add_argument(
+        "--show-front-camera",
+        action=argparse.BooleanOptionalAction,
+        default=show_front_default,
+        help="Show the forward/chest camera in a throttled omni.ui window.",
+    )
+    parser.add_argument(
+        "--front-display-hz",
+        type=float,
+        default=20.0,
+        help="Maximum front-camera UI refresh rate.",
+    )
+    parser.add_argument(
+        "--front-window-width",
+        type=int,
+        default=320,
+        help="Front-camera preview width in desktop pixels.",
+    )
+    parser.add_argument(
+        "--front-window-height",
+        type=int,
+        default=240,
+        help="Front-camera preview height in desktop pixels.",
+    )
+    parser.add_argument(
+        "--front-window-pos",
+        type=int,
+        nargs=2,
+        default=None,
+        metavar=("X", "Y"),
+        help="Optional fixed front-camera window position; default is the bottom row.",
     )
     parser.add_argument(
         "--preview-hz",
@@ -195,20 +249,81 @@ def validate_fisheye_args(
         parser.error("--wrist-display-hz must be > 0")
     if args.wrist_window_width <= 0 or args.wrist_window_height <= 0:
         parser.error("--wrist-window-width and --wrist-window-height must be positive")
+    if args.front_display_hz <= 0.0:
+        parser.error("--front-display-hz must be > 0")
+    if args.front_window_width <= 0 or args.front_window_height <= 0:
+        parser.error(
+            "--front-window-width and --front-window-height must be positive"
+        )
     if args.writer_queue_size <= 0:
         parser.error("--writer-queue-size must be positive")
     if args.profile_interval <= 0.0:
         parser.error("--profile-interval must be > 0")
-    if args.show_wrist_camera and args.headless:
-        parser.error("--show-wrist-camera requires GUI; remove --headless")
+    if args.headless:
+        # GUI previews are meaningless without a window; disable them instead of
+        # failing so that headless collection keeps working with the new defaults.
+        args.show_wrist_camera = False
+        args.show_front_camera = False
+        if include_panorama:
+            args.show_panorama = False
     if include_panorama:
-        if args.show_panorama and args.fisheye_rig == "none":
-            parser.error("--show-panorama requires --fisheye-rig dual or four")
-        if args.show_panorama and args.headless:
-            parser.error("--show-panorama requires GUI; remove --headless")
+        if args.fisheye_rig == "none":
+            if args.show_panorama or args.record_panorama:
+                print(
+                    "[Teleop] --fisheye-rig none disables panorama preview/recording"
+                )
+            args.show_panorama = False
+            args.record_panorama = False
         if args.panorama_width <= 0 or args.panorama_height <= 0:
             parser.error("--panorama-width and --panorama-height must be positive")
+        if args.panorama_window_width <= 0 or args.panorama_window_height <= 0:
+            parser.error(
+                "--panorama-window-width and --panorama-window-height must be positive"
+            )
         if args.panorama_display_hz <= 0.0:
             parser.error("--panorama-display-hz must be > 0")
-        if args.record_panorama and args.fisheye_rig == "none":
-            parser.error("--record-panorama requires --fisheye-rig dual or four")
+
+
+def bottom_row_layout(
+    panels: list[tuple[int, int, int]],
+    *,
+    app_width: int = 1280,
+    app_height: int = 720,
+    margin: int = 12,
+    gap: int = 10,
+) -> list[tuple[int, int, int, int]]:
+    """Lay out ``(content_width, content_height, title_height)`` panels in one row.
+
+    The row is centred horizontally and anchored to the bottom edge of the app
+    window. If the requested panels are too wide they are scaled down together
+    so no two panels overlap.
+    """
+    if not panels:
+        return []
+    width = max(1, int(app_width))
+    height = max(1, int(app_height))
+    gap = max(0, int(gap))
+    margin = max(0, int(margin))
+
+    available = max(1, width - 2 * margin - gap * (len(panels) - 1))
+    requested = sum(max(1, int(panel[0])) for panel in panels)
+    scale = min(1.0, available / float(requested))
+
+    sizes = [
+        (
+            max(1, int(round(panel[0] * scale))),
+            max(1, int(round(panel[1] * scale))),
+            int(panel[2]),
+        )
+        for panel in panels
+    ]
+    total_width = sum(item[0] for item in sizes) + gap * (len(sizes) - 1)
+    max_height = max(item[1] + item[2] for item in sizes)
+    x = max(margin, (width - total_width) // 2)
+    y = max(margin, height - max_height - margin)
+
+    layout: list[tuple[int, int, int, int]] = []
+    for panel_width, panel_height, _ in sizes:
+        layout.append((x, y, panel_width, panel_height))
+        x += panel_width + gap
+    return layout

@@ -14,23 +14,50 @@ scripts/tools/fisheye_profiler.py  轻量 profiling
 [`fisheye_runtime_optimization_zh.md`](fisheye_runtime_optimization_zh.md)。
 任务与采集入口的隔离方式见
 [`demonstration_collection_architecture_zh.md`](demonstration_collection_architecture_zh.md)。
+键盘/VR 的完整默认行为、按键和任务清单见
+[`teleop_checklist_zh.md`](teleop_checklist_zh.md)。
 
-默认 `--fisheye-rig none`，不创建额外相机，原有脚本行为不变。可选：
+键盘/VR 遥操默认启用四路鱼眼和三个附加预览窗口；数据采集脚本仍保持按任务显式配置。
+可选模式：
 
 ```text
-none   不启用鱼眼
-dual   前后两路鱼眼，Scene key: fisheye_front, fisheye_back
-four   前左后右四路鱼眼，Scene key: fisheye_cam0..fisheye_cam3
+none      不启用鱼眼（遥操脚本用 --fisheye-rig none 关闭）
+two/dual 前后两路鱼眼，Scene key: fisheye_front, fisheye_back
+four      前左后右四路鱼眼，Scene key: fisheye_cam0..fisheye_cam3
 ```
 
 所有相机都是 `Robot/base_link` 的子 prim，会随 M20 机器人刚性移动。默认安装位置为
 `(-0.44, 0.0, 0.34) m`，即 `base_link` 尾部上方；单路理想等距鱼眼 FOV 为 200 度。
 
+### 遥操默认值
+
+以下参数不需要再写进命令：
+
+```text
+--num_envs 1
+--fisheye-rig four
+--fisheye-width 480 --fisheye-height 300
+--panorama-width 960 --panorama-height 480
+--panorama-backend gpu          # CUDA 不可用时自动回退 CPU
+--show-panorama
+--show-wrist-camera
+--show-front-camera
+--camera-view free              # 主视口保持原来的自由视角
+```
+
+GUI 会保留主视口的自由相机位置，并在底部自动排成一行：
+
+```text
+全景 560x280 | 腕部 240x240 | 前视 320x240
+```
+
+三个窗口按 1280x720 默认窗口居中排布，已计入窗口标题和边框，不会互相重叠；不需要
+手动拖拽。若显式传入 `--panorama-window-pos`、`--wrist-window-pos` 或
+`--front-window-pos`，则使用指定位置。headless 模式会自动关闭这些 UI 预览，不会因此报错。
+
 ## 遥操脚本
 
-以下三个脚本支持 `--fisheye-rig`、独立全景窗口
-`--show-panorama / --no-show-panorama` 和腕部 UI 窗口
-`--show-wrist-camera / --no-show-wrist-camera`：
+以下三个脚本支持 `--fisheye-rig`、全景/腕部/前视 UI 窗口：
 
 ```text
 scripts/teleoperation/teleop_m20_piper_keyboard.py
@@ -38,32 +65,27 @@ scripts/teleoperation/teleop_m20_piper_vr.py
 scripts/teleoperation/teleop_m20_loco_keyboard.py
 ```
 
-双路全景：
+默认四路全景（无需额外参数）：
 
 ```powershell
 python scripts\teleoperation\teleop_m20_piper_keyboard.py `
-  --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 `
-  --fisheye-rig dual --show-panorama --show-wrist-camera `
-  --fisheye-width 480 --fisheye-height 300 `
-  --panorama-width 960 --panorama-height 480 `
-  --panorama-backend gpu --panorama-display-hz 12 --wrist-display-hz 20
+  --task Isaac-M20-Piper-Teleop-History-v0
 ```
 
-四路全景：
+双路全景（切换前后相机）：
 
 ```powershell
-python scripts\teleoperation\teleop_m20_piper_vr.py `
-  --task Isaac-M20-Piper-Teleop-History-v0 --num_envs 1 `
-  --fisheye-rig four --show-panorama --show-wrist-camera `
-  --fisheye-width 480 --fisheye-height 300 `
-  --panorama-width 960 --panorama-height 480 `
-  --panorama-backend gpu --panorama-display-hz 12 --wrist-display-hz 20
+python scripts\teleoperation\teleop_m20_piper_keyboard.py `
+  --task Isaac-M20-Piper-Teleop-History-v0 `
+  --fisheye-rig two
 ```
 
-只采集/渲染鱼眼，不打开拼接窗口时，去掉 `--show-panorama` 即可。启用任一鱼眼模式后，
-脚本会自动设置 `enable_cameras=True`。`--rendering_mode` 默认就是 `balanced`；仍可用
-`--rendering_mode performance/quality` 覆盖。`--show-panorama` 和
-`--show-wrist-camera` 只能用于 GUI；headless 模式会报错。
+VR 默认命令相同，只需把脚本换成
+`scripts\teleoperation\teleop_m20_piper_vr.py`。启用任一鱼眼模式后脚本会自动设置
+`enable_cameras=True`。`--rendering_mode` 默认是 `balanced`；仍可用
+`--rendering_mode performance/quality` 覆盖。要关闭某个预览窗口，使用
+`--no-show-panorama`、`--no-show-wrist-camera` 或 `--no-show-front-camera`；
+要关闭鱼眼和全景，使用 `--fisheye-rig none`。
 
 ## 数据采集脚本
 
@@ -109,19 +131,30 @@ episodes/<episode>/camera/fisheye_cam3/rgb
 ## 常用参数
 
 ```text
---fisheye-rig {none,dual,four}   默认 none
+--fisheye-rig {none,two,dual,four} 遥操默认 four；two 是 dual 的别名
 --fisheye-width                  单路宽度，默认 480
 --fisheye-height                 单路高度，默认 300
 --fisheye-fov-deg                理想鱼眼全 FOV，默认 200
 --fisheye-mount-pos X Y Z        相对 base_link 的安装点
 --fisheye-lens-offset            双路前后镜头半间距，默认 0.02 m
 --fisheye-update-period          传感器更新周期；0 自动跟随预览/采样频率
---show-panorama                  遥操脚本显示独立等距柱面窗口
+--show-panorama                  遥操脚本默认开启全景窗口
 --panorama-width                 全景宽度，默认 960
 --panorama-height                全景高度，默认 480
---panorama-backend               auto / gpu / cpu，默认 auto
---show-wrist-camera              显示已有腕部 sensor 的 omni.ui 窗口
+--panorama-backend               auto / gpu / cpu，默认 gpu（不可用时回退 cpu）
+--panorama-window-width          全景窗口预览宽度，默认 560
+--panorama-window-height         全景窗口预览高度，默认 280
+--panorama-window-pos X Y        可选固定位置；默认自动底部排布
+--show-wrist-camera              遥操脚本默认开启腕部窗口
 --wrist-display-hz               腕部 UI 刷新率，默认 20
+--wrist-window-width             腕部窗口宽度，默认 240
+--wrist-window-height            腕部窗口高度，默认 240
+--wrist-window-pos X Y           可选固定位置；默认自动底部排布
+--show-front-camera              遥操脚本默认开启前视窗口
+--front-display-hz               前视 UI 刷新率，默认 20
+--front-window-width             前视窗口宽度，默认 320
+--front-window-height            前视窗口高度，默认 240
+--front-window-pos X Y           可选固定位置；默认自动底部排布
 --panorama-display-hz            全景 UI 刷新率，默认 12
 --preview-hz                     GUI 预览参考频率，默认 15
 --record-hz                      统一采样率，默认 10

@@ -15,6 +15,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.sensors import CameraCfg
 from scipy.spatial.transform import Rotation
 
+from fisheye_cli import bottom_row_layout
 from fisheye_equirect import (
     build_dual_fisheye_equirect_maps,
     build_four_ideal_fisheye_equirect_maps,
@@ -23,6 +24,10 @@ from fisheye_equirect import (
     remap_four_fisheye_to_equirect,
 )
 from fisheye_gpu import GpuFisheyePanorama
+
+
+PANORAMA_WINDOW_PADDING = (24, 52)
+CAMERA_WINDOW_PADDING = (20, 44)
 
 
 R_BASE_CAM0 = np.array(
@@ -176,6 +181,8 @@ def add_fisheye_rig(
     with_depth: bool = False,
 ) -> FisheyeRigSpec:
     """Attach the selected fisheye rig to an Isaac Lab scene config."""
+    if mode == "two":
+        mode = "dual"
     mount = np.asarray(mount_pos, dtype=np.float64)
     if mode == "none":
         return FisheyeRigSpec("none", (), width, height, fov_deg, lens_offset, with_depth)
@@ -314,7 +321,11 @@ class FisheyePanorama:
                 )
             self.backend = "gpu"
         elif backend == "gpu":
-            raise RuntimeError("GPU panorama requested but CUDA is not available")
+            print(
+                "[fisheye] GPU panorama requested but CUDA is not available; "
+                "falling back to CPU."
+            )
+            self.backend = "cpu"
         else:
             self.backend = "cpu"
 
@@ -437,15 +448,19 @@ class FisheyePanoramaWindow:
         width: int,
         height: int,
         *,
-        position: tuple[int, int] = (980, 80),
+        position: tuple[int, int] = (0, 0),
+        display_width: int | None = None,
+        display_height: int | None = None,
     ) -> None:
         import omni.ui as ui
 
+        display_width = width if display_width is None else display_width
+        display_height = height if display_height is None else display_height
         self._provider = ui.ByteImageProvider()
         self._window = ui.Window(
             f"M20 Fisheye Panorama - {spec.mode}",
-            width=width + 24,
-            height=height + 52,
+            width=display_width + 24,
+            height=display_height + 52,
             position_x=int(position[0]),
             position_y=int(position[1]),
             raster_policy=ui.RasterPolicy.NEVER,
@@ -453,7 +468,11 @@ class FisheyePanoramaWindow:
         with self._window.frame:
             with ui.VStack(spacing=4):
                 ui.Label(f"{spec.mode} -> {width}x{height} equirectangular")
-                ui.ImageWithProvider(self._provider, width=width, height=height)
+                ui.ImageWithProvider(
+                    self._provider,
+                    width=display_width,
+                    height=display_height,
+                )
 
     def update(self, rgb: np.ndarray) -> None:
         rgb = _as_rgb(rgb)
@@ -483,11 +502,21 @@ class TeleopFisheyeDisplay:
         wrist_display_hz: float = 20.0,
         panorama_display_hz: float = 12.0,
         preview_hz: float = 15.0,
-        panorama_backend: str = "auto",
-        wrist_window_width: int = 320,
-        wrist_window_height: int = 320,
-        wrist_window_pos: tuple[int, int] = (640, 80),
-        panorama_window_pos: tuple[int, int] = (980, 80),
+        panorama_backend: str = "gpu",
+        wrist_window_width: int = 240,
+        wrist_window_height: int = 240,
+        wrist_window_pos: tuple[int, int] | None = None,
+        panorama_window_width: int | None = None,
+        panorama_window_height: int | None = None,
+        panorama_window_pos: tuple[int, int] | None = None,
+        show_front_camera: bool = False,
+        front_scene_key: str = "front_camera",
+        front_display_hz: float = 20.0,
+        front_window_width: int = 320,
+        front_window_height: int = 240,
+        front_window_pos: tuple[int, int] | None = None,
+        app_width: int = 1280,
+        app_height: int = 720,
         record_panorama: bool = False,
         profiler=None,
         ui_snapshot_dir: str | None = None,
@@ -496,18 +525,26 @@ class TeleopFisheyeDisplay:
         self.panorama = None
         self.panorama_window = None
         self.wrist_window = None
+        self.front_window = None
         self.wrist_scene_key = wrist_scene_key
+        self.front_scene_key = front_scene_key
         self.wrist_display_hz = float(wrist_display_hz)
+        self.front_display_hz = float(front_display_hz)
         self.panorama_display_hz = float(panorama_display_hz)
         self._profiler = profiler
         self._last_wrist_update = -float("inf")
+        self._last_front_update = -float("inf")
         self._last_panorama_update = -float("inf")
         self._last_wrist_frame = -1
+        self._last_front_frame = -1
         self._last_panorama_frame = -1
         self._last_wrist_rgb: np.ndarray | None = None
+        self._last_front_rgb: np.ndarray | None = None
         self._last_panorama_rgb: np.ndarray | None = None
         self._wrist_updates = 0
+        self._front_updates = 0
         self._panorama_updates = 0
+        self._front_missing_warned = False
         self.ui_snapshot_dir = ui_snapshot_dir
         self._panorama_cache: tuple[tuple[int, ...], np.ndarray] | None = None
 
@@ -518,19 +555,99 @@ class TeleopFisheyeDisplay:
                 equirect_height=panorama_height,
                 backend=panorama_backend,
             )
+
+        panorama_display_width = panorama_window_width or panorama_width
+        panorama_display_height = panorama_window_height or panorama_height
+        panels: list[dict] = []
         if show_panorama and self.panorama is not None:
-            self.panorama_window = FisheyePanoramaWindow(
-                spec,
-                panorama_width,
-                panorama_height,
-                position=panorama_window_pos,
+            panels.append(
+                {
+                    "kind": "panorama",
+                    "width": panorama_display_width,
+                    "height": panorama_display_height,
+                    "frame_width": PANORAMA_WINDOW_PADDING[0],
+                    "frame_height": PANORAMA_WINDOW_PADDING[1],
+                    "pos": panorama_window_pos,
+                }
             )
         if show_wrist_camera:
-            self.wrist_window = CameraUiWindow(
-                "M20 Wrist Camera",
-                width=wrist_window_width,
-                height=wrist_window_height,
-                position=wrist_window_pos,
+            panels.append(
+                {
+                    "kind": "wrist",
+                    "width": wrist_window_width,
+                    "height": wrist_window_height,
+                    "frame_width": CAMERA_WINDOW_PADDING[0],
+                    "frame_height": CAMERA_WINDOW_PADDING[1],
+                    "pos": wrist_window_pos,
+                }
+            )
+        if show_front_camera:
+            panels.append(
+                {
+                    "kind": "front",
+                    "width": front_window_width,
+                    "height": front_window_height,
+                    "frame_width": CAMERA_WINDOW_PADDING[0],
+                    "frame_height": CAMERA_WINDOW_PADDING[1],
+                    "pos": front_window_pos,
+                }
+            )
+        if panels and any(panel["pos"] is None for panel in panels):
+            # ``ui.Window`` adds a frame/title margin around the image. Lay out
+            # the outer window rectangles so that neighbouring previews cannot
+            # overlap even when the default positions are used.
+            layout = bottom_row_layout(
+                [
+                    (
+                        panel["width"] + panel["frame_width"],
+                        panel["height"] + panel["frame_height"],
+                        0,
+                    )
+                    for panel in panels
+                ],
+                app_width=app_width,
+                app_height=app_height,
+            )
+            for panel, (x, y, outer_width, outer_height) in zip(panels, layout):
+                if panel["pos"] is None:
+                    panel["pos"] = (x, y)
+                panel["width"] = max(1, outer_width - panel["frame_width"])
+                panel["height"] = max(1, outer_height - panel["frame_height"])
+
+        for panel in panels:
+            if panel["kind"] == "panorama":
+                self.panorama_window = FisheyePanoramaWindow(
+                    spec,
+                    panorama_width,
+                    panorama_height,
+                    position=tuple(panel["pos"]),
+                    display_width=panel["width"],
+                    display_height=panel["height"],
+                )
+            elif panel["kind"] == "wrist":
+                self.wrist_window = CameraUiWindow(
+                    "M20 Wrist Camera",
+                    width=panel["width"],
+                    height=panel["height"],
+                    position=tuple(panel["pos"]),
+                )
+            elif panel["kind"] == "front":
+                self.front_window = CameraUiWindow(
+                    "M20 Front Camera",
+                    width=panel["width"],
+                    height=panel["height"],
+                    position=tuple(panel["pos"]),
+                )
+
+        if panels:
+            print(
+                "[Teleop] camera windows: "
+                + ", ".join(
+                    f"{panel['kind']}@{panel['pos'][0]},{panel['pos'][1]}"
+                    f" ({panel['width']}x{panel['height']})"
+                    for panel in panels
+                ),
+                flush=True,
             )
 
     def update(self, env) -> None:
@@ -546,6 +663,29 @@ class TeleopFisheyeDisplay:
                         self._update_wrist(env)
                 self._last_wrist_update = now
                 self._last_wrist_frame = frame
+
+        if self.front_window is not None:
+            if self.front_scene_key not in getattr(env.scene, "sensors", {}):
+                if not self._front_missing_warned:
+                    print(
+                        f"[Teleop] front camera '{self.front_scene_key}' is not in the "
+                        "scene; front preview window disabled",
+                        flush=True,
+                    )
+                    self._front_missing_warned = True
+                self.front_window.close()
+                self.front_window = None
+            else:
+                frame = _sensor_frame(env, self.front_scene_key)
+                due = now - self._last_front_update >= 1.0 / self.front_display_hz
+                if due and frame != self._last_front_frame:
+                    if self._profiler is None:
+                        self._update_front(env)
+                    else:
+                        with self._profiler.measure("front_ui_ms"):
+                            self._update_front(env)
+                    self._last_front_update = now
+                    self._last_front_frame = frame
 
         if self.panorama_window is not None and self.panorama is not None:
             frames = tuple(_sensor_frame(env, key) for key in self.spec.scene_keys)
@@ -568,6 +708,16 @@ class TeleopFisheyeDisplay:
         self.wrist_window.update(rgb)
         self._last_wrist_rgb = rgb.copy()
         self._wrist_updates += 1
+
+    def _update_front(self, env) -> None:
+        sensor = env.scene.sensors[self.front_scene_key]
+        rgb = sensor.data.output["rgb"][0]
+        if isinstance(rgb, torch.Tensor):
+            rgb = rgb.detach().cpu().numpy()
+        rgb = _as_rgb(rgb)
+        self.front_window.update(rgb)
+        self._last_front_rgb = rgb.copy()
+        self._front_updates += 1
 
     def _update_panorama_window(self, env) -> None:
         if self.panorama.gpu is not None:
@@ -620,6 +770,9 @@ class TeleopFisheyeDisplay:
         if self.wrist_window is not None:
             self.wrist_window.close()
             self.wrist_window = None
+        if self.front_window is not None:
+            self.front_window.close()
+            self.front_window = None
 
     def status(self) -> dict:
         return {
@@ -629,11 +782,18 @@ class TeleopFisheyeDisplay:
             "panorama_window_visible": bool(
                 self.panorama_window is not None and self.panorama_window._window.visible
             ),
+            "front_window_visible": bool(
+                self.front_window is not None and self.front_window._window.visible
+            ),
             "wrist_updates": self._wrist_updates,
+            "front_updates": self._front_updates,
             "panorama_updates": self._panorama_updates,
             "wrist_shape": None
             if self._last_wrist_rgb is None
             else list(self._last_wrist_rgb.shape),
+            "front_shape": None
+            if self._last_front_rgb is None
+            else list(self._last_front_rgb.shape),
             "panorama_shape": None
             if self._last_panorama_rgb is None
             else list(self._last_panorama_rgb.shape),
@@ -653,6 +813,10 @@ class TeleopFisheyeDisplay:
             wrist_path = os.path.join(output_dir, "wrist_ui.png")
             cv2.imwrite(wrist_path, cv2.cvtColor(self._last_wrist_rgb, cv2.COLOR_RGB2BGR))
             status["wrist_snapshot"] = wrist_path
+        if self._last_front_rgb is not None:
+            front_path = os.path.join(output_dir, "front_ui.png")
+            cv2.imwrite(front_path, cv2.cvtColor(self._last_front_rgb, cv2.COLOR_RGB2BGR))
+            status["front_snapshot"] = front_path
         if self._last_panorama_rgb is not None:
             panorama_path = os.path.join(output_dir, "panorama_ui.png")
             cv2.imwrite(

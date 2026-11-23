@@ -20,9 +20,10 @@
        └─ reset/exit 时 finalize 并 flush
 ```
 
-主 viewport 保持自由视角。腕部窗口直接读取已有 `wrist_camera` sensor，全景窗口只读取
-四路鱼眼 sensor；两者都没有额外创建 camera render product。`--camera-view both` 仍保留
-旧的独立腕部 viewport 路径，但那是显式启用，不属于默认采集布局。
+主 viewport 默认保持自由视角，并保留原来的自由相机位置。全景、腕部、前视三个预览窗口
+直接读取已有传感器，不额外创建 camera render product；三者默认沿窗口底部自动排成一行，
+并计入窗口标题/边框，因此彼此不重叠。`--camera-view chest/front/wrist/both` 只改变
+主视口绑定的相机，不会再额外创建独立腕部 viewport。
 
 ## 新增参数
 
@@ -31,21 +32,26 @@
 --preview-hz                        GUI 预览参考频率，默认 15 Hz
 --wrist-display-hz                  腕部窗口刷新率，默认 20 Hz
 --panorama-display-hz               全景窗口刷新率，默认 12 Hz
---show-wrist-camera                 显示腕部 omni.ui 窗口
---show-panorama                     显示全景 omni.ui 窗口
---panorama-backend {auto,gpu,cpu}   默认 auto，CUDA 可用时使用 GPU
+--front-display-hz                  前视窗口刷新率，默认 20 Hz
+--show-wrist-camera                 遥操默认开启腕部 omni.ui 窗口
+--show-panorama                     遥操默认开启全景 omni.ui 窗口
+--show-front-camera                 遥操默认开启前视 omni.ui 窗口
+--panorama-backend {auto,gpu,cpu}   默认 gpu，CUDA 不可用时自动回退 CPU
 --record-panorama                   可选保存拼接全景，默认关闭
 --compression {none,lzf,gzip1,gzip4}
 --async-write / --no-async-write
 --writer-queue-size                 默认 8 帧
 --profile-json                      profiling JSON 输出路径
 --profile-interval                  JSON 快照间隔，默认 5 秒
---ui-snapshot-dir                   保存主 viewport、腕部 UI、全景 UI 验证图
---wrist-window-width/height/pos     腕部 UI 尺寸和位置
---panorama-window-pos               全景 UI 位置
+--ui-snapshot-dir                   保存主 viewport、腕部/前视/全景 UI 验证图
+--wrist-window-width/height/pos     腕部 UI 尺寸和位置，默认 240x240 + 自动位置
+--front-window-width/height/pos     前视 UI 尺寸和位置，默认 320x240 + 自动位置
+--panorama-window-width/height/pos  全景 UI 尺寸和位置，默认 560x280 + 自动位置
 ```
 
-`--fisheye-rig none` 时默认仍不创建鱼眼、腕部 UI 或全景对象，保持旧命令行为。
+键盘和 VR 遥操的默认鱼眼模式是 `four`；`--fisheye-rig two`（等价 `dual`）切换为前后
+双路。`--fisheye-rig none` 会关闭鱼眼、全景和全景录制。数据采集仍由任务 profile 决定
+默认鱼眼配置；headless 模式会自动关闭所有 UI 预览。
 
 ## GPU 全景
 

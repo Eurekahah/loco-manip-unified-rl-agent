@@ -181,7 +181,7 @@ def run_collection(
         "--no-show-wrist-camera",
     ):
         args_cli.show_wrist_camera = True
-    if profile.default_fisheye_rig != "none" and not _cli_option_was_provided("--fisheye-rig"):
+    if not _cli_option_was_provided("--fisheye-rig"):
         args_cli.fisheye_rig = profile.default_fisheye_rig
 
     record_period = 1.0 / float(args_cli.record_hz)
@@ -333,6 +333,11 @@ def run_collection(
 
     recorder = getattr(env, profile.recorder_attr_name)
     recorder.set_profiler(profiler)
+    main_viewport_follows_front = bool(
+        not args_cli.headless
+        and args_cli.follow_robot
+        and "front_camera" in camera_names
+    )
     fisheye_display = TeleopFisheyeDisplay(
         fisheye_spec,
         show_panorama=args_cli.show_panorama,
@@ -346,8 +351,19 @@ def run_collection(
         panorama_backend=args_cli.panorama_backend,
         wrist_window_width=args_cli.wrist_window_width,
         wrist_window_height=args_cli.wrist_window_height,
-        wrist_window_pos=tuple(args_cli.wrist_window_pos),
-        panorama_window_pos=tuple(args_cli.panorama_window_pos),
+        wrist_window_pos=tuple(args_cli.wrist_window_pos) if args_cli.wrist_window_pos else None,
+        panorama_window_width=args_cli.panorama_window_width,
+        panorama_window_height=args_cli.panorama_window_height,
+        panorama_window_pos=tuple(args_cli.panorama_window_pos) if args_cli.panorama_window_pos else None,
+        show_front_camera=bool(args_cli.front_camera and args_cli.show_front_camera)
+        and not main_viewport_follows_front,
+        front_scene_key="front_camera",
+        front_display_hz=args_cli.front_display_hz,
+        front_window_width=args_cli.front_window_width,
+        front_window_height=args_cli.front_window_height,
+        front_window_pos=tuple(args_cli.front_window_pos) if args_cli.front_window_pos else None,
+        app_width=args_cli.width,
+        app_height=args_cli.height,
         record_panorama=args_cli.record_panorama,
         profiler=profiler,
         ui_snapshot_dir=args_cli.ui_snapshot_dir,

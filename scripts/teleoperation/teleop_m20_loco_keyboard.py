@@ -18,7 +18,14 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--task", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=1)
 parser.add_argument("--max-steps", type=int, default=0, help="Stop after N environment steps; 0 runs until exit.")
-add_fisheye_args(parser, include_panorama=True)
+add_fisheye_args(
+    parser,
+    include_panorama=True,
+    rig_default="none",
+    show_wrist_default=False,
+    show_panorama_default=False,
+    show_front_default=False,
+)
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(rendering_mode="performance")
 args = parser.parse_args()
@@ -27,6 +34,8 @@ if args.max_steps < 0:
     parser.error("--max-steps must be >= 0")
 if args.show_wrist_camera:
     parser.error("--show-wrist-camera is not available in this locomotion-only script")
+if args.show_front_camera:
+    parser.error("--show-front-camera is not available in this locomotion-only script")
 args.enable_cameras = bool(
     getattr(args, "enable_cameras", False)
     or args.fisheye_rig != "none"
@@ -109,7 +118,11 @@ def main():
         panorama_display_hz=args.panorama_display_hz,
         preview_hz=args.preview_hz,
         panorama_backend=args.panorama_backend,
-        panorama_window_pos=tuple(args.panorama_window_pos),
+        panorama_window_width=args.panorama_window_width,
+        panorama_window_height=args.panorama_window_height,
+        panorama_window_pos=tuple(args.panorama_window_pos) if args.panorama_window_pos else None,
+        app_width=args.width,
+        app_height=args.height,
         profiler=profiler,
         ui_snapshot_dir=args.ui_snapshot_dir,
     )

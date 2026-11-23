@@ -39,7 +39,10 @@ parser.add_argument(
     "--camera-view",
     choices=("free", "chest", "wrist", "both"),
     default="free",
-    help="GUI 视角：free=自由视角，chest=胸前，wrist=腕部，both=胸前主视口 + 独立腕部视口。",
+    help=(
+        "主视口：free=自由视角（默认，保持原位置），chest/both=胸前，"
+        "wrist=腕部；全景/腕部/前视另外在底部一排小窗口显示。"
+    ),
 )
 parser.add_argument("--max-steps", type=int, default=0, help="Stop after N environment steps; 0 runs until exit.")
 parser.add_argument(
@@ -119,6 +122,7 @@ args.enable_cameras = bool(
     or camera_view != "free"
     or args.show_panorama
     or args.show_wrist_camera
+    or args.show_front_camera
 )
 app_launcher = AppLauncher(args)
 simulation_app = app_launcher.app
@@ -134,11 +138,14 @@ from fast_teleop import DetailedStepProfiler, FastTeleopStepper
 
 
 class _TeleopCameraRig:
-    """Drive the main GUI viewport and an optional second wrist viewport."""
+    """Optionally bind the main GUI viewport to the chest/wrist camera.
+
+    The default is ``free``: the main viewport keeps its original free camera
+    while panorama/front/wrist previews live in the bottom-row UI windows.
+    """
 
     def __init__(self, env, mode: str):
         self.mode = mode
-        self.extra_viewport = None
 
         if mode == "free":
             return
@@ -165,22 +172,8 @@ class _TeleopCameraRig:
             viewport_api=active_viewport,
         )
 
-        if mode == "both":
-            from isaacsim.core.utils.viewports import create_viewport_for_camera
-
-            self.extra_viewport = create_viewport_for_camera(
-                "Wrist Camera",
-                arm_camera_path,
-                width=640,
-                height=480,
-                position_x=80,
-                position_y=80,
-            )
-
     def close(self):
-        if self.extra_viewport is not None:
-            self.extra_viewport.destroy()
-            self.extra_viewport = None
+        return
 
 
 def main():
@@ -192,31 +185,37 @@ def main():
         parser.error("--render-interval 必须 >= 1")
     env_cfg.sim.render_interval = int(args.render_interval)
 
-    if camera_view != "free" or args.show_wrist_camera:
-        if camera_view in {"chest", "both"}:
-            from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import (
-                HighLevelSceneCfg,
-            )
+    main_shows_front = camera_view in {"chest", "both"}
+    main_shows_wrist = camera_view == "wrist"
+    needs_front_camera = main_shows_front or args.show_front_camera
+    needs_wrist_camera = main_shows_wrist or args.show_wrist_camera
+    if needs_front_camera:
+        from rl_training.tasks.manager_based.locomotion.highlevel.high_level_env_cfg import (
+            HighLevelSceneCfg,
+        )
 
-            reference_scene_cfg = HighLevelSceneCfg(
-                num_envs=args.num_envs, env_spacing=5.0
-            )
-            nav_cfg = copy.deepcopy(reference_scene_cfg.nav_camera)
-            nav_cfg.prim_path = "{ENV_REGEX_NS}/Robot/base_link/nav_camera"
-            nav_cfg.data_types = ["rgb"]
-            env_cfg.scene.nav_camera = nav_cfg
-        if camera_view in {"wrist", "both"} or args.show_wrist_camera:
-            from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place.scene_cfg import (
-                make_wrist_camera,
-            )
+        reference_scene_cfg = HighLevelSceneCfg(
+            num_envs=args.num_envs, env_spacing=5.0
+        )
+        nav_cfg = copy.deepcopy(reference_scene_cfg.nav_camera)
+        nav_cfg.prim_path = "{ENV_REGEX_NS}/Robot/base_link/nav_camera"
+        nav_cfg.data_types = ["rgb"]
+        nav_cfg.update_period = 0.0
+        nav_cfg.width = max(160, int(args.front_window_width))
+        nav_cfg.height = max(120, int(args.front_window_height))
+        env_cfg.scene.nav_camera = nav_cfg
+    if needs_wrist_camera:
+        from rl_training.tasks.manager_based.locomotion.highlevel.config.low_shelf_place.scene_cfg import (
+            make_wrist_camera,
+        )
 
-            arm_cfg = make_wrist_camera(
-                width=224,
-                height=224,
-                update_period=0.0,
-            )
-            arm_cfg.data_types = ["rgb"]
-            env_cfg.scene.arm_camera = arm_cfg
+        arm_cfg = make_wrist_camera(
+            width=224,
+            height=224,
+            update_period=0.0,
+        )
+        arm_cfg.data_types = ["rgb"]
+        env_cfg.scene.arm_camera = arm_cfg
 
     fisheye_spec = add_fisheye_rig(
         env_cfg,
@@ -268,7 +267,7 @@ def main():
         show_panorama=args.show_panorama,
         panorama_width=args.panorama_width,
         panorama_height=args.panorama_height,
-        show_wrist_camera=args.show_wrist_camera,
+        show_wrist_camera=args.show_wrist_camera and not main_shows_wrist,
         wrist_scene_key="arm_camera",
         wrist_display_hz=args.wrist_display_hz,
         panorama_display_hz=args.panorama_display_hz,
@@ -276,8 +275,18 @@ def main():
         panorama_backend=args.panorama_backend,
         wrist_window_width=args.wrist_window_width,
         wrist_window_height=args.wrist_window_height,
-        wrist_window_pos=tuple(args.wrist_window_pos),
-        panorama_window_pos=tuple(args.panorama_window_pos),
+        wrist_window_pos=tuple(args.wrist_window_pos) if args.wrist_window_pos else None,
+        panorama_window_width=args.panorama_window_width,
+        panorama_window_height=args.panorama_window_height,
+        panorama_window_pos=tuple(args.panorama_window_pos) if args.panorama_window_pos else None,
+        show_front_camera=args.show_front_camera and not main_shows_front,
+        front_scene_key="nav_camera",
+        front_display_hz=args.front_display_hz,
+        front_window_width=args.front_window_width,
+        front_window_height=args.front_window_height,
+        front_window_pos=tuple(args.front_window_pos) if args.front_window_pos else None,
+        app_width=args.width,
+        app_height=args.height,
         profiler=profiler,
         ui_snapshot_dir=args.ui_snapshot_dir,
     )
