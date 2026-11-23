@@ -44,9 +44,13 @@ class WBCCommandsCfg(DeeproboticsM20CommandsCfg):
         # ---- pitch：通常保持水平，偶尔俯身 ----
         # mean=0.0°, std≈4.6°, range=(-20.1°, 20.1°)
         pitch_range=(-0.35, 0.35),
-        # ---- roll：通常保持水平，偶尔侧身 ----
-        # mean=0.0°, std≈3.4°, range=(-14.3°, 14.3°)
-        roll_range=(-0.25, 0.25),
+        # ---- roll：本实验取消侧倾控制，但保留 roll 维度 ----
+        roll_range=(0.0, 0.0),
+        default_height=0.513,
+        default_pitch=0.0,
+        default_roll=0.0,
+        # 默认姿态与随机姿态 1:1
+        rel_default_pose_envs=0.5,
         resampling_time_range=(10.0, 10.0),
         asset_cfg= SceneEntityCfg("robot"),
         feet_cfg= SceneEntityCfg("robot", body_names=".*wheel"),
@@ -289,17 +293,8 @@ class WBCCurriculumCfg(DeeproboticsM20CurriculumsCfg):
             },
         },
     )
-    body_pose_roll_range_s3: CurrTerm = CurrTerm(
-        func=mdp.modify_term_cfg,
-        params={
-            "address": "commands.body_pose.roll_range",
-            "modify_fn": mdp.override_value,
-            "modify_params": {
-                "value": (-0.25, 0.25),
-                "num_steps": 50_000,
-            },
-        },
-    )
+    # 本实验关闭 roll 课程：roll 命令始终保持为 0，但保留该命令维度。
+    body_pose_roll_range_s3: CurrTerm = None
 
     # ── Stage 2：1M步后提升 height 奖励权重 ──────────────────────
     body_height_rew_s2: CurrTerm = CurrTerm(
@@ -320,14 +315,7 @@ class WBCCurriculumCfg(DeeproboticsM20CurriculumsCfg):
             "num_steps": 50_000,
         },
     )
-    body_roll_rew_s3: CurrTerm = CurrTerm(
-        func=mdp.modify_reward_weight,
-        params={
-            "term_name": "body_roll_tracking",
-            "weight":    0.8,
-            "num_steps": 50_000,
-        },
-    )
+    body_roll_rew_s3: CurrTerm = None
 
     # ── Stage 4：75k步后 v_x 范围升级到 (-2, 2) ──────────────────
     base_velocity_lin_vel_x_s4: CurrTerm = CurrTerm(
@@ -553,6 +541,16 @@ class FlatEnvWBCConfig(DeeproboticsM20FlatEnvCfg):
         self.commands.ee_pose.ranges.o_pitch = (0.0, 0.0)
         self.commands.ee_pose.ranges.o_yaw = (0.0, 0.0)
 
+        # 遥操作式分层速度采样：0.20 静止 + 0.15 vx + 0.15 vy + 0.15 yaw
+        # + 0.35 三维均匀。静止比例已由专项采样覆盖，不再额外叠加 rel_standing_envs。
+        if self.__class__.__name__ in ("FlatEnvWBCConfig", "FlatEnvWBCConfig_PLAY"):
+            self.commands.base_velocity.rel_zero_cmd_envs = 0.2
+            self.commands.base_velocity.rel_only_lin_x_envs = 0.15
+            self.commands.base_velocity.rel_only_lin_y_envs = 0.15
+            self.commands.base_velocity.rel_only_ang_z_envs = 0.15
+            self.commands.base_velocity.rel_standing_envs = 0.0
+            self.curriculum.standing_env_ratio_ramp = None
+
         # If the weight of rewards is 0, set rewards to None
         if self.__class__.__name__ == "FlatEnvWBCConfig":
             # 2026-11-22：本任务取消 vx 课程（-1,1 -> -5,5），全程固定在 (-1,1)。
@@ -634,21 +632,21 @@ class FlatEnvWBCConfig_PLAY(FlatEnvWBCConfig):
         self.commands.ee_pose.ranges.o_roll = (-math.pi / 8, math.pi / 8)
         self.commands.ee_pose.ranges.o_pitch = (-math.pi / 8, math.pi / 8)
         self.commands.ee_pose.ranges.o_yaw = (-math.pi, math.pi)
-        self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.0)
-        self.commands.base_velocity.ranges.lin_vel_y = (-1.0, 1.0)
-        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
+        self.commands.base_velocity.ranges.lin_vel_x = (0.0, 0.0)
+        self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
         self.commands.body_pose.height_range = (0.33, 0.55)
-        self.commands.body_pose.pitch_range = (-0.35, 0.35)
-        self.commands.body_pose.roll_range = (-0.25, 0.25)
+        self.commands.body_pose.pitch_range = (0.0, 0.0)
+        self.commands.body_pose.roll_range = (0.0, 0.0)
         self.curriculum.base_velocity_lin_vel_x_s4 = None
         self.curriculum.base_velocity_lin_vel_x_s5 = None
         self.curriculum.base_velocity_lin_vel_x_s6 = None
         self.curriculum.base_velocity_lin_vel_x_s7 = None
-        # 静止伫立：PLAY 直接用终态（占比 0.15 + 满权重），不做爬升
+        # 静止伫立：零速度占比由分层采样的 0.20 专项样本覆盖，不再额外叠加。
         self.curriculum.standing_env_ratio_ramp = None
         self.curriculum.stand_still_vel_ramp = None
         self.curriculum.stand_still_wheel_vel_ramp = None
-        self.commands.base_velocity.rel_standing_envs = 0.15
+        self.commands.base_velocity.rel_standing_envs = 0.0
         self.rewards.stand_still_vel.weight = -2.0
         self.rewards.stand_still_wheel_vel.weight = -0.0005
         
@@ -680,7 +678,7 @@ class RoughEnvWBCConfig_PLAY(RoughEnvWBCConfig):
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
         self.commands.body_pose.height_range = (0.33, 0.55)
         self.commands.body_pose.pitch_range = (-0.35, 0.35)
-        self.commands.body_pose.roll_range = (-0.25, 0.25)
+        self.commands.body_pose.roll_range = (0.0, 0.0)
         # 静止伫立：PLAY 直接用终态（占比 0.15 + 满权重），不做爬升
         self.curriculum.standing_env_ratio_ramp = None
         self.curriculum.stand_still_vel_ramp = None
@@ -841,7 +839,7 @@ class RoughWOStairsEnvWBCConfig_PLAY(RoughWOStairsEnvWBCConfig):
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
         self.commands.body_pose.height_range = (0.33, 0.55)
         self.commands.body_pose.pitch_range = (-0.35, 0.35)
-        self.commands.body_pose.roll_range = (-0.25, 0.25)
+        self.commands.body_pose.roll_range = (0.0, 0.0)
         # 静止伫立：PLAY 直接用终态（占比 0.15 + 满权重），不做爬升
         self.curriculum.standing_env_ratio_ramp = None
         self.curriculum.stand_still_vel_ramp = None
@@ -1051,7 +1049,7 @@ class RoughSlopesEnvWBCConfig_PLAY(RoughSlopesEnvWBCConfig):
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
         self.commands.body_pose.height_range = (0.33, 0.55)
         self.commands.body_pose.pitch_range = (-0.35, 0.35)
-        self.commands.body_pose.roll_range = (-0.25, 0.25)
+        self.commands.body_pose.roll_range = (0.0, 0.0)
 
         self.commands.base_velocity.rel_standing_envs = 0.15
         self.rewards.stand_still_vel.weight = -2.0

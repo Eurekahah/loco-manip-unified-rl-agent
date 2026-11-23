@@ -28,16 +28,189 @@ if TYPE_CHECKING:
 
 
 class UniformThresholdVelocityCommand(mdp.UniformVelocityCommand):
-    """Command generator that generates a velocity command in SE(2) from uniform distribution with threshold."""
+    """Command generator that generates a velocity command in SE(2) from uniform distribution with threshold.
+
+    In addition to the normal uniform samples, this command supports fixed-proportion
+    special samples for teleoperation-style commands:
+
+    * zero velocity,
+    * pure ``vx``,
+    * pure ``vy``,
+    * pure yaw rate,
+    * normal per-axis uniform samples.
+
+    The sampled category is exposed through :attr:`command_category` for diagnostics.
+    """
 
     cfg: mdp.UniformThresholdVelocityCommandCfg
     """The configuration of the command generator."""
 
+    CATEGORY_ZERO = 0
+    CATEGORY_LIN_X = 1
+    CATEGORY_LIN_Y = 2
+    CATEGORY_ANG_Z = 3
+    CATEGORY_UNIFORM = 4
+
+    def __init__(self, cfg: UniformThresholdVelocityCommandCfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+
+        ratios = {
+            "rel_zero_cmd_envs": cfg.rel_zero_cmd_envs,
+            "rel_only_lin_x_envs": cfg.rel_only_lin_x_envs,
+            "rel_only_lin_y_envs": cfg.rel_only_lin_y_envs,
+            "rel_only_ang_z_envs": cfg.rel_only_ang_z_envs,
+        }
+        for name, value in ratios.items():
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"`{name}` must be in [0, 1], got {value}.")
+        special_ratio = sum(ratios.values())
+        if special_ratio > 1.0 + 1e-9:
+            raise ValueError(f"Special command ratios must sum to <= 1.0, got {special_ratio}.")
+        # Keep the initial ranges so special samples are not narrowed by curriculum.
+        self._full_ranges_lin_vel_x = tuple(cfg.ranges.lin_vel_x)
+        self._full_ranges_lin_vel_y = tuple(cfg.ranges.lin_vel_y)
+        self._full_ranges_ang_vel_z = tuple(cfg.ranges.ang_vel_z)
+
+        # A degenerate axis range (e.g. all-zero PLAY commands) cannot produce a
+        # special-axis sample. Disable that category instead of raising, so a
+        # fixed-command debug config still runs.
+        min_abs = float(cfg.min_command_lin_xy) + 1e-3
+        self._rel_zero_cmd_envs = cfg.rel_zero_cmd_envs
+        self._rel_only_lin_x_envs = (
+            cfg.rel_only_lin_x_envs
+            if max(abs(self._full_ranges_lin_vel_x[0]), abs(self._full_ranges_lin_vel_x[1])) > min_abs
+            else 0.0
+        )
+        self._rel_only_lin_y_envs = (
+            cfg.rel_only_lin_y_envs
+            if max(abs(self._full_ranges_lin_vel_y[0]), abs(self._full_ranges_lin_vel_y[1])) > min_abs
+            else 0.0
+        )
+        self._rel_only_ang_z_envs = (
+            cfg.rel_only_ang_z_envs
+            if max(abs(self._full_ranges_ang_vel_z[0]), abs(self._full_ranges_ang_vel_z[1])) > min_abs
+            else 0.0
+        )
+        special_ratio = sum(
+            [
+                self._rel_zero_cmd_envs,
+                self._rel_only_lin_x_envs,
+                self._rel_only_lin_y_envs,
+                self._rel_only_ang_z_envs,
+            ]
+        )
+        self.special_command_sampling_enabled = special_ratio > 0.0
+        self.command_category = torch.full(
+            (self.num_envs,), self.CATEGORY_UNIFORM, dtype=torch.long, device=self.device
+        )
+
+    def _as_env_ids(self, env_ids: Sequence[int] | slice) -> torch.Tensor:
+        """Convert manager-provided env ids (including ``slice(None)``) to a tensor."""
+        if isinstance(env_ids, slice):
+            return torch.arange(self.num_envs, device=self.device)[env_ids]
+        return torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
+
+    def _sample_special_axis(self, count: int, bounds: tuple[float, float]) -> torch.Tensor:
+        """Sample one command axis while keeping clear of the small-command dead zone."""
+        if count == 0:
+            return torch.empty(0, device=self.device)
+
+        low, high = float(bounds[0]), float(bounds[1])
+        min_abs = float(self.cfg.min_command_lin_xy) + 1e-3
+        max_abs = max(abs(low), abs(high))
+        if max_abs <= min_abs:
+            raise ValueError(
+                f"Special command range {bounds} cannot produce |command| > "
+                f"{self.cfg.min_command_lin_xy}."
+            )
+
+        samples = torch.empty(count, device=self.device).uniform_(low, high)
+        # Rejection sampling is simple and correct for both symmetric and one-sided ranges.
+        for _ in range(8):
+            too_small = samples.abs() < min_abs
+            if not too_small.any():
+                break
+            samples[too_small] = torch.empty(
+                int(too_small.sum()), device=self.device
+            ).uniform_(low, high)
+
+        too_small = samples.abs() < min_abs
+        if too_small.any():
+            sign = torch.where(samples[too_small] < 0.0, -1.0, 1.0)
+            samples[too_small] = torch.clamp(sign * min_abs, min=low, max=high)
+        return samples
+
     def _resample_command(self, env_ids: Sequence[int]):
+        env_ids = self._as_env_ids(env_ids)
         super()._resample_command(env_ids)
-        # set small commands to zero
-        # 小线速度指令设置为0
-        self.vel_command_b[env_ids, :2] *= (torch.norm(self.vel_command_b[env_ids, :2], dim=1) > 0.1).unsqueeze(1)
+        if env_ids.numel() == 0:
+            return
+
+        if not self.special_command_sampling_enabled:
+            # Backward-compatible behavior for tasks that do not opt into special sampling.
+            small_xy = torch.norm(self.vel_command_b[env_ids, :2], dim=1) <= self.cfg.min_command_lin_xy
+            self.vel_command_b[env_ids[small_xy], :2] = 0.0
+            self.command_category[env_ids] = self.CATEGORY_UNIFORM
+            return
+
+        n = env_ids.numel()
+        slot = torch.rand(n, device=self.device)
+
+        cum = 0.0
+        mask_zero = slot < cum + self._rel_zero_cmd_envs
+        cum += self._rel_zero_cmd_envs
+        mask_x = (slot >= cum) & (slot < cum + self._rel_only_lin_x_envs)
+        cum += self._rel_only_lin_x_envs
+        mask_y = (slot >= cum) & (slot < cum + self._rel_only_lin_y_envs)
+        cum += self._rel_only_lin_y_envs
+        mask_ang = (slot >= cum) & (slot < cum + self._rel_only_ang_z_envs)
+        mask_uniform = ~(mask_zero | mask_x | mask_y | mask_ang)
+
+        ids_zero = env_ids[mask_zero]
+        ids_x = env_ids[mask_x]
+        ids_y = env_ids[mask_y]
+        ids_ang = env_ids[mask_ang]
+        ids_uniform = env_ids[mask_uniform]
+
+        if ids_zero.numel() > 0:
+            self.vel_command_b[ids_zero, :] = 0.0
+            self.is_standing_env[ids_zero] = True
+            self.is_heading_env[ids_zero] = False
+            self.command_category[ids_zero] = self.CATEGORY_ZERO
+
+        if ids_x.numel() > 0:
+            self.vel_command_b[ids_x, 0] = self._sample_special_axis(
+                ids_x.numel(), self._full_ranges_lin_vel_x
+            )
+            self.vel_command_b[ids_x, 1:] = 0.0
+            self.is_standing_env[ids_x] = False
+            self.is_heading_env[ids_x] = False
+            self.command_category[ids_x] = self.CATEGORY_LIN_X
+
+        if ids_y.numel() > 0:
+            self.vel_command_b[ids_y, 0] = 0.0
+            self.vel_command_b[ids_y, 1] = self._sample_special_axis(
+                ids_y.numel(), self._full_ranges_lin_vel_y
+            )
+            self.vel_command_b[ids_y, 2] = 0.0
+            self.is_standing_env[ids_y] = False
+            self.is_heading_env[ids_y] = False
+            self.command_category[ids_y] = self.CATEGORY_LIN_Y
+
+        if ids_ang.numel() > 0:
+            self.vel_command_b[ids_ang, :2] = 0.0
+            self.vel_command_b[ids_ang, 2] = self._sample_special_axis(
+                ids_ang.numel(), self._full_ranges_ang_vel_z
+            )
+            self.is_standing_env[ids_ang] = False
+            self.is_heading_env[ids_ang] = False
+            self.command_category[ids_ang] = self.CATEGORY_ANG_Z
+
+        if ids_uniform.numel() > 0:
+            self.command_category[ids_uniform] = self.CATEGORY_UNIFORM
+
+        small_xy = torch.norm(self.vel_command_b[env_ids, :2], dim=1) <= self.cfg.min_command_lin_xy
+        self.vel_command_b[env_ids[small_xy], :2] = 0.0
     
     def _update_metrics(self):
         super()._update_metrics()
@@ -49,6 +222,21 @@ class UniformThresholdVelocityCommandCfg(mdp.UniformVelocityCommandCfg):
     """Configuration for the uniform threshold velocity command generator."""
 
     class_type: type = UniformThresholdVelocityCommand
+
+    rel_zero_cmd_envs: float = 0.0
+    """Fraction of envs that receive an absolute zero velocity command."""
+
+    rel_only_lin_x_envs: float = 0.0
+    """Fraction of envs that receive only a forward/backward velocity command."""
+
+    rel_only_lin_y_envs: float = 0.0
+    """Fraction of envs that receive only a lateral velocity command."""
+
+    rel_only_ang_z_envs: float = 0.0
+    """Fraction of envs that receive only a yaw-rate command."""
+
+    min_command_lin_xy: float = 0.1
+    """Norm threshold below which a sampled planar velocity is treated as zero."""
 
 def cart2sphere(xyz: torch.Tensor) -> torch.Tensor:
     """
@@ -1217,10 +1405,9 @@ class ArmWeightCommandCfg(CommandTermCfg):
 class BodyPoseCommand(CommandTerm):
     """生成机身目标 height / pitch / roll 命令。
 
-    采样分布为截断正态分布：
-      - 均值对应「直立」状态（height=nominal, pitch=0, roll=0）
-      - 标准差控制「特殊动作」出现频率
-      - 截断区间防止超出物理极限
+    默认姿态与随机姿态按 ``rel_default_pose_envs`` 的比例独立采样。随机姿态在
+    ``height_range`` / ``pitch_range`` / ``roll_range`` 内逐维均匀采样；默认姿态
+    使用 ``default_height`` / ``default_pitch`` / ``default_roll``。
     """
 
     cfg: BodyPoseCommandCfg
@@ -1230,6 +1417,7 @@ class BodyPoseCommand(CommandTerm):
 
         # command buffer: [height, pitch, roll]
         self._command = torch.zeros(self.num_envs, 3, device=self.device)
+        self.default_pose_env = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.cfg.asset_cfg.resolve(self._env.scene)
         self.cfg.feet_cfg.resolve(self._env.scene)
 
@@ -1253,6 +1441,7 @@ class BodyPoseCommand(CommandTerm):
     def __str__(self) -> str:
         return (
             f"BodyPoseCommand | envs={self.num_envs} | "
+            f"default={self.cfg.rel_default_pose_envs:.2f} "
             f"height~U({self.cfg.height_range[0]},{self.cfg.height_range[1]}) "
             f"pitch~U({self.cfg.pitch_range[0]},{self.cfg.pitch_range[1]}) "
             f"roll~U({self.cfg.roll_range[0]},{self.cfg.roll_range[1]})"
@@ -1267,16 +1456,28 @@ class BodyPoseCommand(CommandTerm):
     def command(self, value: torch.Tensor):
         self._command = value
 
+    def _as_env_ids(self, env_ids: Sequence[int] | slice) -> torch.Tensor:
+        if isinstance(env_ids, slice):
+            return torch.arange(self.num_envs, device=self.device)[env_ids]
+        return torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
+
     def _resample_command(self, env_ids: torch.Tensor):
-        """对指定 env 重新采样（截断正态分布）。"""
-        n = len(env_ids)
+        """对指定 env 重新采样默认姿态或随机姿态。"""
+        env_ids = self._as_env_ids(env_ids)
+        n = env_ids.numel()
         if n == 0:
             return
 
-        # 先采无约束正态，再 clamp 到物理区间（即截断正态近似）
         samples = (
             torch.rand(n, 3, device=self.device) * (self._high - self._low) + self._low
         )
+        default_pose_env = torch.rand(n, device=self.device) < self.cfg.rel_default_pose_envs
+        if default_pose_env.any():
+            samples[default_pose_env] = torch.tensor(
+                [self.cfg.default_height, self.cfg.default_pitch, self.cfg.default_roll],
+                device=self.device,
+            )
+        self.default_pose_env[env_ids] = default_pose_env
         self._command[env_ids] = samples
 
     def _update_command(self):
@@ -1408,6 +1609,14 @@ class BodyPoseCommandCfg(CommandTermCfg):
     """BodyPoseCommand 的配置。"""
 
     class_type: type = BodyPoseCommand
+
+    # ---- 默认姿态（直立）----
+    default_height: float = 0.513
+    default_pitch: float = 0.0
+    default_roll: float = 0.0
+
+    # 默认姿态占比；其余 env 在下面的范围内随机采样。
+    rel_default_pose_envs: float = 0.0
 
     # ---- height（机身高度，单位 m）----
     # 正常站立高度约 0.513 m，蹲下约 0.35 m
