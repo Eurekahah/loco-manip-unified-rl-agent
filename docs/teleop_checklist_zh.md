@@ -44,7 +44,8 @@ GUI 默认保留主视口的自由视角，并在主视口底部自动排成一�
 [ 全景 560x280 ] [ 腕部 240x240 ] [ 前视 320x240 ]
 ```
 
-- 默认按 `--width 1280 --height 720` 计算位置，窗口标题和边框也计入尺寸。
+- 启动时读取 Kit 主窗口的实际宽高，窗口标题和边框也计入尺寸；不依赖默认的
+  `--width 1280 --height 720`。
 - 三个窗口自动居中且互不重叠，不需要手动拖拽。
 - 显式传入 `--panorama-window-pos`、`--wrist-window-pos`、`--front-window-pos`
   时才使用指定位置。
@@ -79,7 +80,7 @@ python scripts\teleoperation\teleop_m20_piper_keyboard.py `
 | `--num_envs` | 1 | 遥操只需要单环境 |
 | `--device` | 单环境默认 CPU | 显式 `--device cuda:0` 可强制 GPU 物理 |
 | `--headless` | 关闭 | 无 GUI；预览窗口自动关闭 |
-| `--width` / `--height` | 1280 / 720 | GUI 尺寸和自动窗口排布基准 |
+| `--width` / `--height` | 1280 / 720 | GUI 初始尺寸；预览窗口按运行时实际主窗口尺寸排布 |
 | `--render-interval` | 4 | 每 4 个物理步渲染一次 |
 | `--max-steps` | 0 | 0 表示一直运行；用于 smoke test 时设小值 |
 

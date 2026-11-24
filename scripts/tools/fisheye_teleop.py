@@ -30,6 +30,23 @@ PANORAMA_WINDOW_PADDING = (24, 52)
 CAMERA_WINDOW_PADDING = (20, 44)
 
 
+def _runtime_main_window_size(default_width: int, default_height: int) -> tuple[int, int]:
+    """Return the Kit main-window size, falling back to the CLI GUI size."""
+    try:
+        import omni.ui as ui
+
+        width = int(ui.Workspace.get_main_window_width())
+        height = int(ui.Workspace.get_main_window_height())
+    except (AttributeError, RuntimeError):
+        return int(default_width), int(default_height)
+
+    if width < 320:
+        width = int(default_width)
+    if height < 240:
+        height = int(default_height)
+    return width, height
+
+
 R_BASE_CAM0 = np.array(
     [
         [0.0, 0.0, 1.0],
@@ -593,9 +610,7 @@ class TeleopFisheyeDisplay:
                 }
             )
         if panels and any(panel["pos"] is None for panel in panels):
-            # ``ui.Window`` adds a frame/title margin around the image. Lay out
-            # the outer window rectangles so that neighbouring previews cannot
-            # overlap even when the default positions are used.
+            app_width, app_height = _runtime_main_window_size(app_width, app_height)
             layout = bottom_row_layout(
                 [
                     (
@@ -641,7 +656,7 @@ class TeleopFisheyeDisplay:
 
         if panels:
             print(
-                "[Teleop] camera windows: "
+                f"[Teleop] camera windows ({app_width}x{app_height}): "
                 + ", ".join(
                     f"{panel['kind']}@{panel['pos'][0]},{panel['pos'][1]}"
                     f" ({panel['width']}x{panel['height']})"

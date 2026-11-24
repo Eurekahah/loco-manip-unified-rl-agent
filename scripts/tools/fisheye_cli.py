@@ -294,9 +294,10 @@ def bottom_row_layout(
 ) -> list[tuple[int, int, int, int]]:
     """Lay out ``(content_width, content_height, title_height)`` panels in one row.
 
-    The row is centred horizontally and anchored to the bottom edge of the app
-    window. If the requested panels are too wide they are scaled down together
-    so no two panels overlap.
+    The row is centred horizontally and every panel is anchored to the bottom
+    edge of the app window. ``omni.ui.Window`` positions use a top-left origin,
+    so taller panels start at a smaller ``y`` value. If the requested panels are
+    too wide they are scaled down together so no two panels overlap.
     """
     if not panels:
         return []
@@ -318,12 +319,11 @@ def bottom_row_layout(
         for panel in panels
     ]
     total_width = sum(item[0] for item in sizes) + gap * (len(sizes) - 1)
-    max_height = max(item[1] + item[2] for item in sizes)
     x = max(margin, (width - total_width) // 2)
-    y = max(margin, height - max_height - margin)
 
     layout: list[tuple[int, int, int, int]] = []
-    for panel_width, panel_height, _ in sizes:
+    for panel_width, panel_height, title_height in sizes:
+        y = max(margin, height - panel_height - title_height - margin)
         layout.append((x, y, panel_width, panel_height))
         x += panel_width + gap
     return layout

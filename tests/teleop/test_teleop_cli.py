@@ -82,7 +82,7 @@ def test_bottom_row_layout_does_not_overlap() -> None:
         assert x >= 0
         assert y >= 0
         assert x + width <= 1280
-        assert y + height + title <= 720
+        assert y + height + title == 720 - 12
     for left, right in zip(layout, layout[1:]):
         assert left[0] + left[2] <= right[0]
 
