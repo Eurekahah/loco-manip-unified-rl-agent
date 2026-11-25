@@ -35,6 +35,18 @@ parser.add_argument(
     default=True,
     help="是否启用低层轮/腿动作项的低速滤波（默认启用，便于 A/B 对比）",
 )
+parser.add_argument(
+    "--standstill-hard-zero",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help="全零命令时把轮子动作强制置零（默认关闭，保持与旧探针一致）",
+)
+parser.add_argument(
+    "--standstill-wheel-all-zero-deadband",
+    type=float,
+    default=None,
+    help="全零命令时的轮子动作死区；不填则沿用任务配置（默认 0.6）",
+)
 parser.add_argument("--out", type=str, default=None, help="Optional JSON output path")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -77,6 +89,15 @@ def main() -> None:
         filt = getattr(action_cfg, "low_speed_filter", None) if action_cfg is not None else None
         if filt is not None:
             filt.enabled = bool(args_cli.low_speed_filter)
+            if args_cli.standstill_wheel_all_zero_deadband is not None:
+                filt.all_zero_low_speed_threshold = float(
+                    args_cli.standstill_wheel_all_zero_deadband
+                )
+            filt.all_zero_hard_zero = bool(
+                args_cli.low_speed_filter
+                and args_cli.standstill_hard_zero
+                and name == "low_level_wheel_actions"
+            )
             low_speed_filter_applied = True
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
