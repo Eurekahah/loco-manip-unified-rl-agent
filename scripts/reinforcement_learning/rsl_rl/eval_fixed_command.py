@@ -96,6 +96,11 @@ parser.add_argument(
 )
 parser.add_argument("--warmup", type=int, default=100, help="每档命令开始时丢弃的步数（重填 history / 过度瞬态）")
 parser.add_argument(
+    "--no_push",
+    action="store_true",
+    help="关闭随机 push/reset 外力；做零命令漂移/滤波 A/B 时建议打开，避免外力污染位移",
+)
+parser.add_argument(
     "--commands",
     type=str,
     default=DEFAULT_COMMANDS,
@@ -174,6 +179,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.seed = args_cli.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    if args_cli.no_push and hasattr(env_cfg.events, "randomize_push_robot"):
+        env_cfg.events.randomize_push_robot = None
 
     # ---- 固定命令：关重采样 + 直接给 yaw 角速度（部署语义）+ 观测去噪 ----
     cmd_cfg = env_cfg.commands.base_velocity
