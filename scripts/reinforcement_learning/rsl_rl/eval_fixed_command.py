@@ -250,6 +250,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
         for _ in range(args_cli.warmup):
             obs = pin_and_step(policy(obs))
         obs = force_episode_boundary(obs)
+        # 4) 边界 reset 后机器人还要落稳；再预热一次，位移统计才不含 reset 瞬态
+        for _ in range(args_cli.warmup):
+            obs = pin_and_step(policy(obs))
 
         ret = torch.zeros(n_envs, device=device)
         ep_len = torch.zeros(n_envs, device=device)
@@ -260,6 +263,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
         steps_xy: list[torch.Tensor] = []
         steps_yaw: list[torch.Tensor] = []
         term_counts = {name: 0 for name in term_names}
+        start_xy = robot.data.root_pos_w[:, :2].clone()
+        start_heading = robot.data.heading_w.clone()
 
         for _ in range(args_cli.steps):
             # 误差用"动作施加前"的状态算，避免把 done env 的 reset 状态算进来
@@ -290,6 +295,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
                 err_yaw_sum[done] = 0.0
 
         n_ep = len(ep_returns)
+        disp_xy = float(torch.norm(robot.data.root_pos_w[:, :2] - start_xy, dim=1).mean())
+        disp_yaw = float((robot.data.heading_w - start_heading).abs().mean())
         row = {
             "label": label,
             "checkpoint": ckpt,
@@ -303,6 +310,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
             ),
             "err_vel_xy": float(torch.stack(steps_xy).mean()),
             "err_vel_yaw": float(torch.stack(steps_yaw).mean()),
+            "disp_xy": disp_xy,
+            "disp_yaw": disp_yaw,
             "termination_rate": {k: (v / n_ep if n_ep else None) for k, v in term_counts.items()},
             "termination_counts": term_counts,
         }
@@ -311,6 +320,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
             f"[RESULT] cmd=({cmd[0]:+.2f},{cmd[1]:+.2f},{cmd[2]:+.2f})  "
             f"episodes={n_ep}  ep_return={_fmt(row['ep_return'])}  ep_len={_fmt(row['ep_length'], '.1f')}  "
             f"err_xy={row['err_vel_xy']:.4f}  err_yaw={row['err_vel_yaw']:.4f}  "
+            f"disp_xy={row['disp_xy']:.3f}m  disp_yaw={row['disp_yaw']:.3f}rad  "
             f"摔倒={sum(term_counts.get(k, 0) for k in ('bad_orientation_2', 'root_height_below_minimum')) / max(n_ep, 1):.4f}"
         )
 

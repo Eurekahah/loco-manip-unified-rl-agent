@@ -60,6 +60,12 @@ class LowSpeedFilterCfg:
             the step the standstill gate turns on.  Without this the filter
             would coast down from the last moving command (several tenths of a
             second of residual wheel target) after the command is released.
+        all_zero_hard_zero: Force the filtered action to exactly zero whenever
+            the all-zero command gate is active (still passes through when only
+            ``vx`` is zero).  Use this on wheel terms when an undertrained
+            policy still emits a large standstill bias (e.g. > 0.6 normalised
+            action) that a dead band cannot remove.  It gives an exact stop at
+            the cost of dropping that policy's standstill wheel torque.
     """
 
     enabled: bool = True
@@ -72,6 +78,7 @@ class LowSpeedFilterCfg:
     all_zero_low_speed_threshold: float | None = None
     all_zero_cutoff_hz: float | None = None
     reset_state_on_gate_enter: bool = True
+    all_zero_hard_zero: bool = False
 
     def __post_init__(self) -> None:
         if self.command_threshold < 0.0:
@@ -273,6 +280,8 @@ class LowSpeedFilter:
             target = torch.where((gate.unsqueeze(-1) & dead), torch.zeros_like(actions), actions)
         else:
             target = actions
+        if self.cfg.all_zero_hard_zero:
+            target = torch.where(all_zero_gate.unsqueeze(-1), torch.zeros_like(target), target)
 
         if bool((alpha > 0.0).any()):
             smoothed = alpha.unsqueeze(-1) * self._state + (1.0 - alpha.unsqueeze(-1)) * target

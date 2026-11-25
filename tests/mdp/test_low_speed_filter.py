@@ -182,3 +182,18 @@ def test_gate_entry_drops_previous_motion_state(filter_module):
     torch.testing.assert_close(
         flt_hold(actions, command=still), torch.tensor([[alpha * 0.4]], dtype=torch.float32), rtol=1e-5, atol=1e-7
     )
+
+
+def test_all_zero_hard_zero_only_for_full_stop(filter_module):
+    cfg = _cfg(
+        filter_module,
+        low_speed_threshold=0.0,
+        cutoff_hz=0.0,
+        all_zero_hard_zero=True,
+    )
+    flt = filter_module.LowSpeedFilter(cfg, num_envs=1, action_dim=2, step_dt=0.02, device="cpu")
+    actions = torch.tensor([[3.0, -2.0]], dtype=torch.float32)
+
+    torch.testing.assert_close(flt(actions, command=_command(0.0, 0.0, 0.0)), torch.zeros_like(actions))
+    torch.testing.assert_close(flt(actions, command=_command(0.0, 0.5, 0.0)), actions)
+    torch.testing.assert_close(flt(actions, command=_command(0.3, 0.0, 0.0)), actions)
