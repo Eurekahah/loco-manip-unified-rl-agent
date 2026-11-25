@@ -22,6 +22,18 @@ parser.add_argument("--steps", type=int, default=500)
 parser.add_argument("--warmup", type=int, default=50)
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--wheel_radius", type=float, default=0.09)
+parser.add_argument(
+    "--command",
+    type=str,
+    default="0,0,0",
+    help='固定底盘命令 "vx,vy,wz"；默认全零，也可用 "0,0.5,0.5" 测"仅 vx=0"',
+)
+parser.add_argument(
+    "--low-speed-filter",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="是否启用 M20 轮/腿动作项的低速滤波（默认启用，便于 A/B 对比）",
+)
 parser.add_argument("--out", type=str, default=None)
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
@@ -52,10 +64,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     env_cfg.observations.policy.enable_corruption = False
 
+    command = tuple(float(x) for x in args_cli.command.split(","))
+    if len(command) != 3:
+        raise ValueError(f'--command must be "vx,vy,wz", got {args_cli.command!r}')
+
     cmd_cfg = env_cfg.commands.base_velocity
-    cmd_cfg.ranges.lin_vel_x = (0.0, 0.0)
-    cmd_cfg.ranges.lin_vel_y = (0.0, 0.0)
-    cmd_cfg.ranges.ang_vel_z = (0.0, 0.0)
+    cmd_cfg.ranges.lin_vel_x = (command[0], command[0])
+    cmd_cfg.ranges.lin_vel_y = (command[1], command[1])
+    cmd_cfg.ranges.ang_vel_z = (command[2], command[2])
     cmd_cfg.resampling_time_range = (1.0e9, 1.0e9)
     cmd_cfg.heading_command = False
     cmd_cfg.rel_zero_cmd_envs = 0.0
@@ -83,6 +99,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     if env_cfg.curriculum is not None and hasattr(env_cfg.curriculum, "command_levels"):
         env_cfg.curriculum.command_levels = None
 
+    # The low-speed filter lives on the action terms, so the probe exercises the
+    # exact same code path as training.  Keep an A/B switch for diagnosing it.
+    low_speed_filter_applied = False
+    for name in ("joint_pos", "joint_vel"):
+        action_cfg = getattr(env_cfg.actions, name, None)
+        filt = getattr(action_cfg, "low_speed_filter", None) if action_cfg is not None else None
+        if filt is not None:
+            filt.enabled = bool(args_cli.low_speed_filter)
+            low_speed_filter_applied = True
+
     env = gym.make(args_cli.task, cfg=env_cfg)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
     unwrapped = env.unwrapped
@@ -96,7 +122,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
 
     term = unwrapped.command_manager.get_term("base_velocity")
     term._resample_command = lambda env_ids: None  # noqa: ARG005
-    zero_cmd = torch.zeros(n_envs, 3, device=device)
+    fixed_cmd = torch.tensor(command, device=device, dtype=torch.float32).repeat(n_envs, 1)
+    wheel_action_term = unwrapped.action_manager.get_term("joint_vel")
 
     wheel_ids, wheel_names = robot.find_joints(".*_wheel_joint", preserve_order=True)
     wheel_body_ids, wheel_body_names = robot.find_bodies(".*_wheel", preserve_order=True)
@@ -106,7 +133,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
 
     obs = env.get_observations()
     for _ in range(args_cli.warmup):
-        term.vel_command_b[:] = zero_cmd
+        term.vel_command_b[:] = fixed_cmd
         with torch.inference_mode():
             obs, _, _, _ = env.step(policy(obs))
 
@@ -135,7 +162,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
         pitches.append(pitch.cpu())
         heights.append(robot.data.root_pos_w[:, 2].cpu())
 
-        term.vel_command_b[:] = zero_cmd
+        term.vel_command_b[:] = fixed_cmd
         with torch.inference_mode():
             obs, _, dones, _ = env.step(policy(obs))
         done = dones.bool()
@@ -163,6 +190,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
         "num_envs": n_envs,
         "steps": args_cli.steps,
         "warmup": args_cli.warmup,
+        "command": {"vx": command[0], "vy": command[1], "wz": command[2]},
+        "low_speed_filter": bool(args_cli.low_speed_filter),
+        "low_speed_filter_applied": low_speed_filter_applied,
+        "low_speed_filter_gate_fraction": (
+            float(wheel_action_term.standstill_gate.float().mean())
+            if hasattr(wheel_action_term, "standstill_gate")
+            else None
+        ),
         "wheel_radius_m": args_cli.wheel_radius,
         "wheel_joint_names": list(wheel_names),
         "leg_joint_names": list(leg_names),

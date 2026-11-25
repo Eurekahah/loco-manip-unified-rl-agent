@@ -132,6 +132,34 @@ URDF/`init_state` 就是这么定的，照抄即可。
 **动作里没有机械臂**：`ee_ik` 这个 action term 的 `action_dim = 0`
 （IK 由 CommandManager 驱动）。所以 16 维动作里没有任何一个自由度对应 `arm_joint*` 和夹爪。
 
+### 3.1 静止低速滤波（2026-11-25）
+
+M20-Piper 的腿/轮动作项在训练、PLAY、遥操回放里都会经过同一份低速滤波
+（`velocity/mdp/low_speed_filter.py` + `LowSpeedFilteredJoint*Action`）：
+
+- **作用位置**：归一化策略动作 `a`，在 `scale` / default offset **之前**。训练和
+  PLAY / 探针因此共用同一套滤波，不会因为关节增益不同而分叉。
+- **门控条件**（`command_threshold = 0.1`）：
+  - `|vx|, |vy| <= 0.1` 且 `|wz| <= 0.1`（全零命令）；
+  - 或 `|vx| <= 0.1`（"只有 vx=0"；此时 `vy / wz` 可以非零）。
+- **全零命令 `(0,0,0)`**：轮动作使用 `all_zero_low_speed_threshold = 0.6`。零命令下低层
+  轮策略存在约 `0.1~0.4` 的持续偏置（归一化动作），普通小死区削不掉，会出现缓慢漂移；
+  腿仍用 `0.02`，避免把维持站立的腿部动作切掉。
+- **仅 `vx=0`（`vy / wz` 非零）**：腿/轮使用 `low_speed_threshold`（`0.02 / 0.04`），
+  只滤微小噪声，不影响横移/转向所需的轮动作。
+- 两种门控内都会再做一阶低通（腿 `8 Hz`，轮 `2 Hz`）；门控外完全直通。
+  从"运动中"切到"全零命令"的那一拍会清空低通状态
+  （`reset_state_on_gate_enter=True`），否则轮子会带着上一段运动的残余目标继续滑
+  约 0.5 s。以上阈值单位都是**归一化策略动作**（轮关节实际速度目标 = `20 * action`）。
+- **高层遥操**：命令取 `ll_command[:, :3]`，由 `LowLevelPolicyActionBase._sync_low_speed_command()`
+  在每个低层 tick 同步；episode reset 会清滤波器状态和 gate override。
+- **A/B 开关**：`probe_play_zero_slip.py`、`probe_teleop_zero_command.py`、
+  `eval_fixed_command.py` 均支持 `--low-speed-filter / --no-low-speed-filter`
+  （默认启用）。
+
+> 外部 MuJoCo / 实机部署若要逐位复现训练/PLAY，需要照抄这一步；只做
+> `target = q_default + scale * a` 会少一次滤波。
+
 ---
 
 ## 4. 观测：`policy_obs`（83 维）与 `history`（10×70）

@@ -224,19 +224,52 @@ class LowLevelPolicyActionBase(ActionTerm):
         """复位时需要和低层动作缓存一起清零的额外张量（默认没有）。"""
         return []
 
+    def _reset_low_level_action_terms(self, env_ids) -> None:
+        """复位低层 action term 的逐 episode 状态（它们未注册在 ActionManager 里）。
+
+        低层腿/轮 action term 是高层 action term 内部构造的，``ActionManager.reset``
+        不会调用它们的 ``reset``；低速滤波器的状态与 gate override 必须在这里显式清掉，
+        否则上一个 episode 的滤波状态会带进新 episode。
+        """
+        for term in (self._joint_pos_action_term, self._wheel_vel_action_term):
+            resetter = getattr(term, "reset_low_speed_filter", None)
+            if resetter is not None:
+                resetter(env_ids)
+
     def reset(self, env_ids=None):
         """``ActionManager.reset`` 会在 episode 复位时调用：转发给子类的 ``_on_reset``。"""
         extras = super().reset(env_ids)
         self._on_reset(env_ids)
+        self._reset_low_level_action_terms(env_ids)
         return extras
 
     def _route_policy_output(self, policy_output: torch.Tensor) -> None:
         """把低层策略输出切分给低层 action term。"""
+        self._sync_low_speed_command()
         leg, wheel, ee = self._layout.split(policy_output)
         self.low_level_leg_actions[:] = leg
         self.low_level_wheel_actions[:] = wheel
         if self._layout.ee_action_dim > 0:
             self.low_level_ee_actions[:] = ee
+
+    def _sync_low_speed_command(self) -> None:
+        """Push the high-level velocity command into the low-level filters.
+
+        The low-level action terms normally read ``base_velocity`` from their
+        own command manager.  High-level tasks do not have that command term --
+        the command arrives through ``self._ll_command`` -- so they provide the
+        velocity command explicitly.  Both paths then use the same filter
+        helper, keeping training and teleoperation filtering identical.
+        """
+        for term in (self._joint_pos_action_term, self._wheel_vel_action_term):
+            setter = getattr(term, "set_standstill_command", None)
+            if setter is None:
+                continue
+            cfg = getattr(term.cfg, "low_speed_filter", None)
+            if cfg is None or not cfg.enabled:
+                setter(None)
+                continue
+            setter(self._ll_command[:, :3])
 
     # ------------------------------------------------------------------ #
     # 公共接口

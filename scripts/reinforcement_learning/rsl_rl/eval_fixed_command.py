@@ -103,6 +103,12 @@ parser.add_argument(
 )
 parser.add_argument("--label", type=str, default=None, help="表里的策略名（默认取 checkpoint 的父目录名）")
 parser.add_argument("--out", type=str, default=None, help="把结果 JSON 写到这里")
+parser.add_argument(
+    "--low-speed-filter",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="是否启用 M20 轮/腿动作项的静止低速滤波（默认启用，便于 A/B 对比）",
+)
 # append RSL-RL cli arguments / AppLauncher cli args
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
@@ -151,6 +157,15 @@ def _fmt(value: float | None, spec: str = ".3f") -> str:
     return "n/a" if value is None else format(value, spec)
 
 
+def _configure_low_speed_filter(action_cfg, enabled: bool) -> bool:
+    """Toggle the M20 low-speed filter when the task exposes one."""
+    filt = getattr(action_cfg, "low_speed_filter", None) if action_cfg is not None else None
+    if filt is None:
+        return False
+    filt.enabled = enabled
+    return True
+
+
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """固定命令滚动一批 env，打印并（可选）保存统计。"""
@@ -168,6 +183,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     cmd_cfg.rel_heading_envs = 0.0
     cmd_cfg.debug_vis = False
     env_cfg.observations.policy.enable_corruption = False
+    low_speed_filter_applied = any(
+        _configure_low_speed_filter(getattr(env_cfg.actions, name, None), bool(args_cli.low_speed_filter))
+        for name in ("joint_pos", "joint_vel")
+    )
 
     # ---- 地形：与 play.py 同一口径（关地形课程 + 固定 5x5 网格，同 seed 可复现）----
     env_cfg.scene.terrain.max_init_terrain_level = None
@@ -189,6 +208,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     print(f"[INFO] task={task_name}  label={label}")
     print(f"[INFO] checkpoint={ckpt}")
     print(f"[INFO] num_envs={n_envs}  step_dt={dt:.4f}s  steps/cmd={args_cli.steps}  warmup={args_cli.warmup}")
+    print(f"[INFO] low_speed_filter={bool(args_cli.low_speed_filter)}  applied={low_speed_filter_applied}")
 
     # load previously trained model（和 play.py 同一条路径：runner + 推理策略）
     runner = OnPolicyRunnerHis(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
@@ -324,6 +344,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
             "steps_per_command": args_cli.steps,
             "warmup": args_cli.warmup,
             "step_dt": dt,
+            "low_speed_filter": bool(args_cli.low_speed_filter),
+            "low_speed_filter_applied": low_speed_filter_applied,
             "results": rows,
         }
         out_path = os.path.abspath(args_cli.out)

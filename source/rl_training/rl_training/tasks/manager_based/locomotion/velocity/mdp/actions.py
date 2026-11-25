@@ -10,13 +10,138 @@ from isaaclab.managers import ActionTerm, ActionTermCfg
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 from isaaclab.utils import configclass
 import rl_training.tasks.manager_based.locomotion.velocity.mdp as mdp
+from isaaclab.envs.mdp.actions import (
+    JointPositionAction,
+    JointPositionActionCfg,
+    JointVelocityAction,
+    JointVelocityActionCfg,
+)
 from isaaclab.envs.mdp.actions.task_space_actions import DifferentialInverseKinematicsAction
 import isaaclab.utils.math as math_utils
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.markers.config import FRAME_MARKER_CFG
+from .low_speed_filter import LowSpeedFilter, LowSpeedFilterCfg
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
+
+class _LowSpeedFilteredJointActionMixin:
+    """Add the shared standstill low-speed filter to a joint action term.
+
+    The filter input is the *raw* policy action, before scale / default offset
+    are applied.  That is the same tensor the deployment / probe scripts see,
+    so training and evaluation cannot silently diverge.
+
+    The standstill gate is resolved in two ways:
+
+    * low-level training: read the velocity command term named by
+      ``cfg.low_speed_filter.command_name`` (``base_velocity``);
+    * high-level replay / teleoperation: the parent action term owns the
+      command and pushes it with :meth:`set_standstill_command` every low-level
+      tick.
+    """
+
+    cfg: JointPositionActionCfg | JointVelocityActionCfg
+
+    def _setup_low_speed_filter(self) -> None:
+        self._standstill_command_override: torch.Tensor | None = None
+        self._low_speed_filter = LowSpeedFilter(
+            cfg=self.cfg.low_speed_filter,
+            num_envs=self.num_envs,
+            action_dim=self.action_dim,
+            step_dt=float(self._env.step_dt),
+            device=self.device,
+        )
+
+    def set_standstill_command(self, command: torch.Tensor | None) -> None:
+        """Override the velocity command used for gating (high-level terms)."""
+        if command is None:
+            self._standstill_command_override = None
+            return
+        if command.ndim != 2 or command.shape[1] < 3:
+            raise ValueError(f"command must have shape (N, >=3), got {tuple(command.shape)}")
+        if command.shape[0] != self.num_envs:
+            raise ValueError(f"command must have {self.num_envs} rows, got {command.shape[0]}")
+        self._standstill_command_override = command[:, :3].to(
+            device=self.device, dtype=torch.float32
+        ).clone()
+
+    @property
+    def standstill_gate(self) -> torch.Tensor:
+        """Latest gate actually used by the filter (for diagnostics / tests)."""
+        return self._low_speed_filter.last_gate
+
+    @property
+    def standstill_all_zero_gate(self) -> torch.Tensor:
+        """Latest all-zero gate used by the filter (strong static dead band)."""
+        return self._low_speed_filter.last_all_zero_gate
+
+    def _resolve_filter_command(self) -> torch.Tensor | None:
+        if self._standstill_command_override is not None:
+            return self._standstill_command_override
+        cfg = self.cfg.low_speed_filter
+        if not cfg.enabled or cfg.command_name is None:
+            return None
+        active_terms = self._env.command_manager.active_terms
+        term_names = active_terms.keys() if hasattr(active_terms, "keys") else active_terms
+        if cfg.command_name not in term_names:
+            return None
+        return self._env.command_manager.get_command(cfg.command_name)
+
+    def _apply_low_speed_filter(self, actions: torch.Tensor) -> torch.Tensor:
+        return self._low_speed_filter(actions, command=self._resolve_filter_command())
+
+    def reset_low_speed_filter(self, env_ids=None) -> None:
+        """Clear the per-environment filter state without touching action buffers."""
+        self._low_speed_filter.reset(env_ids)
+        self._standstill_command_override = None
+
+    def reset(self, env_ids=None):
+        result = super().reset(env_ids)
+        self.reset_low_speed_filter(env_ids)
+        return result
+
+
+class LowSpeedFilteredJointPositionAction(_LowSpeedFilteredJointActionMixin, JointPositionAction):
+    """Joint position action with the M20 standstill low-speed filter."""
+
+    cfg: "LowSpeedFilteredJointPositionActionCfg"
+
+    def __init__(self, cfg: "LowSpeedFilteredJointPositionActionCfg", env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._setup_low_speed_filter()
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        super().process_actions(self._apply_low_speed_filter(actions))
+
+
+class LowSpeedFilteredJointVelocityAction(_LowSpeedFilteredJointActionMixin, JointVelocityAction):
+    """Joint velocity action with the M20 standstill low-speed filter."""
+
+    cfg: "LowSpeedFilteredJointVelocityActionCfg"
+
+    def __init__(self, cfg: "LowSpeedFilteredJointVelocityActionCfg", env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._setup_low_speed_filter()
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        super().process_actions(self._apply_low_speed_filter(actions))
+
+
+@configclass
+class LowSpeedFilteredJointPositionActionCfg(JointPositionActionCfg):
+    """Configuration for :class:`LowSpeedFilteredJointPositionAction`."""
+
+    class_type: type = LowSpeedFilteredJointPositionAction
+    low_speed_filter: LowSpeedFilterCfg = field(default_factory=LowSpeedFilterCfg)
+
+
+@configclass
+class LowSpeedFilteredJointVelocityActionCfg(JointVelocityActionCfg):
+    """Configuration for :class:`LowSpeedFilteredJointVelocityAction`."""
+
+    class_type: type = LowSpeedFilteredJointVelocityAction
+    low_speed_filter: LowSpeedFilterCfg = field(default_factory=LowSpeedFilterCfg)
 
 
 class CommandDrivenIKAction(DifferentialInverseKinematicsAction):

@@ -23,6 +23,18 @@ parser.add_argument("--num_envs", type=int, default=1)
 parser.add_argument("--steps", type=int, default=500, help="Control steps to record after warmup")
 parser.add_argument("--warmup", type=int, default=50, help="Control steps discarded before recording")
 parser.add_argument("--no_push", action="store_true", help="Disable random push events")
+parser.add_argument(
+    "--base-command",
+    type=str,
+    default="0,0,0",
+    help='遥操动作的前三维底盘命令 "vx,vy,wz"；默认全零，也可用 "0,0.5,0.5" 测"仅 vx=0"',
+)
+parser.add_argument(
+    "--low-speed-filter",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="是否启用低层轮/腿动作项的低速滤波（默认启用，便于 A/B 对比）",
+)
 parser.add_argument("--out", type=str, default=None, help="Optional JSON output path")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -55,6 +67,17 @@ def main() -> None:
     env_cfg.terminations.time_out = None
     if args_cli.no_push and hasattr(env_cfg.events, "randomize_push_robot"):
         env_cfg.events.randomize_push_robot = None
+    base_command = tuple(float(x) for x in args_cli.base_command.split(","))
+    if len(base_command) != 3:
+        raise ValueError(f'--base-command must be "vx,vy,wz", got {args_cli.base_command!r}')
+    low_level = env_cfg.actions.pre_trained_pick_action
+    low_speed_filter_applied = False
+    for name in ("low_level_leg_actions", "low_level_wheel_actions"):
+        action_cfg = getattr(low_level, name, None)
+        filt = getattr(action_cfg, "low_speed_filter", None) if action_cfg is not None else None
+        if filt is not None:
+            filt.enabled = bool(args_cli.low_speed_filter)
+            low_speed_filter_applied = True
 
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
     env.reset()
@@ -63,10 +86,11 @@ def main() -> None:
     n_envs = env.num_envs
     device = env.device
     action_dim = env.action_manager.total_action_dim
-    zero_action = torch.zeros(n_envs, action_dim, device=device)
+    teleop_action = torch.zeros(n_envs, action_dim, device=device)
+    teleop_action[:, :3] = torch.tensor(base_command, device=device, dtype=torch.float32)
 
     for _ in range(args_cli.warmup):
-        _split_step_result(env.step(zero_action))
+        _split_step_result(env.step(teleop_action))
 
     start_xy = robot.data.root_pos_w[:, :2].clone()
     prev_xy = start_xy.clone()
@@ -89,7 +113,7 @@ def main() -> None:
         roll, pitch, _ = math_utils.euler_xyz_from_quat(quat)
         height = robot.data.root_pos_w[:, 2].clone()
 
-        _, _, done, _ = _split_step_result(env.step(zero_action))
+        _, _, done, _ = _split_step_result(env.step(teleop_action))
         done = done.bool()
         xy_after = robot.data.root_pos_w[:, :2]
         step_dist = torch.norm(xy_after - xy_before, dim=1)
@@ -125,6 +149,9 @@ def main() -> None:
         "steps": args_cli.steps,
         "warmup": args_cli.warmup,
         "push_enabled": not args_cli.no_push,
+        "base_command": {"vx": base_command[0], "vy": base_command[1], "wz": base_command[2]},
+        "low_speed_filter": bool(args_cli.low_speed_filter),
+        "low_speed_filter_applied": low_speed_filter_applied,
         "net_displacement_m_mean": float(net_disp.mean()),
         "net_displacement_m_per_env": [float(x) for x in net_disp],
         "path_length_m_mean": float(path_length.mean()),

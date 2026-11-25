@@ -29,12 +29,36 @@ from rl_training.assets.deeprobotics import DEEPROBOTICS_M20_PIPER_CFG
 class DeeproboticsM20ActionsCfg(ActionsCfg):
     """Action specifications for the MDP."""
 
-    joint_pos = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=None, scale=0.25, use_default_offset=True, clip=None, preserve_order=True
+    joint_pos = mdp.LowSpeedFilteredJointPositionActionCfg(
+        asset_name="robot",
+        joint_names=None,
+        scale=0.25,
+        use_default_offset=True,
+        clip=None,
+        preserve_order=True,
+        low_speed_filter=mdp.LowSpeedFilterCfg(
+            command_name="base_velocity",
+            low_speed_threshold=0.02,
+            cutoff_hz=8.0,
+        ),
     )
 
-    joint_vel = mdp.JointVelocityActionCfg(
-        asset_name="robot", joint_names=None, scale=20.0, use_default_offset=True, clip=None, preserve_order=True
+    joint_vel = mdp.LowSpeedFilteredJointVelocityActionCfg(
+        asset_name="robot",
+        joint_names=None,
+        scale=20.0,
+        use_default_offset=True,
+        clip=None,
+        preserve_order=True,
+        low_speed_filter=mdp.LowSpeedFilterCfg(
+            command_name="base_velocity",
+            # Only vx == 0 (vy / wz may be non-zero): keep lateral / yaw responsive.
+            low_speed_threshold=0.04,
+            cutoff_hz=2.0,
+            # All-zero command: the wheel policy has a persistent DC bias, so
+            # use a much larger dead band to stop slow standstill drift.
+            all_zero_low_speed_threshold=0.6,
+        ),
     )
 
     # EE使用IK进行移动
