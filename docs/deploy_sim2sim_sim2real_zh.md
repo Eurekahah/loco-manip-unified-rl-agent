@@ -147,23 +147,42 @@ M20-Piper 的腿/轮动作项在训练、PLAY、遥操回放里都会经过同�
   腿仍用 `0.02`，避免把维持站立的腿部动作切掉。
 - **仅 `vx=0`（`vy / wz` 非零）**：腿/轮使用 `low_speed_threshold`（`0.02 / 0.04`），
   只滤微小噪声，不影响横移/转向所需的轮动作。
-- **全零硬停 `all_zero_hard_zero`（默认关）**：打开后，全零命令时该动作项的输出
-  强制为 0（"仅 vx=0" 不受影响）。建议只在轮子上开；轮+腿都开可做"完全站定"。
-  死区阈值取决于策略：20k 遥操策略零命令轮动作 <= 0.61，`0.6` 就够；未收敛的 5k
-  策略可到 1.07，死区压不干净，必须硬停。
+- **全零硬停 `all_zero_hard_zero`（训练默认关，遥操默认开）**：打开后，全零命令时该动作项
+  的输出强制为 0（"仅 vx=0" 不受影响）。遥操脚本默认**只对轮子**开启
+  （`teleop_m20_piper_keyboard.py` / `teleop_m20_piper_vr.py` 的
+  `--standstill-hard-zero`，默认 on）；轮+腿都开可做"完全站定"，但腿硬停会丢掉
+  承重动作，不建议。20k 遥操策略的零命令轮动作在 `0.55~0.61` 之间，正好卡在
+  `0.6` 死区边界，软滤波"有时删得掉、有时删不掉"，必须硬停才能稳定站住；
+  未收敛的 5k 策略更可到 1.07。
 - 两种门控内都会再做一阶低通（腿 `8 Hz`，轮 `2 Hz`）；门控外完全直通。
   从"运动中"切到"全零命令"的那一拍会清空低通状态
   （`reset_state_on_gate_enter=True`），否则轮子会带着上一段运动的残余目标继续滑
   约 0.5 s。以上阈值单位都是**归一化策略动作**（轮关节实际速度目标 = `20 * action`）。
 - **高层遥操**：命令取 `ll_command[:, :3]`，由 `LowLevelPolicyActionBase._sync_low_speed_command()`
   在每个低层 tick 同步；episode reset 会清滤波器状态和 gate override。
+- **遥操可调项**（`teleop_m20_piper_keyboard.py --help` / `teleop_m20_piper_vr.py --help`，
+  两者共用 `scripts/tools/teleop_cli.py`）：
+  `--low-speed-filter / --no-low-speed-filter`、
+  `--standstill-hard-zero / --no-standstill-hard-zero`（轮子全零硬停）、
+  `--standstill-command-threshold`（默认 `0.1`）、
+  `--standstill-leg-deadband` / `--standstill-leg-cutoff-hz`（`0.02` / `8`）、
+  `--standstill-wheel-deadband` / `--standstill-wheel-cutoff-hz`（`0.04` / `2`，
+  仅 `vx=0` 时生效）、
+  `--standstill-wheel-all-zero-deadband`（`0.6`，全零软滤波回退值）。
 - **A/B 开关**：`probe_play_zero_slip.py`、`probe_teleop_zero_command.py`、
   `eval_fixed_command.py` 均支持 `--low-speed-filter / --no-low-speed-filter`
   （默认启用）。
 
 **实测（2026-11-25，未加滤波训练的 20k 遥操低层策略，仅部署阶段加滤波）**
 
-- 零命令 4.8 s：无滤波位移 `0.307 m`；死区 `0.6` 后 `0.001 m`。
+- 遥操路径零命令 6 s（8 envs，`TeleopHistoryEnvCfg`）：无滤波 `0.31 m`；
+  软滤波（死区 `0.6` + 2 Hz）仍有 `0.130 m`（约 `25 mm/s`）；死区 `0.8` 降到
+  `0.042 m`；**轮硬停 `0.0205 m`（约 `3.4 mm/s`），无摔倒，轮子 processed action
+  精确为 0**。残余主要来自腿部动作与被动滚动，滤波器消不掉。
+- 硬停不影响运动：`(0,0.5,0)` 横移 3 s `1.82 m`（`0.61 m/s`）；`(0,0,0.5)` 转向 3 s
+  弧长 `0.36 m`，两者均无摔倒；`vx=0.4 -> 0` 松手后 `0.38 s / 0.07 m` 停住。
+- 低速层固定命令 4.8 s：无滤波位移 `0.307 m`；死区 `0.6` 后 `0.001 m`（单环境样本，
+  多环境时会有边界抖动，见上一条）。
 - `(0, 0.5, 0)` 横移：`3.24 m → 3.12 m`（-3.4%）；`(0, 0.3, 0)` 前进：`1.61 m → 1.60 m`
   （-1.0%）；`(0, 0, 0.6)` 转向：`3.37 → 3.41 rad`（+1.1%）。姿态高度均在 `0.52 m`。
 - 结论：仅部署阶段加滤波合理，能压掉静止漂移且几乎不影响运动；但它只是"遮住"了

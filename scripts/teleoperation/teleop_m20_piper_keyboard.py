@@ -13,7 +13,11 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 from fisheye_cli import add_fisheye_args, validate_fisheye_args
-from teleop_cli import prefer_cpu_for_single_env_teleop
+from teleop_cli import (
+    add_standstill_filter_args,
+    apply_standstill_filter_args,
+    prefer_cpu_for_single_env_teleop,
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--task", type=str, required=True)
@@ -84,6 +88,7 @@ parser.add_argument(
     help="Profile action manager, low-level policy, IK, scene, simulation and render separately.",
 )
 add_fisheye_args(parser, include_panorama=True)
+add_standstill_filter_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(rendering_mode="balanced")
 args = parser.parse_args()
@@ -168,6 +173,7 @@ def main():
     env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs)
     env_cfg.terminations.time_out = None
     env_cfg.sim.render_interval = int(args.render_interval)
+    apply_standstill_filter_args(env_cfg, args)
 
     main_shows_front = args.camera_view in {"chest", "front", "both"}
     main_shows_wrist = args.camera_view == "wrist"

@@ -14,7 +14,11 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 from fisheye_cli import add_fisheye_args, validate_fisheye_args
-from teleop_cli import prefer_cpu_for_single_env_teleop
+from teleop_cli import (
+    add_standstill_filter_args,
+    apply_standstill_filter_args,
+    prefer_cpu_for_single_env_teleop,
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--task", type=str, required=True)
@@ -98,6 +102,7 @@ parser.add_argument("--follow-chest-camera", action="store_true", help=argparse.
 parser.add_argument("--arm-clutch", action="store_true", help=argparse.SUPPRESS)
 parser.add_argument("--body-clutch", action="store_true", help=argparse.SUPPRESS)
 parser.add_argument("--no-stick-shaping", action="store_true", help=argparse.SUPPRESS)
+add_standstill_filter_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(rendering_mode="balanced")
 args = parser.parse_args()
@@ -181,6 +186,7 @@ def main():
     # ── 1. 创建环境 ────────────────────────────────────────────────────
     env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs)
     env_cfg.terminations.time_out = None
+    apply_standstill_filter_args(env_cfg, args)
     if args.render_interval < 1:
         parser.error("--render-interval 必须 >= 1")
     env_cfg.sim.render_interval = int(args.render_interval)
