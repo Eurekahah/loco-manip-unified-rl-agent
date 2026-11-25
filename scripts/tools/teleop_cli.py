@@ -56,8 +56,17 @@ def add_standstill_filter_args(parser) -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "vx=vy=wz=0 时把轮子动作强制置零（默认开启）。"
+            "vx=vy=wz=0 时把动作强制置零（默认开启）。"
             "关闭后退回“死区 + 低通”的软滤波。"
+        ),
+    )
+    parser.add_argument(
+        "--standstill-hard-zero-scope",
+        choices=("wheel", "leg", "both"),
+        default="both",
+        help=(
+            "硬停作用范围（默认 both）。轮子硬停去掉策略的零速轮偏置，"
+            "腿部硬停去掉站立时腿动作造成的残余漂移；只作用于全零命令。"
         ),
     )
     parser.add_argument(
@@ -108,23 +117,27 @@ def apply_standstill_filter_args(env_cfg, args) -> bool:
     if term is None:
         return False
     applied = False
+    scope = str(args.standstill_hard_zero_scope)
+    hard_zero_terms = {
+        "wheel": ("low_level_wheel_actions",),
+        "leg": ("low_level_leg_actions",),
+        "both": ("low_level_leg_actions", "low_level_wheel_actions"),
+    }[scope]
     specs = (
         (
             "low_level_leg_actions",
             args.standstill_leg_deadband,
             args.standstill_leg_deadband,
             args.standstill_leg_cutoff_hz,
-            False,
         ),
         (
             "low_level_wheel_actions",
             args.standstill_wheel_deadband,
             args.standstill_wheel_all_zero_deadband,
             args.standstill_wheel_cutoff_hz,
-            bool(args.standstill_hard_zero),
         ),
     )
-    for name, deadband, all_zero_deadband, cutoff_hz, hard_zero in specs:
+    for name, deadband, all_zero_deadband, cutoff_hz in specs:
         action_cfg = getattr(term, name, None)
         filt = getattr(action_cfg, "low_speed_filter", None) if action_cfg is not None else None
         if filt is None:
@@ -135,7 +148,9 @@ def apply_standstill_filter_args(env_cfg, args) -> bool:
         filt.all_zero_low_speed_threshold = float(all_zero_deadband)
         filt.cutoff_hz = float(cutoff_hz)
         filt.all_zero_cutoff_hz = None
-        filt.all_zero_hard_zero = bool(args.low_speed_filter and hard_zero)
+        filt.all_zero_hard_zero = bool(
+            args.low_speed_filter and args.standstill_hard_zero and name in hard_zero_terms
+        )
         applied = True
     if applied:
         print(
@@ -146,5 +161,6 @@ def apply_standstill_filter_args(env_cfg, args) -> bool:
             f"wheel={args.standstill_wheel_deadband}/{args.standstill_wheel_cutoff_hz}Hz "
             f"all_zero={args.standstill_wheel_all_zero_deadband} "
             f"hard_zero={bool(args.low_speed_filter and args.standstill_hard_zero)}"
+            f"({scope})"
         )
     return applied

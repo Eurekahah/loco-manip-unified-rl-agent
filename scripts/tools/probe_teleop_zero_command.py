@@ -39,7 +39,16 @@ parser.add_argument(
     "--standstill-hard-zero",
     action=argparse.BooleanOptionalAction,
     default=False,
-    help="全零命令时把轮子动作强制置零（默认关闭，保持与旧探针一致）",
+    help="全零命令时把动作项强制置零（默认关闭，保持与旧探针一致）",
+)
+parser.add_argument(
+    "--standstill-hard-zero-scope",
+    choices=("wheel", "leg", "both"),
+    default="both",
+    help=(
+        "Hard-zero scope for --standstill-hard-zero (default both, matching the "
+        "teleop default; use wheel to compare against wheel-only hard zero)"
+    ),
 )
 parser.add_argument(
     "--standstill-wheel-all-zero-deadband",
@@ -93,10 +102,16 @@ def main() -> None:
                 filt.all_zero_low_speed_threshold = float(
                     args_cli.standstill_wheel_all_zero_deadband
                 )
+            scope = args_cli.standstill_hard_zero_scope
+            in_scope = (
+                scope == "both"
+                or (scope == "wheel" and name == "low_level_wheel_actions")
+                or (scope == "leg" and name == "low_level_leg_actions")
+            )
             filt.all_zero_hard_zero = bool(
                 args_cli.low_speed_filter
                 and args_cli.standstill_hard_zero
-                and name == "low_level_wheel_actions"
+                and in_scope
             )
             low_speed_filter_applied = True
 
