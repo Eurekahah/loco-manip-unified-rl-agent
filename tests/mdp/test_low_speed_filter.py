@@ -197,3 +197,27 @@ def test_all_zero_hard_zero_only_for_full_stop(filter_module):
     torch.testing.assert_close(flt(actions, command=_command(0.0, 0.0, 0.0)), torch.zeros_like(actions))
     torch.testing.assert_close(flt(actions, command=_command(0.0, 0.5, 0.0)), actions)
     torch.testing.assert_close(flt(actions, command=_command(0.3, 0.0, 0.0)), actions)
+
+
+def test_m20_standard_preset_values(filter_module):
+    preset = filter_module.M20_STANDSTILL_PRESET
+    assert preset.command_threshold == 0.1
+    assert preset.leg_deadband == 0.02
+    assert preset.leg_cutoff_hz == 8.0
+    assert preset.wheel_deadband == 0.04
+    assert preset.wheel_cutoff_hz == 2.0
+    assert preset.wheel_all_zero_deadband == 0.6
+
+
+def test_m20_standard_preset_never_enables_hard_zero(filter_module):
+    leg = filter_module.leg_low_speed_filter_cfg()
+    wheel = filter_module.wheel_low_speed_filter_cfg()
+
+    assert not leg.all_zero_hard_zero
+    assert not wheel.all_zero_hard_zero
+    assert leg.command_threshold == 0.1
+    assert wheel.command_threshold == 0.1
+    assert leg.low_speed_threshold == 0.02 and leg.cutoff_hz == 8.0
+    assert wheel.low_speed_threshold == 0.04 and wheel.cutoff_hz == 2.0
+    assert wheel.all_zero_low_speed_threshold == 0.6
+    assert leg.all_zero_low_speed_threshold is None

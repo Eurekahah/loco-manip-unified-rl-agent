@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 from scripts.tools.teleop_cli import (
@@ -9,6 +12,42 @@ from scripts.tools.teleop_cli import (
     prefer_cpu_for_single_env_teleop,
 )
 from scripts.tools.fisheye_cli import add_fisheye_args, bottom_row_layout
+
+FILTER_MODULE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "source"
+    / "rl_training"
+    / "rl_training"
+    / "tasks"
+    / "manager_based"
+    / "locomotion"
+    / "velocity"
+    / "mdp"
+    / "low_speed_filter.py"
+)
+
+
+def _load_filter_module():
+    spec = importlib.util.spec_from_file_location("low_speed_filter_teleop_test_module", FILTER_MODULE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_teleop_defaults_match_m20_standard_preset() -> None:
+    parser = argparse.ArgumentParser()
+    add_standstill_filter_args(parser)
+    args = parser.parse_args([])
+    preset = _load_filter_module().M20_STANDSTILL_PRESET
+
+    assert args.standstill_command_threshold == preset.command_threshold
+    assert args.standstill_leg_deadband == preset.leg_deadband
+    assert args.standstill_leg_cutoff_hz == preset.leg_cutoff_hz
+    assert args.standstill_wheel_deadband == preset.wheel_deadband
+    assert args.standstill_wheel_cutoff_hz == preset.wheel_cutoff_hz
+    assert args.standstill_wheel_all_zero_deadband == preset.wheel_all_zero_deadband
 
 
 def test_single_env_teleop_defaults_to_cpu() -> None:

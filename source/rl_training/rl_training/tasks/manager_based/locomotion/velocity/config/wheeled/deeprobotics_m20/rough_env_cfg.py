@@ -36,11 +36,8 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
         use_default_offset=True,
         clip=None,
         preserve_order=True,
-        low_speed_filter=mdp.LowSpeedFilterCfg(
-            command_name="base_velocity",
-            low_speed_threshold=0.02,
-            cutoff_hz=8.0,
-        ),
+        # Standard M20 standstill filter: leg 0.02 / 8 Hz.
+        low_speed_filter=mdp.leg_low_speed_filter_cfg(),
     )
 
     joint_vel = mdp.LowSpeedFilteredJointVelocityActionCfg(
@@ -50,15 +47,9 @@ class DeeproboticsM20ActionsCfg(ActionsCfg):
         use_default_offset=True,
         clip=None,
         preserve_order=True,
-        low_speed_filter=mdp.LowSpeedFilterCfg(
-            command_name="base_velocity",
-            # Only vx == 0 (vy / wz may be non-zero): keep lateral / yaw responsive.
-            low_speed_threshold=0.04,
-            cutoff_hz=2.0,
-            # All-zero command: the wheel policy has a persistent DC bias, so
-            # use a much larger dead band to stop slow standstill drift.
-            all_zero_low_speed_threshold=0.6,
-        ),
+        # Standard M20 standstill filter: wheel 0.04 / 2 Hz for "only vx == 0",
+        # all-zero dead band 0.6 as the soft fallback.  Hard zero is deploy-only.
+        low_speed_filter=mdp.wheel_low_speed_filter_cfg(),
     )
 
     # EE使用IK进行移动

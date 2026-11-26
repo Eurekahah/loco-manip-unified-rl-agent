@@ -25,7 +25,15 @@ from typing import Sequence
 
 import torch
 
-__all__ = ["LowSpeedFilter", "LowSpeedFilterCfg", "standstill_command_mask"]
+__all__ = [
+    "LowSpeedFilter",
+    "LowSpeedFilterCfg",
+    "M20_STANDSTILL_PRESET",
+    "StandstillFilterPreset",
+    "leg_low_speed_filter_cfg",
+    "standstill_command_mask",
+    "wheel_low_speed_filter_cfg",
+]
 
 
 @dataclass
@@ -96,6 +104,70 @@ class LowSpeedFilterCfg:
             raise ValueError(f"all_zero_cutoff_hz must be >= 0, got {self.all_zero_cutoff_hz}")
         if not self.gate_on_all_zero and not self.gate_on_zero_vx:
             raise ValueError("At least one of gate_on_all_zero / gate_on_zero_vx must be True.")
+
+
+@dataclass(frozen=True)
+class StandstillFilterPreset:
+    """Verified M20 standstill numbers shared by training, PLAY and teleop.
+
+    The preset only covers the *soft* filter.  ``all_zero_hard_zero`` is
+    deliberately **not** part of it: hard zeroing the wheel action is a
+    deployment choice (it removes the policy's standstill wheel bias), and
+    hard zeroing the leg action hurts training (26% vs 7% fall rate at 5k),
+    so it must stay an explicit opt-in.
+    """
+
+    command_threshold: float
+    leg_deadband: float
+    leg_cutoff_hz: float
+    wheel_deadband: float
+    wheel_cutoff_hz: float
+    wheel_all_zero_deadband: float
+
+
+M20_STANDSTILL_PRESET = StandstillFilterPreset(
+    command_threshold=0.1,
+    leg_deadband=0.02,
+    leg_cutoff_hz=8.0,
+    wheel_deadband=0.04,
+    wheel_cutoff_hz=2.0,
+    wheel_all_zero_deadband=0.6,
+)
+
+
+def leg_low_speed_filter_cfg(
+    preset: StandstillFilterPreset = M20_STANDSTILL_PRESET,
+    *,
+    command_name: str | None = "base_velocity",
+) -> LowSpeedFilterCfg:
+    """Leg filter config for the M20 standard: tiny dead band, 8 Hz low-pass."""
+    return LowSpeedFilterCfg(
+        command_name=command_name,
+        command_threshold=preset.command_threshold,
+        low_speed_threshold=preset.leg_deadband,
+        cutoff_hz=preset.leg_cutoff_hz,
+    )
+
+
+def wheel_low_speed_filter_cfg(
+    preset: StandstillFilterPreset = M20_STANDSTILL_PRESET,
+    *,
+    command_name: str | None = "base_velocity",
+) -> LowSpeedFilterCfg:
+    """Wheel filter config for the M20 standard.
+
+    Only ``vx == 0`` uses the small dead band / 2 Hz low-pass so lateral and
+    yaw commands stay responsive; the all-zero command gets the wide 0.6 dead
+    band as the soft-filter fallback.  ``all_zero_hard_zero`` stays False here
+    -- deployment enables it explicitly.
+    """
+    return LowSpeedFilterCfg(
+        command_name=command_name,
+        command_threshold=preset.command_threshold,
+        low_speed_threshold=preset.wheel_deadband,
+        cutoff_hz=preset.wheel_cutoff_hz,
+        all_zero_low_speed_threshold=preset.wheel_all_zero_deadband,
+    )
 
 
 def standstill_command_masks(

@@ -137,6 +137,17 @@ URDF/`init_state` 就是这么定的，照抄即可。
 M20-Piper 的腿/轮动作项在训练、PLAY、遥操回放里都会经过同一份低速滤波
 （`velocity/mdp/low_speed_filter.py` + `LowSpeedFilteredJoint*Action`）：
 
+**标准做法（M20，2026-11-26 定稿）**：**训练期软滤波 + 部署端全零仅轮硬停**。
+
+- 训练 / PLAY：用 `M20_STANDSTILL_PRESET` 的软滤波（腿 `0.02` / `8 Hz`，轮 `0.04` / `2 Hz`，
+  全零轮死区 `0.6`），`all_zero_hard_zero = False`。训练里不要开腿硬停，也不要开轮硬停：
+  5k 实验里训练期腿+轮硬停使 reward 45→37、摔倒率 6.8%→26.2%，部署端收益为 0。
+- 部署 / 遥操：在全零命令时对**轮子**硬停（`--standstill-hard-zero-scope wheel`，阈值 `0.1`）。
+  这是唯一能把 20k 策略零命令残余漂移从约 `0.285 m/6 s` 压到 `0.014 m/6 s` 的开关。
+- 这组数字由 `low_speed_filter.py` 的 `M20_STANDSTILL_PRESET` 唯一定义，训练 config 通过
+  `leg_low_speed_filter_cfg()` / `wheel_low_speed_filter_cfg()` 引用；遥操 CLI 保持同值并有
+  单测强制与 preset 一致。
+
 - **作用位置**：归一化策略动作 `a`，在 `scale` / default offset **之前**。训练和
   PLAY / 探针因此共用同一套滤波，不会因为关节增益不同而分叉。
 - **门控条件**（`command_threshold = 0.1`）：

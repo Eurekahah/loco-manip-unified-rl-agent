@@ -40,10 +40,15 @@ def prefer_cpu_for_single_env_teleop(
 def add_standstill_filter_args(parser) -> None:
     """Add the standstill low-speed filter options shared by teleop scripts.
 
-    The defaults match the M20-Piper deployment recommendation: a hard zero on
-    the wheel action for an all-zero base command (the trained low-level policy
-    carries a wheel bias at standstill), while lateral / yaw commands only get
-    a small dead band so they stay responsive.
+    These are the project-standard M20 values.  They mirror
+    ``M20_STANDSTILL_PRESET`` in ``low_speed_filter.py`` (which this module
+    cannot import directly because it must stay usable before AppLauncher);
+    ``tests/teleop/test_teleop_cli.py`` asserts the two stay in sync.
+
+    Deployment default: hard zero the *wheel* action for an all-zero base
+    command (the trained low-level policy carries a wheel bias at standstill),
+    while lateral / yaw commands only get a small dead band so they stay
+    responsive.  Legs are never hard zeroed.
     """
     parser.add_argument(
         "--low-speed-filter",
