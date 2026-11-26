@@ -63,10 +63,10 @@ def add_standstill_filter_args(parser) -> None:
     parser.add_argument(
         "--standstill-hard-zero-scope",
         choices=("wheel", "leg", "both"),
-        default="both",
+        default="wheel",
         help=(
-            "硬停作用范围（默认 both）。轮子硬停去掉策略的零速轮偏置，"
-            "腿部硬停去掉站立时腿动作造成的残余漂移；只作用于全零命令。"
+            "硬停作用范围（默认 wheel）。只抑制轮子在零速命令下的动作；"
+            "both 会把腿动作也归零（实验项，训练里开启会显著抬高摔倒率）。"
         ),
     )
     parser.add_argument(

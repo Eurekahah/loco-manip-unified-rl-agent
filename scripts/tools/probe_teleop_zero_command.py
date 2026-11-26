@@ -44,10 +44,10 @@ parser.add_argument(
 parser.add_argument(
     "--standstill-hard-zero-scope",
     choices=("wheel", "leg", "both"),
-    default="both",
+    default="wheel",
     help=(
-        "Hard-zero scope for --standstill-hard-zero (default both, matching the "
-        "teleop default; use wheel to compare against wheel-only hard zero)"
+        "Hard-zero scope for --standstill-hard-zero (default wheel, matching the "
+        "teleop default; use both to also zero the leg action)"
     ),
 )
 parser.add_argument(

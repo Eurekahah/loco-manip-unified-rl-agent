@@ -128,24 +128,24 @@ def _standstill_env_cfg():
     return SimpleNamespace(actions=SimpleNamespace(pre_trained_pick_action=term)), leg, wheel
 
 
-def test_standstill_hard_zero_defaults_to_leg_and_wheel() -> None:
+def test_standstill_hard_zero_defaults_to_wheel_only() -> None:
     env_cfg, leg, wheel = _standstill_env_cfg()
 
     assert apply_standstill_filter_args(env_cfg, _standstill_args())
 
-    assert leg.low_speed_filter.all_zero_hard_zero
     assert wheel.low_speed_filter.all_zero_hard_zero
+    assert not leg.low_speed_filter.all_zero_hard_zero
     assert leg.low_speed_filter.enabled and wheel.low_speed_filter.enabled
 
 
-def test_standstill_hard_zero_scope_wheel_keeps_leg_soft() -> None:
+def test_standstill_hard_zero_scope_both_also_zeroes_leg() -> None:
     env_cfg, leg, wheel = _standstill_env_cfg()
 
     assert apply_standstill_filter_args(
-        env_cfg, _standstill_args(standstill_hard_zero_scope="wheel")
+        env_cfg, _standstill_args(standstill_hard_zero_scope="both")
     )
 
-    assert not leg.low_speed_filter.all_zero_hard_zero
+    assert leg.low_speed_filter.all_zero_hard_zero
     assert wheel.low_speed_filter.all_zero_hard_zero
 
 
