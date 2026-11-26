@@ -102,7 +102,8 @@ class AS2WPiperXHistoryPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         class_name="ActorCriticHistory",
         init_noise_std=1.0,
         noise_std_type="log",
-        state_dependent_std=False,
+        # 不显式传 state_dependent_std：IsaacLab v2.3.0 的 RslRlPpoActorCriticCfg 没有该字段，
+        # 而 ActorCriticHistory 本就通过 **kwargs 忽略它；本地新版默认值即 False，行为等价。
         actor_hidden_dims=[512, 256, 128],
         critic_hidden_dims=[512, 256, 128],
         activation="elu",
