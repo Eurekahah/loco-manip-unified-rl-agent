@@ -8,6 +8,10 @@
 
 第二部分的双圆柱台任务已单独记录在 [two_cylinder_place_zh.md](two_cylinder_place_zh.md)，训练、遥操和采集配置与本任务保持独立。
 
+> AS2-W X 底盘的同类整机资产见 `deep_robotics_model/AS2W_PiperX`
+> （Piper X 装在车身中部、朝前），装配推导与可达范围见
+> [as2w_piperx_assembly_zh.md](../as2w_piperx_assembly_zh.md)。
+
 ## 1. 任务与配置分离
 
 | 用途 | Gym task | 控制接口 | 相机 | HDF5 recorder |

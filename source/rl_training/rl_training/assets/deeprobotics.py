@@ -320,3 +320,149 @@ PIPER_CFG = ArticulationCfg(
         ),
     },
 )
+
+
+##
+# AS2-W X + Piper X（由单一 URDF 直接导入）
+##
+
+# URDF 由 scripts/tools/build_as2w_piperx_urdf.py 生成：AS2-W X 本体 + Piper X 臂，
+# 安装位/网格自检见 docs/as2w_piperx_assembly_zh.md。
+AS2W_PIPERX_URDF_PATH = f"{ISAACLAB_ASSETS_DATA_DIR}/AS2W_PiperX/urdf/AS2W_PiperX.urdf"
+"""Path to the assembled AS2-W X + Piper X URDF."""
+
+# 静止站立姿态（零点由 FK + 网格接触面核算，见 docs/as2w_piperx_assembly_zh.md）：
+#   - 髋 ±0.10 rad：轻微外八，轮心 y≈±0.20 m（髋=0 时轮心 y=±0.165 m 是机构固有偏移）；
+#   - 大腿 0.44 / 小腿 -0.88 ⇒ 轮心 x=±0.212 m（正好在髋轴正下方），支撑多边形前后对称；
+#     （小腿关节 URDF 上限是 -0.8133，必须比它更弯，故不能取 -0.80）
+#   - 轮心相对 base_link z≈-0.379 m ⇒ base_link 离地 ≈0.449 m（init_state 给 0.45 m）。
+AS2W_PIPERX_STAND_JOINT_POS = {
+    "FL_hip": 0.10,
+    "RL_hip": 0.10,
+    "FR_hip": -0.10,
+    "RR_hip": -0.10,
+    "FL_thigh": 0.44,
+    "FR_thigh": 0.44,
+    "RL_thigh": 0.44,
+    "RR_thigh": 0.44,
+    "FL_calf": -0.88,
+    "FR_calf": -0.88,
+    "RL_calf": -0.88,
+    "RR_calf": -0.88,
+    "FL_foot": 0.0,
+    "FR_foot": 0.0,
+    "RL_foot": 0.0,
+    "RR_foot": 0.0,
+    # 肘抬起、末端朝前上方：末端在 base 系约 (0.15, 0.0, 0.43) m，离机身与雷达罩最近 >30 mm
+    "arm_joint1": 0.0,
+    "arm_joint2": 0.5,
+    "arm_joint3": -0.5,
+    "arm_joint4": 0.0,
+    "arm_joint5": 0.0,
+    "arm_joint6": 0.0,
+    "gripper_joint1": 0.0,
+    "gripper_joint2": 0.0,
+}
+"""Default joint positions (rad / m) of the AS2-W X + Piper X standing pose."""
+
+
+DEEPROBOTICS_AS2W_PIPERX_CFG = ArticulationCfg(
+    spawn=sim_utils.UrdfFileCfg(
+        asset_path=AS2W_PIPERX_URDF_PATH,
+        # 转换结果缓存到资产目录：只在 URDF/转换参数变化时重新生成
+        usd_dir=f"{ISAACLAB_ASSETS_DATA_DIR}/AS2W_PiperX/usd",
+        force_usd_conversion=False,
+        make_instanceable=True,
+        fix_base=False,
+        # 不合并 fixed joint，保留 base_to_arm / JT128 / joint6_to_gripper_base 的真实装配层级
+        merge_fixed_joints=False,
+        self_collision=False,
+        collider_type="convex_hull",
+        # 关节驱动完全交给下面的 actuator（URDF 里没有可靠的 PD 增益）
+        joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
+            target_type="none",
+            gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0.0, damping=0.0),
+        ),
+        activate_contact_sensors=True,
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=False,
+            retain_accelerations=False,
+            linear_damping=0.0,
+            angular_damping=0.0,
+            max_linear_velocity=1000.0,
+            max_angular_velocity=1000.0,
+            max_depenetration_velocity=1.0,
+        ),
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            enabled_self_collisions=False, solver_position_iteration_count=8, solver_velocity_iteration_count=2
+        ),
+    ),
+    init_state=ArticulationCfg.InitialStateCfg(
+        pos=(0.0, 0.0, 0.45),
+        joint_pos=AS2W_PIPERX_STAND_JOINT_POS,
+        joint_vel={".*": 0.0},
+    ),
+    soft_joint_pos_limit_factor=0.95,
+    actuators={
+        # 髋/大腿：URDF 60 N·m / 25 rad/s
+        "hip_thigh": DelayedPDActuatorCfg(
+            joint_names_expr=[".*_hip", ".*_thigh"],
+            effort_limit=60.0,
+            velocity_limit=25.0,
+            stiffness=250.0,
+            damping=6.0,
+            friction=0.0,
+            armature=0.01,
+            min_delay=0,
+            max_delay=0,
+        ),
+        # 小腿：URDF 90 N·m / 16.67 rad/s
+        "calf": DelayedPDActuatorCfg(
+            joint_names_expr=[".*_calf"],
+            effort_limit=90.0,
+            velocity_limit=16.67,
+            stiffness=250.0,
+            damping=6.0,
+            friction=0.0,
+            armature=0.01,
+            min_delay=0,
+            max_delay=0,
+        ),
+        # 轮：纯阻尼（Kp=0），零速指令下相当于被动滚动 + 轻微刹车
+        "wheel": DelayedPDActuatorCfg(
+            joint_names_expr=[".*_foot"],
+            effort_limit=15.0,
+            velocity_limit=98.47,
+            stiffness=0.0,
+            damping=0.6,
+            friction=0.0,
+            armature=0.00243216,
+            min_delay=0,
+            max_delay=0,
+        ),
+        # Piper X 臂：用隐式驱动（PhysX 自带隐式 PD）。
+        # 显式 DelayedPDActuator 在 5 ms 步长下对 Piper X 这种小惯量关节（I≈3e-4 kg·m²）
+        # 会自激：关节在 ±10 rad/s 抖动、力矩顶满 100 N·m（实测过 300/8、无延迟也不行）。
+        # 隐式驱动实测 300/8 时关节静止误差 <1e-3 rad、机身角速度 4e-3 rad/s。
+        "piper_arm": ImplicitActuatorCfg(
+            joint_names_expr=["arm_joint[1-6]"],
+            effort_limit_sim=100.0,
+            velocity_limit_sim=3.0,
+            stiffness=300.0,
+            damping=8.0,
+            friction=0.01,
+            armature=0.01,
+        ),
+        # Piper X 夹爪：286/5（行程匹配刚度，实测不长期饱和）
+        "piper_gripper": ImplicitActuatorCfg(
+            joint_names_expr=["gripper_joint[1-2]"],
+            effort_limit_sim=10.0,
+            velocity_limit_sim=1.0,
+            stiffness=286.0,
+            damping=5.0,
+            friction=0.01,
+            armature=0.01,
+        ),
+    },
+)
+"""AS2-W X + Piper X articulation: 24 DOF (16 leg + 4 wheel + 6 arm + 2 gripper)."""
