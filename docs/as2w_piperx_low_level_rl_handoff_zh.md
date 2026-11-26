@@ -635,17 +635,17 @@ weight = -0.03
 
 | 参数 | M20 值 | AS2W 处理 |
 |---|---|---|
-| 轮半径 | `0.09`（硬编码） | 实测轮心高，预计 `≈0.077` |
-| 默认站高 | `0.513` | 实测 `base_link` 稳定高度，URDF 估算 `≈0.4466` |
-| `body_pose.height_range` | `(0.33, 0.60)` | 实测蹲伏/抬升极限（不要照抄：M20 站高 0.513，AS2W 只有 0.4466） |
-| 终止高度 | `0.30` | 实测「最低稳定高度 − 余量」 |
-| EE `sampled_height` | `0.6` | 按 `arm_base_link` 世界 z（≈0.526）重定 |
-| EE `p_l/p_pitch/p_yaw`（Stage 0 锚点） | `(0.41, -0.08, 0)` | 在 AS2W 球坐标工作空间里重找「低重心、前伸、臂不动」点 |
-| EE 三阶段区间 | 见 §9.8 | 按实测可达区间重算 |
-| EE 碰撞盒 | `[-0.3,-0.3,-0.6]`–`[0.3,0.3,-0.05]` | 按 AS2W 车体尺寸重定，并报告拒绝率 |
-| 动作 scale | `hipx 0.125 / 其余 0.25` | `hip 0.125 / thigh 0.25 / calf 0.25`，smoke 验证 |
-| `contact_forces.threshold` | `100.0` | 按轮半径/力矩重估（轮 effort 15 N·m ÷ 0.077 m ≈ 195 N） |
-| self-collision | `True` | A/B 后决定（资产当前是 `False`） |
+| 轮半径 | `0.09`（硬编码） | **0.0774 m**（四轮轮心世界 z 均值） |
+| 默认站高 | `0.513` | **0.4466 m**（`base_link` 200 步零动作，std≈0） |
+| `body_pose.height_range` | `(0.33, 0.60)` | **`(0.33, 0.45)`**（实测最低稳定 0.332 m，FK 上界 0.4508 m） |
+| 终止高度 | `0.30` | **0.28 m**（最低稳定 0.332 m − 余量） |
+| EE `sampled_height` | `0.6` | **0.5264 m**（`arm_base_link` 世界 z 实测） |
+| EE `p_l/p_pitch/p_yaw`（Stage 0 锚点） | `(0.41, -0.08, 0)` | **`(0.436, -0.122, 0)`**（低重心、前伸样本中位数） |
+| EE 三阶段区间 | 见 §9.8 | stage1 `l∈(0.39,0.48)/pitch∈(-0.35,0.05)/yaw±0.45`；stage2 `(0.34,0.50)/(-0.55,0.15)/±0.85`；stage3 = 工作空间 `(0.30,0.52)/(-π/4,π/5)/±2π/5` |
+| EE 碰撞盒 | `[-0.3,-0.3,-0.6]`–`[0.3,0.3,-0.05]` | **`[-0.32,-0.28,-0.54]`–`[0.34,0.28,0.05]`**（高度不变系；z 跨 0 以覆盖整机） |
+| 动作 scale | `hipx 0.125 / 其余 0.25` | `hip 0.125 / thigh 0.25 / calf 0.25`（`probe_deploy_layout` 实测增益一致） |
+| `contact_forces.threshold` | `100.0` | **120.0 N**（站立力矩峰值 5.6 N·m；轮 effort 15 N·m ÷ 0.0774 m ≈ 194 N 为上界） |
+| self-collision | `True` | **OFF**（A/B：开启后站高 0.4466→0.4691 m、力矩峰值 5.6→60.0 N·m） |
 
 ---
 
@@ -876,9 +876,15 @@ conda run -n env_isaac_lab python scripts/reinforcement_learning/rsl_rl/probe_de
 
 ## 执行记录（由执行 session 填写）
 
-- [ ] Phase 0 完成，`report.md` 路径：`______`
-- [ ] Phase 1 完成，golden diff：`______`
-- [ ] Phase 2 完成，stand 验证：`______`
-- [ ] Phase 3 完成，layout 输出：`______`
-- [ ] Phase 4 完成，smoke 日志：`______`
-- [ ] Phase 5 完成，`policy_layout.json`：`______`
+- [x] Phase 0 完成，`report.md` 路径：`logs/probe/as2w/final_off/report.md`（self-collision off；站高 0.4466 m、轮半径 0.0774 m、EE 可达栅格 93×93×77）
+- [x] Phase 1 完成，golden diff：`logs/golden/m20_before.yaml` vs `logs/golden/m20_after.yaml`（仅新增 `feet_radius: 0.09`，其余一致）
+- [x] Phase 2 完成，stand 验证：`logs/probe/as2w/phase2_stand/`（迁移后站立复验通过）
+- [x] Phase 3 完成，layout 输出：`logs/smoke/as2w/as2w_64x2.log`（policy 83 / critic 86 / history 700 / privileged 54 / action 16，无 NaN）
+- [x] Phase 4 完成，smoke 日志：`logs/smoke/as2w/as2w_64x100.log`（64 env × 100 iter，EXIT 0，无 NaN/Traceback）
+- [x] Phase 5 完成，`policy_layout.json`：`logs/rsl_rl/history_anchor_as2w_piperx/2026-11-26_20-04-44/exported_deploy/policy_layout.json`（ONNX 相对误差 2.5e-7）
+
+补充复核与注意项：
+
+- 导出：`logs/smoke/as2w/export_100.log`；部署布局探针：`logs/smoke/as2w/probe_deploy_layout.log`；`play.py` 视频：`logs/smoke/as2w/play_100.log`；固定命令评测：`logs/smoke/as2w/eval_100.log` / `.json`。
+- `eval_fixed_command` 仅驱动 `base_velocity.vel_command_b`，`ee_pose` / `body_pose` 仍随机重采样。
+- 100 iter 仅验证数值稳定性（无爆炸），未学到正常步态，需长训。

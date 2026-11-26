@@ -86,13 +86,14 @@ def body_height_tracking(
     std: float = 0.05,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     feet_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*wheel"),
+    feet_radius: float = 0.09,
 ) -> torch.Tensor:
     """机身高度跟踪奖励（高斯核，误差越小奖励越高）。"""
     asset = env.scene[asset_cfg.name]
     cmd = env.command_manager.get_command(command_name)  # (N, 3)
     target_h = cmd[:, 0]
 
-    actual_h = compute_base_height_rel_to_feet(env, asset_cfg, feet_cfg)  # z 高度
+    actual_h = compute_base_height_rel_to_feet(env, asset_cfg, feet_cfg, wheel_radius=feet_radius)  # z 高度
     error = (actual_h - target_h).pow(2)
     return torch.exp(-error / (2 * std ** 2))
 
@@ -980,6 +981,7 @@ def joint_mirror_signed(
     asset_cfg: SceneEntityCfg,
     mirror_joints: list[list[str]],
     mirror_signs: list[dict[str, float]],
+    joint_kind_patterns: dict[str, str] | None = None,
     gate_by_gravity: bool = True,
 ) -> torch.Tensor:
     """带**关节符号约定**的镜像惩罚：``Σ_pairs Σ_j (θ_a,j − s_j · θ_b,j)² / n_pairs``
@@ -1018,6 +1020,10 @@ def joint_mirror_signed(
         mirror_signs: 与 ``mirror_joints`` **一一对应**的符号字典，键是关节类型
             （``hipx`` / ``hipy`` / ``knee``），值是 ``+1.0`` / ``-1.0``。
             用关节名后缀判定，**不依赖** ``find_joints`` 的返回顺序。
+        joint_kind_patterns: 关节类型名 → 正则。``None`` = 现有 M20 行为
+            （``_(hipx|hipy|knee)_joint$``）；AS2W 传
+            ``{"hip": r"_hip$", "thigh": r"_thigh$", "calf": r"_calf$"}``。
+            匹配不到任何模式会**直接报错**，不静默跳过。
         gate_by_gravity: 与原 ``joint_mirror`` 一致，用 ``-g_z`` 做"直立才计分"的门控。
     """
     asset: Articulation = env.scene[asset_cfg.name]
@@ -1026,8 +1032,30 @@ def joint_mirror_signed(
             f"joint_mirror_signed: mirror_joints({len(mirror_joints)}) 与 "
             f"mirror_signs({len(mirror_signs)}) 数量不一致"
         )
+    # 关节类型判定器：默认 M20 正则；传入 patterns 时按给定正则逐个 search。
+    if joint_kind_patterns is None:
+        compiled_kind_patterns = None
+
+        def _joint_kind(name: str) -> str | None:
+            m = _MIRROR_JOINT_TYPE_RE.search(name)
+            return None if m is None else m.group(1)
+
+    else:
+        compiled_kind_patterns = {k: re.compile(p) for k, p in joint_kind_patterns.items()}
+
+        def _joint_kind(name: str) -> str | None:
+            for kind, rx in compiled_kind_patterns.items():
+                if rx.search(name):
+                    return kind
+            return None
+
+    # 缓存 key 必须带上 patterns：同进程里换机器人时，只有 mirror_joints 相同会命中错误缓存。
+    cache_key = (
+        tuple(map(tuple, mirror_joints)),
+        tuple(sorted((joint_kind_patterns or {}).items())),
+    )
     cache = getattr(env, "joint_mirror_signed_cache", None)
-    if cache is None or env.joint_mirror_signed_cache_key != tuple(map(tuple, mirror_joints)):
+    if cache is None or env.joint_mirror_signed_cache_key != cache_key:
         cache = []
         for (pat_a, pat_b), sign_map in zip(mirror_joints, mirror_signs):
             ids_a, names_a = asset.find_joints(pat_a)
@@ -1039,16 +1067,16 @@ def joint_mirror_signed(
                 )
             signs = []
             for name in names_a:
-                m = _MIRROR_JOINT_TYPE_RE.search(name)
-                if m is None or m.group(1) not in sign_map:
+                kind = _joint_kind(name)
+                if kind is None or kind not in sign_map:
                     raise RuntimeError(
                         f"joint_mirror_signed: 无法从关节名 {name!r} 推出镜像符号；"
-                        f"mirror_signs 必须给 {{hipx, hipy, knee}}（收到 {sign_map}）。"
+                        f"mirror_signs 必须给 {sorted(sign_map)}，joint_kind_patterns={joint_kind_patterns}。"
                     )
-                signs.append(float(sign_map[m.group(1)]))
+                signs.append(float(sign_map[kind]))
             cache.append((ids_a, ids_b, signs))
         env.joint_mirror_signed_cache = cache
-        env.joint_mirror_signed_cache_key = tuple(map(tuple, mirror_joints))
+        env.joint_mirror_signed_cache_key = cache_key
 
     reward = torch.zeros(env.num_envs, device=env.device)
     for ids_a, ids_b, signs in cache:

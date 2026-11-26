@@ -23,6 +23,7 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="仅解析 task cfg（不建 env）")
 parser.add_argument("--task", required=True, help="任务 id")
 parser.add_argument("--agent", default="rsl_rl_cfg_entry_point")
+parser.add_argument("--dump-yaml", default=None, help="把解析后的 env_cfg 导出成 YAML（对齐 params/env.yaml）")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 sys.argv = [sys.argv[0]]
@@ -86,6 +87,16 @@ def main(env_cfg, agent_cfg):
           f"  history_length={getattr(p, 'history_length', None)}")
     print(f"  obs_groups={agent_cfg.obs_groups}")
     print("=" * 78)
+
+    if args_cli.dump_yaml:
+        import yaml
+        from pathlib import Path
+
+        out = Path(args_cli.dump_yaml)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("w", encoding="utf-8") as f:
+            yaml.dump(env_cfg.to_dict(), f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        print(f"[dump-yaml] wrote {out}")
 
 
 if __name__ == "__main__":

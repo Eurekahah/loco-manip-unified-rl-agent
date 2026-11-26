@@ -366,7 +366,7 @@ AS2W_PIPERX_STAND_JOINT_POS = {
 """Default joint positions (rad / m) of the AS2-W X + Piper X standing pose."""
 
 
-DEEPROBOTICS_AS2W_PIPERX_CFG = ArticulationCfg(
+AS2W_PIPERX_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         asset_path=AS2W_PIPERX_URDF_PATH,
         # 转换结果缓存到资产目录：只在 URDF/转换参数变化时重新生成

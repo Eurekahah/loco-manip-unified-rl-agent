@@ -148,7 +148,7 @@ python scripts/tools/build_as2w_piperx_urdf.py `
 
 ## 8. 已知限制 / 后续
 
-1. 仓库里只存 URDF + STL；USD 由 `DEEPROBOTICS_AS2W_PIPERX_CFG` 在首次加载时自动转换，
+1. 仓库里只存 URDF + STL；USD 由 `AS2W_PIPERX_CFG` 在首次加载时自动转换，
    缓存在 `deep_robotics_model/AS2W_PiperX/usd/`（约 60 MB，未入库）。
 2. 站立初始角/执行器只针对“静止可视化”整定过（见第 9 节），还没有为行走训练调过。
 3. Piper X 原 URDF 的 `Link7` 质量为 0，本资产改成 0.01 kg + 小惯量（Isaac 不接受零质量）。
@@ -156,7 +156,7 @@ python scripts/tools/build_as2w_piperx_urdf.py `
 
 ## 9. Isaac Sim 静止站立可视化（2026-11-26）
 
-`DEEPROBOTICS_AS2W_PIPERX_CFG`（`source/rl_training/rl_training/assets/deeprobotics.py`）
+`AS2W_PIPERX_CFG`（`source/rl_training/rl_training/assets/deeprobotics.py`）
 + 专用可视化 task `Visualize-AS2W-PiperX-v0`
 （`.../config/wheeled/deeprobotics_as2w_piperx/stand_env_cfg.py`）：
 

@@ -14,50 +14,20 @@
    ``AS2W_PIPERX_STAND_JOINT_POS`` 的站立姿态。
 3. 终止只保留 timeout，且 episode 很长，避免观察过程中被 reset 传送回原点。
 4. 物理步长 5 ms、决策 20 ms（50 Hz 渲染），与 M20 环境一致。
+5. 场景（地面 / 机器人 / 灯光 / 接触传感器）来自共用 ``scene_cfg.py``。
 """
 
-import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
-from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 
 import rl_training.tasks.manager_based.locomotion.velocity.mdp as mdp
-from rl_training.assets.deeprobotics import DEEPROBOTICS_AS2W_PIPERX_CFG
-
-
-@configclass
-class AS2WPiperXSceneCfg(InteractiveSceneCfg):
-    """平地 + 机器人 + 灯光。接触报告由 spawn 的 ``activate_contact_sensors`` 打开。"""
-
-    terrain = TerrainImporterCfg(
-        prim_path="/World/ground",
-        terrain_type="plane",
-        collision_group=-1,
-        physics_material=sim_utils.RigidBodyMaterialCfg(
-            friction_combine_mode="multiply",
-            restitution_combine_mode="multiply",
-            static_friction=1.0,
-            dynamic_friction=1.0,
-            restitution=0.0,
-        ),
-        debug_vis=False,
-    )
-    robot: ArticulationCfg = DEEPROBOTICS_AS2W_PIPERX_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-    dome_light = AssetBaseCfg(
-        prim_path="/World/Light/Dome",
-        spawn=sim_utils.DomeLightCfg(intensity=900.0, color=(1.0, 1.0, 1.0)),
-    )
-    sun = AssetBaseCfg(
-        prim_path="/World/Light/Sun",
-        spawn=sim_utils.DistantLightCfg(intensity=2500.0, color=(1.0, 0.96, 0.9), angle=0.6),
-        init_state=AssetBaseCfg.InitialStateCfg(rot=(0.653, 0.271, 0.271, 0.653)),
-    )
+from rl_training.tasks.manager_based.locomotion.velocity.config.wheeled.as2w_piperx.scene_cfg import (
+    AS2WPiperXSceneCfg,
+)
 
 
 @configclass

@@ -1490,7 +1490,9 @@ class BodyPoseCommand(CommandTerm):
         # 读取实际 body pose
         # ------------------------------------------------------------------ #
         # 实际高度：root 在世界系下的 z 坐标
-        actual_height = compute_base_height_rel_to_feet(self._env, self.cfg.asset_cfg, self.cfg.feet_cfg)  # (num_envs,)
+        actual_height = compute_base_height_rel_to_feet(
+            self._env, self.cfg.asset_cfg, self.cfg.feet_cfg, wheel_radius=self.cfg.feet_radius
+        )  # (num_envs,)
 
         # 实际 pitch / roll：从四元数转欧拉角
         # euler_xyz_from_quat 返回顺序为 (roll, pitch, yaw)，单位 rad
@@ -1563,7 +1565,9 @@ class BodyPoseCommand(CommandTerm):
 
         zeros = torch.zeros(self.num_envs, device=self.device)
 
-        ref_ground_h = self._env.scene["robot"].data.root_pos_w[:, 2] - compute_base_height_rel_to_feet(self._env, self.cfg.asset_cfg, self.cfg.feet_cfg)
+        ref_ground_h = self._env.scene["robot"].data.root_pos_w[:, 2] - compute_base_height_rel_to_feet(
+            self._env, self.cfg.asset_cfg, self.cfg.feet_cfg, wheel_radius=self.cfg.feet_radius
+        )
 
 
         # ---------- 公共：圆片位置（两个圆片同位置）----------
@@ -1633,6 +1637,9 @@ class BodyPoseCommandCfg(CommandTermCfg):
     resampling_time_range: tuple = (10.0, 10.0)  # 每 10~10 s 重采样一次
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
     feet_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*wheel")
+    # 足端轮的半径（m）：传给 `compute_base_height_rel_to_feet` 把“base 相对轮心”换算成
+    # “base 相对地面”。默认 0.09 保持 M20 行为；AS2W-PiperX 实测 0.0774。
+    feet_radius: float = 0.09
     debug_vis: bool = False
 
     # 稳态高度误差的裁剪阈值（m）：非 None 时额外记录

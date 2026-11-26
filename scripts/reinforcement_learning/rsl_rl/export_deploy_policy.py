@@ -411,6 +411,10 @@ def _cross_check_with_rsl_rl(sd, policy_cfg, layout, scripted, activation) -> No
             policy_cfg.get("privileged_encoder_hidden_dims")
             or [out for out, _ in priv_chain[:-1]]
         ),
+        # 教师自编码锚（History-Anchor）会在 checkpoint 里留下 ``privileged_decoder.*``
+        # 权重 —— 它们只在仿真里用，部署侧不导出，但参考 ActorCriticHistory 必须把
+        # decoder 建出来才能 strict=True 载入全部权重（否则 unexpected keys 报错）。
+        teacher_recon_hidden_dims=tuple(policy_cfg.get("teacher_recon_hidden_dims") or ()),
         actor_hidden_dims=[out for out, _ in _linear_chain(sd, "actor.")[:-1]],
         critic_hidden_dims=[out for out, _ in critic_chain[:-1]],
         activation=activation,

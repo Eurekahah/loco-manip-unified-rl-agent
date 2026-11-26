@@ -447,7 +447,9 @@ class privileged_joint_gain_scale(_PrivilegedCachedTerm):
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         self.asset = env.scene[cfg.params["asset_cfg"].name]
-        self.included_actuators = {"joint", "wheel", "piper_arm", "piper_gripper"}  # 轮子和夹爪可按需去掉
+        self.included_actuators = set(
+            cfg.params.pop("included_actuators", ("joint", "wheel", "piper_arm", "piper_gripper"))
+        )  # 轮子和夹爪可按需去掉
 
     @staticmethod
     def _scale(current: torch.Tensor, default) -> torch.Tensor:
@@ -587,6 +589,7 @@ class privileged_env_params_v4(_PrivilegedCachedTerm):
         self.base_body_name = cfg.params.pop("base_body_name", "base_link")
         self.gripper_body_name = cfg.params.pop("gripper_body_name", "gripper_base")
         self.foot_body_regex = cfg.params.pop("foot_body_regex", ".*wheel")
+        self.wheel_joint_regex = cfg.params.pop("wheel_joint_regex", ".*_wheel_joint")
         self.included_actuators = set(
             cfg.params.pop("included_actuators", ("joint", "wheel", "piper_arm", "piper_gripper"))
         )
@@ -598,13 +601,17 @@ class privileged_env_params_v4(_PrivilegedCachedTerm):
         foot_re = _re.compile(self.foot_body_regex)
         self.foot_body_ids = [i for i, n in enumerate(self.asset.body_names) if foot_re.fullmatch(n)]
         self.other_body_ids = [i for i in range(len(self.asset.body_names)) if i not in self.foot_body_ids]
-        # 轮关节：用关节名里的 "wheel" 判定（body 名是 `.*_wheel`、关节名是 `*_wheel_joint`，
-        # 两个正则不能混用）。数量对不上就直接报错，避免静默产生错位的通道。
-        self.wheel_joint_names = {jn for jn in self.asset.joint_names if "wheel" in jn}
+        # 轮关节：用显式正则判定（body 名和关节名是两套命名，不能混用）。
+        # 默认 `.*_wheel_joint` 对 M20 等价；AS2W 的轮关节叫 `*_foot`，必须显式传 `.*_foot`。
+        # 数量对不上就直接报错，避免静默产生错位的通道。
+        self.wheel_joint_names = {
+            jn for jn in self.asset.joint_names if _re.fullmatch(self.wheel_joint_regex, jn)
+        }
         if len(self.wheel_joint_names) != len(self.foot_body_ids):
             raise ValueError(
                 f"轮关节数({len(self.wheel_joint_names)}) 与轮 body 数({len(self.foot_body_ids)}) 不一致，"
-                f"privileged_env_params_v4 的通道切片会错位。请检查 foot_body_regex / 运行器命名。"
+                f"privileged_env_params_v4 的通道切片会错位。请检查 foot_body_regex="
+                f"{self.foot_body_regex!r} / wheel_joint_regex={self.wheel_joint_regex!r}。"
             )
 
         # ---- 归一化范围：全部从 EventCfg 现读 ------------------------------------ #
@@ -656,6 +663,7 @@ class privileged_env_params_v4(_PrivilegedCachedTerm):
         base_body_name: str = "base_link",
         gripper_body_name: str = "gripper_base",
         foot_body_regex: str = ".*wheel",
+        wheel_joint_regex: str = ".*_wheel_joint",
         included_actuators: tuple[str, ...] = ("joint", "wheel", "piper_arm", "piper_gripper"),
     ) -> torch.Tensor:
         """缓存版 __call__。
