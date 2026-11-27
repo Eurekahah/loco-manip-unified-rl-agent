@@ -1,0 +1,123 @@
+  <material name="aluminum">
+    <color rgba="0.5 0.5 0.5 1"/>
+  </material>
+
+  <link name="camera_stand_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.0"/>
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0"/>
+    </inertial>
+    <visual name="">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://piper_description/meshes/dae/realsense_mid_stand.dae"/>
+      </geometry>
+      <material name="aluminum"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://piper_description/meshes/dae/realsense_mid_stand.dae"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="camera_stand_joint" type="fixed">
+    <origin xyz="0.001 -0.036 0.022" rpy="1.57 3.14 0.0"/>
+    <parent link="Link6"/>
+    <child link="camera_stand_link"/>
+  </joint>
+
+  <!-- D405 mount point. The pose is inherited from the original camera bracket. -->
+  <link name="d405_camera_link"/>
+  <joint name="d405_camera_joint" type="fixed">
+    <origin xyz="0.029 -0.069 0.022" rpy="0.0 -1.22 1.57"/>
+    <parent link="Link6"/>
+    <child link="d405_camera_link"/>
+  </joint>
+
+  <!-- Camera body origin is at the D405 bottom screw mount. -->
+  <joint name="camera_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="d405_camera_link"/>
+    <child link="camera_bottom_screw_frame"/>
+  </joint>
+  <link name="camera_bottom_screw_frame"/>
+  <joint name="camera_link_joint" type="fixed">
+    <origin xyz="0.01085 0.009 0.021" rpy="0 0 0"/>
+    <parent link="camera_bottom_screw_frame"/>
+    <child link="camera_link"/>
+  </joint>
+  <link name="camera_link">
+    <visual>
+      <origin xyz="0.0038 -0.009 0" rpy="1.5707963267948966 0 1.5707963267948966"/>
+      <geometry>
+        <mesh filename="package://realsense2_description/meshes/d405.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="aluminum"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.0078 -0.009 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.023 0.042 0.042"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.072"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.003881243" ixy="0.0" ixz="0.0" iyy="0.000498940" iyz="0.0" izz="0.003879257"/>
+    </inertial>
+  </link>
+
+  <!-- Nominal RealSense D405 frames. -->
+  <joint name="d405_depth_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="camera_link"/>
+    <child link="d405_depth_frame"/>
+  </joint>
+  <link name="d405_depth_frame"/>
+  <joint name="d405_depth_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
+    <parent link="d405_depth_frame"/>
+    <child link="d405_depth_optical_frame"/>
+  </joint>
+  <link name="d405_depth_optical_frame"/>
+
+  <joint name="d405_infra1_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="camera_link"/>
+    <child link="d405_infra1_frame"/>
+  </joint>
+  <link name="d405_infra1_frame"/>
+  <joint name="d405_infra1_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
+    <parent link="d405_infra1_frame"/>
+    <child link="d405_infra1_optical_frame"/>
+  </joint>
+  <link name="d405_infra1_optical_frame"/>
+
+  <joint name="d405_infra2_joint" type="fixed">
+    <origin xyz="0 -0.018 0" rpy="0 0 0"/>
+    <parent link="camera_link"/>
+    <child link="d405_infra2_frame"/>
+  </joint>
+  <link name="d405_infra2_frame"/>
+  <joint name="d405_infra2_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
+    <parent link="d405_infra2_frame"/>
+    <child link="d405_infra2_optical_frame"/>
+  </joint>
+  <link name="d405_infra2_optical_frame"/>
+
+  <joint name="d405_color_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="camera_link"/>
+    <child link="d405_color_frame"/>
+  </joint>
+  <link name="d405_color_frame"/>
+  <joint name="d405_color_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
+    <parent link="d405_color_frame"/>
+    <child link="d405_color_optical_frame"/>
+  </joint>
+  <link name="d405_color_optical_frame"/>
