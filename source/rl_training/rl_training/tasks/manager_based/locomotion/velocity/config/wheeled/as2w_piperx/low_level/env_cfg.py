@@ -120,14 +120,14 @@ class AS2WPiperXFlatEnvCfg_PLAY(AS2WPiperXFlatEnvCfg):
         self.commands.ee_pose.ranges.o_yaw = (-math.pi, math.pi)
 
         # ---- 底盘速度命令置零（M20 PLAY 口径）----
-        self.commands.base_velocity.ranges.lin_vel_x = (0.0, 0.0)
+        self.commands.base_velocity.ranges.lin_vel_x = (-1.0, 1.0)
         self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
         self.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
         self.commands.base_velocity.rel_standing_envs = 0.0
 
         # ---- 机身姿态：高度放开到实测区间，pitch/roll 保持默认 ----
         self.commands.body_pose.height_range = _PROFILE.base_height_range
-        self.commands.body_pose.pitch_range = (0.0, 0.0)
+        self.commands.body_pose.pitch_range = (0.35, 0.35)
         self.commands.body_pose.roll_range = (0.0, 0.0)
 
         # ---- 静止惩罚取训练终值 ----

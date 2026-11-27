@@ -90,7 +90,7 @@ class TeleopLLAction(LowLevelPolicyActionBase):
         self._ee_body_idx = self.robot.find_bodies(self.cfg.ee_body_name)[0][0]
         # default 身体姿态缓存（height, pitch, roll），reset 时恢复到初始值
         self._default_body_pose: torch.Tensor = torch.zeros(self.num_envs, 3, device=self.device)
-        self._default_body_pose[:, 0] = 0.51  # height 默认 0.51，pitch/roll 默认 0
+        self._default_body_pose[:, 0] = float(self.cfg.default_body_height)
         
         self.arm_link_ids = self.robot.find_bodies(["arm.*"])[0]
         ik_period = float(getattr(self.cfg, "ik_update_period_s", 0.0))
@@ -207,11 +207,15 @@ class TeleopLLAction(LowLevelPolicyActionBase):
         # EE 基准（body 系位置 + 四元数）
         self._capture_default_ee_pose(env_ids)
 
-        # 机身基准：height 与 WBC 奖励同约定（相对足端高度），pitch/roll 取 root 欧拉角
-        feet_cfg = SceneEntityCfg("robot", body_names=".*wheel")
+        # 机身基准：height 与 WBC 奖励同约定（相对足端高度），pitch/roll 取 root 欧拉角。
+        # 足端 body 正则与轮半径由 cfg 提供（M20 = .*wheel / 0.09，AS2W = .*_foot / 0.0774）。
+        feet_cfg = SceneEntityCfg("robot", body_names=self.cfg.feet_body_names)
         feet_cfg.resolve(self._env.scene)
         height = compute_base_height_rel_to_feet(
-            self._env, SceneEntityCfg("robot"), feet_cfg
+            self._env,
+            SceneEntityCfg("robot"),
+            feet_cfg,
+            wheel_radius=float(self.cfg.feet_radius),
         )[env_ids]
         roll, pitch, _ = math_utils.euler_xyz_from_quat(
             self.robot.data.root_quat_w[env_ids]
@@ -223,10 +227,10 @@ class TeleopLLAction(LowLevelPolicyActionBase):
         self._default_body_pose[env_ids, 2] = roll
 
     def _reset_default_body_pose(self, env_ids: torch.Tensor):
-        """reset 时把身体姿态默认值恢复为初始值 (0.51, 0, 0)。"""
+        """reset 时把身体姿态默认值恢复为初始值 (default_body_height, 0, 0)。"""
         if env_ids.numel() == 0:
             return
-        self._default_body_pose[env_ids, 0] = 0.51
+        self._default_body_pose[env_ids, 0] = float(self.cfg.default_body_height)
         self._default_body_pose[env_ids, 1] = 0.0
         self._default_body_pose[env_ids, 2] = 0.0
     # ------------------------------------------------------------------
@@ -476,6 +480,12 @@ class TeleopLLActionCfg(ActionTermCfg):
     debug_vis_ee_target_only: bool = False
     """Whether to show only the EE target marker and omit base velocity debug arrows."""
     ee_body_name: str = "gripper_base"
+    feet_body_names: str = ".*wheel"
+    """足端 body 正则，用于 ``recalibrate()`` 计算相对足端机身高度。"""
+    feet_radius: float = 0.09
+    """足端轮半径（m），与低层 ``BodyPoseCommandCfg.feet_radius`` 取同一实测值。"""
+    default_body_height: float = 0.51
+    """键盘遥操 reset 时恢复到的高度基准（m）；VR 会改用重标定后的实测值。"""
     absolute_commands: bool = False
     """True：把 raw_actions 当作"相对标定基准的偏移"，目标 = 标定基准 + 偏移，不滚动累加（VR 遥操用）。
     False：保持"相对上一步"的滚动积分增量语义（键盘遥操用）。"""

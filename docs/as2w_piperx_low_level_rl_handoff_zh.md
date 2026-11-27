@@ -888,3 +888,15 @@ conda run -n env_isaac_lab python scripts/reinforcement_learning/rsl_rl/probe_de
 - 导出：`logs/smoke/as2w/export_100.log`；部署布局探针：`logs/smoke/as2w/probe_deploy_layout.log`；`play.py` 视频：`logs/smoke/as2w/play_100.log`；固定命令评测：`logs/smoke/as2w/eval_100.log` / `.json`。
 - `eval_fixed_command` 仅驱动 `base_velocity.vel_command_b`，`ee_pose` / `body_pose` 仍随机重采样。
 - 100 iter 仅验证数值稳定性（无爆炸），未学到正常步态，需长训。
+
+---
+
+## 补充：遥操 phase 已完成（2026-11-27）
+
+低层 checkpoint `model_19999.pt` 验收通过后，已参考 M20-Piper 遥操实现补齐 AS2W-PiperX 遥操：
+
+- 任务：`AS2W-PiperX-Teleop-History-v0`（别名 `Isaac-AS2W-PiperX-Teleop-History-v0`）
+- cfg：`source/rl_training/rl_training/tasks/manager_based/locomotion/highlevel/config/as2w_piperx_teleop/env_cfg.py`
+- 低层策略：`.../2026-11-26_21-45-28_remote4096_20k/exported_deploy/policy.pt`（由 `model_19999.pt` 导出）
+- 启动：`teleop_m20_piper_keyboard.py --task AS2W-PiperX-Teleop-History-v0 --camera-view free --fisheye-rig none`
+- 差异与验证记录：见 `docs/teleop_checklist_zh.md` 的「AS2W-PiperX 遥操」小节。

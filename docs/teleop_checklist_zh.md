@@ -292,3 +292,97 @@ python scripts\teleoperation\teleop_m20_piper_keyboard.py `
 - 自动布局按启动时的 `--width/--height` 计算；如果桌面实际可用区域更小，仍可用
   三个 `--*-window-pos` 手动覆盖。
 - 四路鱼眼仍对应四个独立 render product，尚未合并为单个 tiled camera。
+
+## AS2W-PiperX 遥操（history 低层策略）
+
+AS2W-PiperX 复用与 M20 完全相同的 13 维高层遥操接口（`[vx, vy, wz, Δee(3),
+Δee_orn(3), Δheight, Δpitch, Δroll, gripper]`），键位、VR 手柄映射以及
+`teleop_m20_piper_keyboard.py` / `teleop_m20_piper_vr.py` 两个入口都不变，只需把
+`--task` 换成 AS2W 的任务。
+
+### 任务与低层策略
+
+| 项 | 值 |
+|---|---|
+| 任务 ID | `AS2W-PiperX-Teleop-History-v0`（同时注册了 `Isaac-` 前缀别名） |
+| env cfg | `source/rl_training/rl_training/tasks/manager_based/locomotion/highlevel/config/as2w_piperx_teleop/env_cfg.py` |
+| 默认低层策略 | `logs/rsl_rl/history_anchor_as2w_piperx/2026-11-26_21-45-28_remote4096_20k/exported_deploy/policy.pt` |
+| 策略来源 | 该目录 `policy_layout.json` 的 `source_checkpoint = model_19999.pt` |
+| 策略规格 | policy_obs 83 + history 10x70（700）→ action 16（leg 12 + wheel 4 + IK 0） |
+| 覆盖策略 | 环境变量 `RL_TRAINING_LOW_LEVEL_POLICY_AS2W_TELEOP_HISTORY=<abs/path/policy.pt>` |
+
+> 注意：遥操必须使用 `exported_deploy/policy.pt`（含 history encoder 的部署态导出），
+> 不能直接指向训练用的 `model_19999.pt`。当前 `policy.pt` 就是从该 `model_19999.pt`
+> 导出的，二者对应同一个策略。
+
+### 启动命令
+
+AS2W 场景**没有** `front_camera` / `wrist_camera` / `nav_camera` / `arm_camera`，
+因此不能使用 M20 默认的四路鱼眼和底部预览窗口，需要显式关闭：
+
+```powershell
+# 键盘遥操
+conda run --no-capture-output -n env_isaac_lab python scripts\teleoperation\teleop_m20_piper_keyboard.py `
+  --task AS2W-PiperX-Teleop-History-v0 `
+  --num_envs 1 --camera-view free --fisheye-rig none
+
+# VR 遥操（手柄映射与 M20 相同）
+conda run --no-capture-output -n env_isaac_lab python scripts\teleoperation\teleop_m20_piper_vr.py `
+  --task AS2W-PiperX-Teleop-History-v0 `
+  --num_envs 1 --camera-view free --fisheye-rig none
+```
+
+键位（与 M20 相同）：
+
+| 功能 | 键 |
+|---|---|
+| 底盘 vx / vy / wz | ↑↓ / ←→ / Z X |
+| 机身 height / pitch / roll | C V / B N / `[` `]` |
+| EE Δx / Δy / Δz | Num8 Num2 / Num4 Num6 / Num7 Num9 |
+| EE Δroll / Δpitch / Δyaw | Num1 Num3 / Num0 Num. / Num+ Num- |
+| 夹爪开合 | G（toggle） |
+| 重置 | L |
+
+### 与 M20 的差异
+
+| 项 | AS2W | M20 |
+|---|---|---|
+| 足端 body 正则 | `.*_foot` | `.*wheel` |
+| 等效轮半径 | 0.0774 m | 0.09 m |
+| 默认站高 | 0.4466 m | 0.51 m |
+| 低层训练高度区间 | 0.33–0.45 m | 0.33–0.55 m |
+| 夹爪行程 | ±0.05 rad（prismatic） | ±0.035 rad |
+| 相机 | 无（只能用 free 视角） | 前视 / 腕部 / 鱼眼 |
+
+这些机器人常量全部来自
+`source/rl_training/rl_training/tasks/manager_based/locomotion/velocity/config/wheeled/as2w_piperx/profile.py`，
+遥操 cfg 不重复硬编码。
+
+### 已验证
+
+- 13 维动作、低层 policy_obs 83、history 700、action 16 全部对齐；
+- 零命令站立 20 步无摔倒，站高约 0.440 m；
+- `vx=0.5` 跑 100 步：位移 0.863 m、平均 0.432 m/s、0 摔倒；
+- EE 在 ±x / ±y / ±z 各 0.10 m 指令下均能移动（不再被旧下界 clamp）；
+- 机身 height / pitch、夹爪开合（G）均能在 action term 层正确生效；
+- `teleop_m20_piper_keyboard.py --task AS2W-PiperX-Teleop-History-v0 --headless --max-steps 20`
+  完整跑通并正常退出。
+
+### 零指令抖动（2026-11-27 修复）
+
+若启动后不下指令但腿/轮持续抖动，根因在 fast-teleop 的目标写入节流：
+AS2W/M20 的腿轮执行器都是 `DelayedPDActuatorCfg`（**显式执行器**），
+`set_dof_actuation_forces` 只对当前物理步有效，必须每个 `sim.dt` 调用一次
+`write_data_to_sim()`；按 `--fast-robot-hot-period` 隔步写入会丢掉一半电机力矩，
+零指令下就会剧烈抖动。
+
+`FastTeleopStepper` 现在会自动检测显式执行器，并把机器人目标的写入/状态更新
+强制为每个物理步一次，启动时打印：
+
+```text
+[FastTeleop] explicit actuators detected; writing robot targets every physics step ...
+```
+
+实测 AS2W 零指令 120 步（键盘脚本同款 `ik_update_period=0.01` + fast 参数）：
+leg action std ≈ 0.005、wheel action std ≈ 0.011、joint-vel std ≈ 0.009、
+base speed ≈ 0.002 m/s，与普通 `env.step` 完全一致。
