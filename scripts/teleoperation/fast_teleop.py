@@ -97,6 +97,21 @@ class FastTeleopStepper:
             1,
             int(round(float(robot_hot_period_s) / self._physics_dt)),
         )
+        # Explicit actuator models (e.g. DelayedPDActuator) compute the joint
+        # effort in Python and push it with ``set_dof_actuation_forces`` on
+        # every ``write_data_to_sim``.  PhysX does not persist that effort
+        # across physics steps, so skipping a write silently drops the motor
+        # torque and makes the robot shake.  Never decimate writes in that case.
+        self._requires_per_step_write = any(
+            not actuator.is_implicit_model for actuator in self._robot.actuators.values()
+        )
+        if self._requires_per_step_write and self._robot_hot_decimation > 1:
+            print(
+                "[FastTeleop] explicit actuators detected; writing robot targets "
+                f"every physics step (hot period {robot_hot_period_s:g}s -> "
+                f"{self._physics_dt:g}s)."
+            )
+            self._robot_hot_decimation = 1
 
     def _measure(self, name: str, started: float) -> None:
         if self.profiler is not None:
@@ -142,6 +157,12 @@ class FastTeleopStepper:
                 started = time.perf_counter()
                 self._write_robot_hot()
                 self._measure("fast_robot_write_ms", started)
+            elif self._requires_per_step_write:
+                # ``robot_hot_loop`` disabled but explicit actuators still need
+                # their targets/forces written on every physics step.
+                started = time.perf_counter()
+                self._write_robot_hot()
+                self._measure("fast_robot_write_ms", started)
 
             started = time.perf_counter()
             self.env.sim.step(render=False)
@@ -156,7 +177,7 @@ class FastTeleopStepper:
                 started = time.perf_counter()
                 self.env.scene.update(dt=self._physics_dt)
                 self._measure("fast_scene_update_ms", started)
-            elif self.robot_hot_loop:
+            elif self.robot_hot_loop or self._requires_per_step_write:
                 started = time.perf_counter()
                 self._robot.update(dt=self._physics_dt)
                 self._measure("fast_robot_update_ms", started)
